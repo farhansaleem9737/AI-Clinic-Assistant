@@ -3,6 +3,7 @@
 export const NAV_ITEMS = [
   { to: "/doctors", label: "Doctors", public: true },
   { to: "/dashboard", label: "Dashboard" },
+  { to: "/admin/users", label: "Users", permission: "user:read" },
   { to: "/admin/departments", label: "Departments", permission: "department:manage" },
   { to: "/admin/doctors", label: "Manage doctors", permission: "doctor:create" },
 ];

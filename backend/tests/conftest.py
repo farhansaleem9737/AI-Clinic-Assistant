@@ -90,7 +90,13 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 @pytest.fixture
 async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async def override_get_db() -> AsyncIterator[AsyncSession]:
-        yield db_session
+        # Mirror production: a failed request rolls back its uncommitted work
+        # (here: back to the last savepoint, so fixture data survives).
+        try:
+            yield db_session
+        except Exception:
+            await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_db] = override_get_db
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -101,12 +107,12 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 @pytest.fixture
 def make_user(db_session: AsyncSession):
     async def _make_user(
-        role: RoleCode | None = RoleCode.patient,
+        role: RoleCode | str | None = RoleCode.patient,
         email: str | None = None,
         is_active: bool = True,
         name: str | None = None,
     ) -> User:
-        label = role.value if role else "norole"
+        label = str(role) if role else "norole"
         user = User(
             name=name or f"Test {label}",
             email=email or f"{label}-{os.urandom(4).hex()}@example.com",
@@ -117,7 +123,8 @@ def make_user(db_session: AsyncSession):
         await db_session.flush()
         if role is not None:
             await rbac_service.grant_roles(db_session, user.id, [role])
-            await db_session.flush()
+        # Inside the test transaction this only releases a savepoint.
+        await db_session.commit()
         return user
 
     return _make_user
@@ -138,3 +145,22 @@ def auth_headers(client: AsyncClient, make_user):
         return await login(client, user.email)
 
     return _auth_headers
+
+
+@pytest.fixture
+def make_role(db_session: AsyncSession):
+    """Create a custom role holding exactly the given permissions."""
+    from sqlalchemy import select
+
+    from app.models.rbac import Permission, Role, RolePermission
+
+    async def _make_role(code: str, permissions: list[str]) -> Role:
+        role = Role(code=code, name=code.title())
+        db_session.add(role)
+        await db_session.flush()
+        for perm in await db_session.scalars(select(Permission).where(Permission.code.in_(permissions))):
+            db_session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+        await db_session.commit()
+        return role
+
+    return _make_role

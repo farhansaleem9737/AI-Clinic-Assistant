@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Doctors from "./pages/Doctors";
 import AdminDepartments from "./pages/AdminDepartments";
 import AdminDoctors from "./pages/AdminDoctors";
+import AdminUsers from "./pages/AdminUsers";
 
 function App() {
   return (
@@ -39,6 +40,14 @@ function App() {
               element={
                 <ProtectedRoute permission="doctor:create">
                   <AdminDoctors />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/users"
+              element={
+                <ProtectedRoute permission="user:read">
+                  <AdminUsers />
                 </ProtectedRoute>
               }
             />
