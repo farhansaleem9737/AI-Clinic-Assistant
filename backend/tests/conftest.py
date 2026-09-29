@@ -48,6 +48,13 @@ from app.services import rbac_service  # noqa: E402
 
 TEST_PASSWORD = "Str0ng-test-password"
 
+# bcrypt at production cost (12 rounds) is deliberately slow; tests only need
+# correct hashing, not brute-force resistance. Production code is unaffected.
+from app.core import security  # noqa: E402
+
+security.pwd_context.update(bcrypt__rounds=4)
+TEST_PASSWORD_HASH = hash_password(TEST_PASSWORD)
+
 
 def alembic_config() -> Config:
     # No ini file on purpose: alembic.ini's logging section would reconfigure
@@ -116,7 +123,7 @@ def make_user(db_session: AsyncSession):
         user = User(
             name=name or f"Test {label}",
             email=email or f"{label}-{os.urandom(4).hex()}@example.com",
-            password_hash=hash_password(TEST_PASSWORD),
+            password_hash=TEST_PASSWORD_HASH,
             is_active=is_active,
         )
         db_session.add(user)
@@ -125,6 +132,9 @@ def make_user(db_session: AsyncSession):
             await rbac_service.grant_roles(db_session, user.id, [role])
         # Inside the test transaction this only releases a savepoint.
         await db_session.commit()
+        # Detached, so its attributes stay readable even after a request fails
+        # and rolls the session back. To modify the row, load it with db_session.get().
+        db_session.expunge(user)
         return user
 
     return _make_user
@@ -161,6 +171,57 @@ def make_role(db_session: AsyncSession):
         for perm in await db_session.scalars(select(Permission).where(Permission.code.in_(permissions))):
             db_session.add(RolePermission(role_id=role.id, permission_id=perm.id))
         await db_session.commit()
+        db_session.expunge(role)
         return role
 
     return _make_role
+
+
+@pytest.fixture
+def make_department(db_session: AsyncSession):
+    from app.models.department import Department
+
+    async def _make_department(name: str | None = None, *, is_active: bool = True, timezone: str = "Asia/Karachi"):
+        department = Department(name=name or f"Dept {os.urandom(3).hex()}", timezone=timezone, is_active=is_active)
+        db_session.add(department)
+        await db_session.commit()
+        db_session.expunge(department)
+        return department
+
+    return _make_department
+
+
+@pytest.fixture
+def make_doctor(db_session: AsyncSession, make_user, make_department):
+    """A doctor profile with its own login (doctor role) and department."""
+    from decimal import Decimal
+
+    from app.models.doctor import Doctor
+
+    async def _make_doctor(
+        *,
+        name: str | None = None,
+        department=None,
+        specialization: str = "General Medicine",
+        years_of_experience: int = 5,
+        consultation_fee: Decimal | None = Decimal("100.00"),
+        is_active: bool = True,
+        **fields,
+    ) -> Doctor:
+        user = await make_user(RoleCode.doctor, name=name)
+        department = department or await make_department()
+        doctor = Doctor(
+            user_id=user.id,
+            department_id=department.id,
+            specialization=specialization,
+            years_of_experience=years_of_experience,
+            consultation_fee=consultation_fee,
+            is_active=is_active,
+            **fields,
+        )
+        db_session.add(doctor)
+        await db_session.commit()
+        db_session.expunge(doctor)
+        return doctor
+
+    return _make_doctor

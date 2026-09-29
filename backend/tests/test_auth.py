@@ -205,7 +205,9 @@ async def test_deactivated_user_cannot_refresh_or_use_access_token(client, make_
     session = Session(response)
     access = {"Authorization": f"Bearer {response.json()['access_token']}"}
 
-    user.is_active = False
+    from app.models.user import User
+
+    (await db_session.get(User, user.id)).is_active = False
     await db_session.flush()
 
     assert (await client.post(REFRESH, headers=session.headers())).status_code == 401
