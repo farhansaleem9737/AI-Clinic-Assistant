@@ -1,4 +1,5 @@
 import logging
+import uuid
 from collections.abc import Sequence
 
 from sqlalchemy import select
@@ -20,7 +21,7 @@ async def create_department(db: AsyncSession, data: DepartmentCreate) -> Departm
     db.add(department)
     await db.commit()
     await db.refresh(department)
-    logger.info("department_created", extra={"department_id": department.id})
+    logger.info("department_created", extra={"department_id": str(department.id)})
     return department
 
 
@@ -29,7 +30,7 @@ async def list_departments(db: AsyncSession) -> Sequence[Department]:
     return result.all()
 
 
-async def get_department(db: AsyncSession, department_id: int) -> Department:
+async def get_department(db: AsyncSession, department_id: uuid.UUID) -> Department:
     department = await db.get(Department, department_id)
     if department is None:
         raise NotFoundError("Department not found")

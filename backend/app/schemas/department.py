@@ -1,5 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+import uuid
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
 
 
 class DepartmentCreate(BaseModel):
@@ -8,7 +10,7 @@ class DepartmentCreate(BaseModel):
 
 
 class DepartmentResponse(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     description: str | None = None
     created_at: datetime

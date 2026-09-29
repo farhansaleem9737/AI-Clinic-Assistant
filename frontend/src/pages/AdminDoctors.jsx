@@ -3,10 +3,8 @@ import { getErrorMessage } from "../services/api";
 import { getDoctors, createDoctor } from "../services/doctorService";
 import { getDepartments } from "../services/departmentService";
 
-// Fields that must never hold a negative value: IDs, experience and fee.
+// Fields that must never hold a negative value: experience and fee.
 const NON_NEGATIVE_FIELDS = [
-  "user_id",
-  "department_id",
   "years_of_experience",
   "consultation_fee",
 ];
@@ -54,8 +52,6 @@ export default function AdminDoctors() {
     try {
       await createDoctor({
         ...form,
-        user_id: toNonNegativeNumber(form.user_id),
-        department_id: toNonNegativeNumber(form.department_id),
         years_of_experience: toNonNegativeNumber(form.years_of_experience),
         consultation_fee: form.consultation_fee
           ? toNonNegativeNumber(form.consultation_fee)

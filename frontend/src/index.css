@@ -1,111 +1,98 @@
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e3e5e9;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --danger: #b42318;
+  --danger-bg: #fdecea;
+  --ok: #067647;
+  --ok-bg: #e7f6ee;
+  --warn: #93370d;
+  --warn-bg: #fef4e6;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
+  font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
   color: var(--text);
   background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+    --text: #e6e7ea;
+    --muted: #9aa0aa;
+    --bg: #14161a;
+    --surface: #1c1f24;
+    --border: #2d3139;
+    --accent: #6ea0ff;
+    --accent-contrast: #0b1220;
+    --danger: #ff8a80;
+    --danger-bg: #3a1d1b;
+    --ok: #6ee7a8;
+    --ok-bg: #16301f;
+    --warn: #ffc27a;
+    --warn-bg: #33260f;
   }
 }
 
-body {
-  margin: 0;
-}
+* { box-sizing: border-box; }
+body { margin: 0; }
+h1, h2, h3 { line-height: 1.25; margin: 0 0 0.75rem; }
+a { color: var(--accent); }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+/* Layout */
+.app-header {
+  display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
+  padding: 0.75rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border);
 }
+.app-header .brand { font-weight: 700; color: var(--text); text-decoration: none; }
+.app-header nav { display: flex; gap: 0.25rem; flex-wrap: wrap; flex: 1; }
+.app-header nav a {
+  color: var(--muted); text-decoration: none; padding: 0.3rem 0.6rem; border-radius: 6px;
+}
+.app-header nav a.active, .app-header nav a:hover { color: var(--text); background: var(--bg); }
+.app-header .who { color: var(--muted); font-size: 0.9rem; }
+main.page { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
+/* Surfaces */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.muted { color: var(--muted); }
+.small { font-size: 0.875rem; }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+/* Forms */
+form.stack, .stack { display: flex; flex-direction: column; gap: 0.6rem; max-width: 480px; }
+.filters { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 1rem; }
+label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.875rem; color: var(--muted); }
+input, select, textarea {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem;
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+textarea { min-height: 4.5rem; }
+button {
+  font: inherit; cursor: pointer; border-radius: 6px; padding: 0.45rem 0.9rem;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast);
 }
-p {
-  margin: 0;
-}
+button.secondary { background: transparent; color: var(--accent); }
+button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); }
+th, td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
-}
+/* Feedback */
+.alert { padding: 0.6rem 0.8rem; border-radius: 6px; margin-bottom: 0.75rem; }
+.alert.error { color: var(--danger); background: var(--danger-bg); }
+.alert.success { color: var(--ok); background: var(--ok-bg); }
+.badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; background: var(--bg); border: 1px solid var(--border); }
+.badge.ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+.badge.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.badge.danger { color: var(--danger); background: var(--danger-bg); border-color: transparent; }
+.pager { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }

@@ -1,4 +1,6 @@
-from app.models.user import UserRole
+import uuid
+
+from app.core.permissions import RoleCode
 
 DEPTS = "/api/v1/departments/"
 DOCS = "/api/v1/doctors/"
@@ -10,13 +12,13 @@ async def test_department_create_requires_auth(client):
 
 
 async def test_department_create_forbidden_for_non_admin(client, auth_headers):
-    for role in (UserRole.patient, UserRole.doctor, UserRole.receptionist):
+    for role in (RoleCode.patient, RoleCode.doctor, RoleCode.receptionist):
         response = await client.post(DEPTS, json={"name": "Cardiology"}, headers=await auth_headers(role))
         assert response.status_code == 403
 
 
 async def test_admin_creates_department_and_duplicate_is_409(client, auth_headers):
-    admin = await auth_headers(UserRole.admin)
+    admin = await auth_headers(RoleCode.admin)
     created = await client.post(DEPTS, json={"name": "Cardiology"}, headers=admin)
     assert created.status_code == 201
 
@@ -29,7 +31,7 @@ async def test_admin_creates_department_and_duplicate_is_409(client, auth_header
 
 
 async def test_missing_department_is_404(client):
-    response = await client.get(f"{DEPTS}999999")
+    response = await client.get(f"{DEPTS}{uuid.uuid4()}")
     assert response.status_code == 404
 
 
@@ -39,11 +41,11 @@ async def _department(client, admin) -> int:
 
 
 async def test_doctor_lifecycle(client, auth_headers, make_user):
-    admin = await auth_headers(UserRole.admin)
+    admin = await auth_headers(RoleCode.admin)
     dept_id = await _department(client, admin)
-    doctor_user = await make_user(UserRole.doctor)
+    doctor_user = await make_user(RoleCode.doctor)
 
-    payload = {"user_id": doctor_user.id, "department_id": dept_id, "specialization": "Neurologist"}
+    payload = {"user_id": str(doctor_user.id), "department_id": dept_id, "specialization": "Neurologist"}
     created = await client.post(DOCS, json=payload, headers=admin)
     assert created.status_code == 201
     doctor = created.json()
@@ -65,31 +67,31 @@ async def test_doctor_lifecycle(client, auth_headers, make_user):
 
 
 async def test_doctor_profile_requires_doctor_role(client, auth_headers, make_user):
-    admin = await auth_headers(UserRole.admin)
+    admin = await auth_headers(RoleCode.admin)
     dept_id = await _department(client, admin)
-    patient = await make_user(UserRole.patient)
+    patient = await make_user(RoleCode.patient)
 
     response = await client.post(
-        DOCS, json={"user_id": patient.id, "department_id": dept_id, "specialization": "X"}, headers=admin
+        DOCS, json={"user_id": str(patient.id), "department_id": dept_id, "specialization": "X"}, headers=admin
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "USER_NOT_DOCTOR"
 
 
 async def test_doctor_update_to_missing_department_is_404(client, auth_headers, make_user):
-    admin = await auth_headers(UserRole.admin)
+    admin = await auth_headers(RoleCode.admin)
     dept_id = await _department(client, admin)
-    doctor_user = await make_user(UserRole.doctor)
+    doctor_user = await make_user(RoleCode.doctor)
     created = await client.post(
-        DOCS, json={"user_id": doctor_user.id, "department_id": dept_id, "specialization": "X"}, headers=admin
+        DOCS, json={"user_id": str(doctor_user.id), "department_id": dept_id, "specialization": "X"}, headers=admin
     )
 
-    response = await client.put(f"{DOCS}{created.json()['id']}", json={"department_id": 999999}, headers=admin)
+    response = await client.put(f"{DOCS}{created.json()['id']}", json={"department_id": str(uuid.uuid4())}, headers=admin)
     assert response.status_code == 404
 
 
 async def test_doctor_writes_forbidden_for_non_admin(client, auth_headers):
-    patient = await auth_headers(UserRole.patient)
-    payload = {"user_id": 1, "department_id": 1, "specialization": "X"}
+    patient = await auth_headers(RoleCode.patient)
+    payload = {"user_id": str(uuid.uuid4()), "department_id": str(uuid.uuid4()), "specialization": "X"}
     assert (await client.post(DOCS, json=payload, headers=patient)).status_code == 403
-    assert (await client.delete(f"{DOCS}1", headers=patient)).status_code == 403
+    assert (await client.delete(f"{DOCS}{uuid.uuid4()}", headers=patient)).status_code == 403

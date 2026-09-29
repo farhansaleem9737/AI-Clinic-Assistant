@@ -1,67 +1,69 @@
-import { useState, useEffect } from "react";
-import api from "../services/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import api, { csrfHeaders, refreshAccessToken, setAccessToken, setSessionExpiredHandler } from "../services/api";
 import { AuthContext } from "./AuthContextObject";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem("token"));
+  // True until the first session-restore attempt finishes, so guarded routes
+  // don't bounce a logged-in user to /login during a page reload.
+  const [initializing, setInitializing] = useState(true);
 
-  const fetchCurrentUser = async () => {
+  const fetchCurrentUser = useCallback(async () => {
     const res = await api.get("/auth/me");
     setUser(res.data);
-  };
-
-  useEffect(() => {
-    async function rehydrateUser() {
-      if (!token || user) return;
-
-      try {
-        await fetchCurrentUser();
-      } catch {
-        // Token invalid/expired and refresh failed — clear everything
-        localStorage.removeItem("token");
-        localStorage.removeItem("refresh_token");
-        setToken(null);
-        setUser(null);
-      }
-    }
-
-    rehydrateUser();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return res.data;
   }, []);
 
-  const login = async (email, password) => {
-    const res = await api.post("/auth/login", { email, password });
-    localStorage.setItem("token", res.data.access_token);
-    localStorage.setItem("refresh_token", res.data.refresh_token);
-    setToken(res.data.access_token);
-    await fetchCurrentUser();
-  };
+  const clearSession = useCallback(() => {
+    setAccessToken(null);
+    setUser(null);
+  }, []);
+
+  useEffect(() => {
+    setSessionExpiredHandler(clearSession);
+
+    // Restore the session from the HttpOnly refresh cookie, if there is one.
+    refreshAccessToken()
+      .then(fetchCurrentUser)
+      .catch(clearSession)
+      .finally(() => setInitializing(false));
+  }, [clearSession, fetchCurrentUser]);
+
+  const login = useCallback(
+    async (email, password) => {
+      const res = await api.post("/auth/login", { email, password });
+      setAccessToken(res.data.access_token);
+      return fetchCurrentUser();
+    },
+    [fetchCurrentUser]
+  );
 
   // Self-registration always creates a patient; the backend decides the role.
-  const register = async (name, email, password) => {
-    await api.post("/auth/register", { name, email, password });
-    await login(email, password);
-  };
-
-  const logout = async () => {
-    const refreshToken = localStorage.getItem("refresh_token");
-    if (refreshToken) {
-      try {
-        await api.post("/auth/logout", { refresh_token: refreshToken });
-      } catch {
-        // Ignore errors here — log out locally regardless
-      }
-    }
-    localStorage.removeItem("token");
-    localStorage.removeItem("refresh_token");
-    setToken(null);
-    setUser(null);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, fetchCurrentUser }}>
-      {children}
-    </AuthContext.Provider>
+  const register = useCallback(
+    async (data) => {
+      await api.post("/auth/register", data);
+      return login(data.email, data.password);
+    },
+    [login]
   );
+
+  const logout = useCallback(async () => {
+    try {
+      await api.post("/auth/logout", null, { headers: csrfHeaders() });
+    } catch {
+      // Log out locally regardless.
+    }
+    clearSession();
+  }, [clearSession]);
+
+  // UX only: hides menu items. The backend enforces every permission.
+  const can = useCallback((permission) => Boolean(user?.permissions?.includes(permission)), [user]);
+  const hasRole = useCallback((role) => Boolean(user?.roles?.includes(role)), [user]);
+
+  const value = useMemo(
+    () => ({ user, initializing, login, register, logout, fetchCurrentUser, can, hasRole }),
+    [user, initializing, login, register, logout, fetchCurrentUser, can, hasRole]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

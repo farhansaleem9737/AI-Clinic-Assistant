@@ -1,9 +1,11 @@
+import uuid
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import require_role
+from app.api.deps.auth import require_permission
+from app.core.permissions import Perm
 from app.db.session import get_db
-from app.models.user import UserRole
 from app.schemas.doctor import DoctorCreate, DoctorResponse, DoctorUpdate
 from app.services import doctor_service
 from app.services.doctor_service import DoctorWithName
@@ -36,7 +38,7 @@ def _doctor_response(row: DoctorWithName) -> DoctorResponse:
 async def create_doctor(
     doctor_in: DoctorCreate,
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_role(UserRole.admin)),
+    _=Depends(require_permission(Perm.doctor_create)),
 ):
     return _doctor_response(await doctor_service.create_doctor(db, doctor_in))
 
@@ -47,24 +49,24 @@ async def list_doctors(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{doctor_id}", response_model=DoctorResponse)
-async def get_doctor(doctor_id: int, db: AsyncSession = Depends(get_db)):
+async def get_doctor(doctor_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return _doctor_response(await doctor_service.get_doctor(db, doctor_id))
 
 
 @router.put("/{doctor_id}", response_model=DoctorResponse)
 async def update_doctor(
-    doctor_id: int,
+    doctor_id: uuid.UUID,
     doctor_in: DoctorUpdate,
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_role(UserRole.admin)),
+    _=Depends(require_permission(Perm.doctor_update)),
 ):
     return _doctor_response(await doctor_service.update_doctor(db, doctor_id, doctor_in))
 
 
 @router.delete("/{doctor_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_doctor(
-    doctor_id: int,
+    doctor_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_role(UserRole.admin)),
+    _=Depends(require_permission(Perm.doctor_deactivate)),
 ):
     await doctor_service.delete_doctor(db, doctor_id)

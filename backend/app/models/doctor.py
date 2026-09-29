@@ -1,25 +1,19 @@
-from sqlalchemy import String, DateTime, Integer, Numeric, ForeignKey
+import uuid
+from decimal import Decimal
+
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
-from datetime import datetime
+
 from app.db.base import Base
-from app.core.clock import utcnow
+from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
-class Doctor(Base):
+class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "doctors"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), unique=True
-    )
-    department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    department_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("departments.id", ondelete="RESTRICT"))
     specialization: Mapped[str] = mapped_column(String(150))
-    bio: Mapped[str] = mapped_column(String(1000), nullable=True)
+    bio: Mapped[str | None] = mapped_column(String(1000))
     years_of_experience: Mapped[int] = mapped_column(Integer, default=0)
-    consultation_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    consultation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))

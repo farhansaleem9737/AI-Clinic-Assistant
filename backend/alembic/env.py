@@ -4,13 +4,10 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models.user import User  # noqa
-from app.models.refresh_token import RefreshToken  # noqa
+import app.models  # noqa: F401  (registers every model on Base.metadata)
 import asyncio
 from logging.config import fileConfig
 
-from app.models.department import Department  # noqa
-from app.models.doctor import Doctor  # noqa
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config

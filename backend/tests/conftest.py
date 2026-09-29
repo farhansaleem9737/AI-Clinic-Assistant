@@ -39,10 +39,12 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
+from app.core.permissions import RoleCode  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.user import User, UserRole  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.services import rbac_service  # noqa: E402
 
 TEST_PASSWORD = "Str0ng-test-password"
 
@@ -98,29 +100,41 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 @pytest.fixture
 def make_user(db_session: AsyncSession):
-    async def _make_user(role: UserRole = UserRole.patient, email: str | None = None, is_active: bool = True) -> User:
+    async def _make_user(
+        role: RoleCode | None = RoleCode.patient,
+        email: str | None = None,
+        is_active: bool = True,
+        name: str | None = None,
+    ) -> User:
+        label = role.value if role else "norole"
         user = User(
-            name=f"Test {role.value}",
-            email=email or f"{role.value}-{os.urandom(4).hex()}@example.com",
+            name=name or f"Test {label}",
+            email=email or f"{label}-{os.urandom(4).hex()}@example.com",
             password_hash=hash_password(TEST_PASSWORD),
-            role=role,
             is_active=is_active,
         )
         db_session.add(user)
         await db_session.flush()
+        if role is not None:
+            await rbac_service.grant_roles(db_session, user.id, [role])
+            await db_session.flush()
         return user
 
     return _make_user
+
+
+async def login(client: AsyncClient, email: str, password: str = TEST_PASSWORD) -> dict[str, str]:
+    response = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 @pytest.fixture
 def auth_headers(client: AsyncClient, make_user):
     """Create a user with the given role, log in through the API, return headers."""
 
-    async def _auth_headers(role: UserRole = UserRole.patient) -> dict[str, str]:
-        user = await make_user(role)
-        response = await client.post("/api/v1/auth/login", json={"email": user.email, "password": TEST_PASSWORD})
-        assert response.status_code == 200, response.text
-        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    async def _auth_headers(role: RoleCode = RoleCode.patient, **kwargs) -> dict[str, str]:
+        user = await make_user(role, **kwargs)
+        return await login(client, user.email)
 
     return _auth_headers

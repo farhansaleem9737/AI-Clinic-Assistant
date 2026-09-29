@@ -1,7 +1,7 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
-import AdminRoute from "./components/AdminRoute";
+import AppLayout from "./layouts/AppLayout";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -14,34 +14,37 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/doctors" element={<Doctors />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/departments"
-            element={
-              <AdminRoute>
-                <AdminDepartments />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/admin/doctors"
-            element={
-              <AdminRoute>
-                <AdminDoctors />
-              </AdminRoute>
-            }
-          />
-          <Route path="/" element={<Login />} />
+          <Route element={<AppLayout />}>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/doctors" element={<Doctors />} />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/departments"
+              element={
+                <ProtectedRoute permission="department:manage">
+                  <AdminDepartments />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/doctors"
+              element={
+                <ProtectedRoute permission="doctor:create">
+                  <AdminDoctors />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/" element={<Navigate to="/doctors" replace />} />
+            <Route path="*" element={<p>Page not found.</p>} />
+          </Route>
         </Routes>
       </BrowserRouter>
     </AuthProvider>

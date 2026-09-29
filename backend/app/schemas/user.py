@@ -1,5 +1,7 @@
-from pydantic import BaseModel, ConfigDict, EmailStr
+import uuid
 from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserCreate(BaseModel):
@@ -10,35 +12,34 @@ class UserCreate(BaseModel):
     is always created as a patient; staff accounts are created by an admin.
     """
 
-    name: str
+    name: str = Field(min_length=1, max_length=100)
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=128)
 
 
 class UserResponse(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     email: EmailStr
-    role: str
+    is_active: bool
+    roles: list[str]
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)  # lets Pydantic read from SQLAlchemy objects
+
+class MeResponse(UserResponse):
+    permissions: list[str]
+    doctor_id: uuid.UUID | None = None
+
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
-
-
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
+    password: str = Field(max_length=128)
 
 
 class AccessTokenResponse(BaseModel):
+    """The refresh token never appears in a body: it travels only in an
+    HttpOnly cookie that JavaScript cannot read."""
+
     access_token: str
     token_type: str = "bearer"
+    expires_in: int

@@ -1,6 +1,7 @@
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -26,8 +27,18 @@ class Settings(BaseSettings):
 
     secret_key: str
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
-    refresh_token_expire_days: int = 7
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 14
+    # Two requests presenting the same refresh token within this many seconds
+    # (e.g. two tabs opening at once) are treated as a race, not as theft.
+    refresh_reuse_grace_seconds: int = 10
+
+    refresh_cookie_name: str = "refresh_token"
+    csrf_cookie_name: str = "csrf_token"
+    csrf_header_name: str = "X-CSRF-Token"
+    # None = decide from the environment: Secure everywhere except development,
+    # where the app is served over plain http.
+    cookie_secure: bool | None = None
 
     # Comma-separated in .env, e.g. CORS_ORIGINS=http://localhost:5173,https://app.example.com
     cors_origins: Annotated[list[str], NoDecode] = []
@@ -35,6 +46,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     api_v1_prefix: str = "/api/v1"
+
+    # IANA name. Default for new departments and for interpreting calendar
+    # dates in API filters ("appointments on 2026-10-01").
+    clinic_timezone: str = "UTC"
+
+    # Appointment booking policy.
+    booking_min_lead_minutes: int = 60
+    booking_max_advance_days: int = 90
+    patient_cancellation_cutoff_minutes: int = 120
+    no_show_grace_minutes: int = 15
+    # Length of slots opened by an "extra availability" schedule exception.
+    default_slot_minutes: int = 30
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
@@ -53,6 +76,26 @@ class Settings(BaseSettings):
         if "*" in value:
             raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
         return value
+
+    @field_validator("clinic_timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {value}") from exc
+        return value
+
+    @property
+    def secure_cookies(self) -> bool:
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.environment is not Environment.development
+
+    @property
+    def auth_cookie_path(self) -> str:
+        # The refresh cookie is only ever sent to the auth endpoints.
+        return f"{self.api_v1_prefix}/auth"
 
 
 settings = Settings()
