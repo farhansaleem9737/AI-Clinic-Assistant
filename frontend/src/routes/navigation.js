@@ -3,6 +3,9 @@
 export const NAV_ITEMS = [
   { to: "/doctors", label: "Doctors", public: true },
   { to: "/dashboard", label: "Dashboard" },
+  { to: "/appointments", label: "Appointments", anyOf: ["appointment:read_own", "appointment:read_assigned", "appointment:read_any"] },
+  { to: "/appointments/book", label: "Book", anyOf: ["appointment:create", "appointment:create_own"] },
+  { to: "/schedule", label: "Schedule", anyOf: ["schedule:manage_own", "schedule:manage_any"] },
   { to: "/profile", label: "My profile", permission: "patient:read_own" },
   { to: "/doctor/profile", label: "My profile", permission: "doctor:update_own" },
   { to: "/patients", label: "Patients", permission: "patient:read_any" },

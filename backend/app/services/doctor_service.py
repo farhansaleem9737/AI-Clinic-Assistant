@@ -12,7 +12,7 @@ from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.schemas.doctor import DoctorCreate, DoctorSelfUpdate, DoctorUpdate
-from app.services import auth_service, rbac_service
+from app.services import appointment_service, auth_service, rbac_service
 from app.services.pagination import PageParams, paginate
 
 logger = logging.getLogger(__name__)
@@ -184,6 +184,12 @@ async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> Do
         raise NotFoundError("Doctor not found")
     if active:
         await _active_department(db, doctor.department_id)
+    elif upcoming := await appointment_service.count_upcoming(db, doctor_id=doctor.id):
+        raise ConflictError(
+            "This doctor has upcoming appointments; reschedule or cancel them first",
+            code="HAS_UPCOMING_APPOINTMENTS",
+            details={"appointments": upcoming},
+        )
     doctor.is_active = active
     await db.commit()
     logger.info("doctor_activated" if active else "doctor_deactivated", extra={"doctor_id": str(doctor.id)})

@@ -66,6 +66,11 @@ export default function PatientDetail() {
           </p>
         </div>
         <div className="row">
+          {can("appointment:read_any") && (
+            <Link to={`/appointments?patient=${patient.id}`}>
+              <button className="secondary">View appointments</button>
+            </Link>
+          )}
           {can("appointment:create") && (
             <Link to={`/appointments/book?patient=${patient.id}`}>
               <button>Book appointment</button>

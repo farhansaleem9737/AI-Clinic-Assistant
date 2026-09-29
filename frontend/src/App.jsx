@@ -14,11 +14,21 @@ import PatientDetail from "./pages/PatientDetail";
 import AdminDepartments from "./pages/AdminDepartments";
 import AdminDoctors from "./pages/AdminDoctors";
 import AdminUsers from "./pages/AdminUsers";
+import Appointments from "./pages/Appointments";
+import AppointmentDetail from "./pages/AppointmentDetail";
+import BookAppointment from "./pages/BookAppointment";
+import DoctorSchedule from "./pages/DoctorSchedule";
 
 // `permission` on a route only hides pages the user cannot use; the API
 // enforces the same permission on every request.
+const APPOINTMENT_READ = ["appointment:read_own", "appointment:read_assigned", "appointment:read_any"];
+
 const PROTECTED_ROUTES = [
   { path: "/dashboard", element: <Dashboard /> },
+  { path: "/appointments", element: <Appointments />, anyOf: APPOINTMENT_READ },
+  { path: "/appointments/book", element: <BookAppointment />, anyOf: ["appointment:create", "appointment:create_own"] },
+  { path: "/appointments/:id", element: <AppointmentDetail />, anyOf: APPOINTMENT_READ },
+  { path: "/schedule", element: <DoctorSchedule />, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
   { path: "/doctor/profile", element: <MyDoctorProfile />, permission: "doctor:update_own" },
   { path: "/profile", element: <MyPatientProfile />, permission: "patient:read_own" },
   { path: "/patients", element: <Patients />, permission: "patient:read_any" },

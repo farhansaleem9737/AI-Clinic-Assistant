@@ -266,3 +266,79 @@ async def login_as(client: AsyncClient, db_session: AsyncSession, user_id) -> di
     """Log in as an existing fixture user (by id)."""
     user = await db_session.get(User, user_id)
     return await login(client, user.email)
+
+
+@pytest.fixture
+def freeze_clock(monkeypatch):
+    """Pin `app.core.clock.utcnow()` (what every service reads) to an instant."""
+    from app.core import clock
+
+    def _freeze(instant):
+        monkeypatch.setattr(clock, "utcnow", lambda: instant)
+
+    return _freeze
+
+
+@pytest.fixture
+async def clinic(client, db_session, make_department, make_doctor, make_patient, make_user):
+    """A small working clinic for scheduling and appointment tests.
+
+    Two doctors (same department) work 09:00-17:00 local every day in 30-minute
+    slots. `clinic.slot(days_ahead, "10:00")` gives an exact slot start (UTC).
+    """
+    from datetime import date, datetime, time, timedelta
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+
+    from app.models.schedule import ScheduleTemplate
+
+    tz_name = "Asia/Karachi"
+    tz = ZoneInfo(tz_name)
+    department = await make_department(timezone=tz_name)
+    doctor_a = await make_doctor(name="Doctor Alpha", department=department)
+    doctor_b = await make_doctor(name="Doctor Beta", department=department)
+    today = datetime.now(tz).date()
+    for doctor in (doctor_a, doctor_b):
+        for weekday in range(7):
+            db_session.add(
+                ScheduleTemplate(
+                    doctor_id=doctor.id,
+                    weekday=weekday,
+                    start_time=time(9, 0),
+                    end_time=time(17, 0),
+                    slot_minutes=30,
+                    valid_from=today - timedelta(days=30),
+                )
+            )
+    await db_session.commit()
+
+    patient_a = await make_patient(first_name="Alice", with_account=True)
+    patient_b = await make_patient(first_name="Bob", with_account=True)
+    walk_in = await make_patient(first_name="Walker")
+    receptionist = await make_user(RoleCode.receptionist)
+    admin = await make_user(RoleCode.admin)
+
+    def slot(days_ahead: int = 3, hhmm: str = "10:00"):
+        hour, minute = map(int, hhmm.split(":"))
+        local = datetime.combine(today + timedelta(days=days_ahead), time(hour, minute), tzinfo=tz)
+        return local.astimezone(ZoneInfo("UTC"))
+
+    async def headers_for(user_id):
+        return await login_as(client, db_session, user_id)
+
+    return SimpleNamespace(
+        tz=tz,
+        tz_name=tz_name,
+        today=today,
+        department=department,
+        doctor_a=doctor_a,
+        doctor_b=doctor_b,
+        patient_a=patient_a,
+        patient_b=patient_b,
+        walk_in=walk_in,
+        receptionist=receptionist,
+        admin=admin,
+        slot=slot,
+        headers_for=headers_for,
+        date=date,
+    )

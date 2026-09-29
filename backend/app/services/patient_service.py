@@ -15,7 +15,7 @@ from app.schemas.patient import (
     PatientRegistration,
     PatientUpdate,
 )
-from app.services import access, auth_service, rbac_service
+from app.services import access, appointment_service, auth_service, rbac_service
 from app.services.pagination import PageParams, paginate
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,12 @@ async def update_own_contact(db: AsyncSession, principal: Principal, data: Patie
 
 async def set_active(db: AsyncSession, principal: Principal, patient_id: uuid.UUID, active: bool) -> Patient:
     patient = await _get_for_update(db, patient_id)
+    if not active and (upcoming := await appointment_service.count_upcoming(db, patient_id=patient.id)):
+        raise ConflictError(
+            "This patient has upcoming appointments; cancel them first",
+            code="HAS_UPCOMING_APPOINTMENTS",
+            details={"appointments": upcoming},
+        )
     patient.is_active = active
     await _commit_and_reload(db, patient)
     logger.info(
