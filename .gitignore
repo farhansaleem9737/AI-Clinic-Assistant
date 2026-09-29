@@ -1,0 +1,27 @@
+# Secrets — only the *.example templates are committed
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+*.log
+
+# Editors / OS
+.idea/
+.DS_Store
+Thumbs.db
