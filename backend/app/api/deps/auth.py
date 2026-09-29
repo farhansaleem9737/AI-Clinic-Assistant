@@ -50,3 +50,16 @@ def require_permission(*perms: Perm):
         return principal
 
     return checker
+
+
+def require_any_permission(*perms: Perm):
+    """Like require_permission, but one of the listed permissions suffices.
+    Used where different roles reach the same endpoint with different scopes
+    (e.g. a patient reading their own record vs. reception reading any)."""
+
+    async def checker(principal: Principal = Depends(get_current_principal)) -> Principal:
+        if not principal.has_any(*perms):
+            raise PermissionDeniedError("You do not have permission to perform this action")
+        return principal
+
+    return checker

@@ -39,6 +39,15 @@ class Perm(StrEnum):
     doctor_deactivate = "doctor:deactivate"
     doctor_update_own = "doctor:update_own"
 
+    # Patients
+    patient_read_own = "patient:read_own"
+    patient_update_own = "patient:update_own"
+    patient_read_assigned = "patient:read_assigned"
+    patient_read_any = "patient:read_any"
+    patient_create = "patient:create"
+    patient_update = "patient:update"
+    patient_deactivate = "patient:deactivate"
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -48,6 +57,7 @@ class Principal:
     roles: frozenset[str]
     permissions: frozenset[str]
     doctor_id: uuid.UUID | None = None
+    patient_id: uuid.UUID | None = None
 
     @property
     def user_id(self) -> uuid.UUID:

@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
     [fetchCurrentUser]
   );
 
-  // Self-registration always creates a patient; the backend decides the role.
+  // Self-registration always creates a patient (login + profile); the backend decides the role.
   const register = useCallback(
     async (data) => {
       await api.post("/auth/register", data);

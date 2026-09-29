@@ -8,6 +8,9 @@ import Dashboard from "./pages/Dashboard";
 import Doctors from "./pages/Doctors";
 import DoctorDetail from "./pages/DoctorDetail";
 import MyDoctorProfile from "./pages/MyDoctorProfile";
+import MyPatientProfile from "./pages/MyPatientProfile";
+import Patients from "./pages/Patients";
+import PatientDetail from "./pages/PatientDetail";
 import AdminDepartments from "./pages/AdminDepartments";
 import AdminDoctors from "./pages/AdminDoctors";
 import AdminUsers from "./pages/AdminUsers";
@@ -17,6 +20,9 @@ import AdminUsers from "./pages/AdminUsers";
 const PROTECTED_ROUTES = [
   { path: "/dashboard", element: <Dashboard /> },
   { path: "/doctor/profile", element: <MyDoctorProfile />, permission: "doctor:update_own" },
+  { path: "/profile", element: <MyPatientProfile />, permission: "patient:read_own" },
+  { path: "/patients", element: <Patients />, permission: "patient:read_any" },
+  { path: "/patients/:id", element: <PatientDetail />, anyOf: ["patient:read_any", "patient:read_assigned"] },
   { path: "/admin/users", element: <AdminUsers />, permission: "user:read" },
   { path: "/admin/departments", element: <AdminDepartments />, permission: "department:manage" },
   { path: "/admin/doctors", element: <AdminDoctors />, permission: "doctor:read" },

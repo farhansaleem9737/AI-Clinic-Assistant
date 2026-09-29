@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.models.doctor import Doctor
+from app.models.patient import Patient
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.user import User
 
@@ -37,7 +38,14 @@ async def load_principal(db: AsyncSession, user: User) -> Principal:
             permissions.add(permission_code)
 
     doctor_id = await db.scalar(select(Doctor.id).where(Doctor.user_id == user.id))
-    return Principal(user=user, roles=frozenset(roles), permissions=frozenset(permissions), doctor_id=doctor_id)
+    patient_id = await db.scalar(select(Patient.id).where(Patient.user_id == user.id))
+    return Principal(
+        user=user,
+        roles=frozenset(roles),
+        permissions=frozenset(permissions),
+        doctor_id=doctor_id,
+        patient_id=patient_id,
+    )
 
 
 async def user_has_role(db: AsyncSession, user_id: uuid.UUID, role: RoleCode) -> bool:

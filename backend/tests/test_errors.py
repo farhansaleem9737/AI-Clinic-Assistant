@@ -90,7 +90,13 @@ async def test_unhandled_error_is_generic_500(probe_client):
 async def test_validation_error_shape_does_not_echo_password(client):
     response = await client.post(
         "/api/v1/auth/register",
-        json={"name": "V", "email": "not-an-email", "password": "Sup3rSecretValue"},
+        json={
+            "first_name": "V",
+            "last_name": "V",
+            "date_of_birth": "1990-01-01",
+            "email": "not-an-email",
+            "password": "Sup3rSecretValue",
+        },
     )
     assert response.status_code == 422
     error = assert_error_shape(response.json())

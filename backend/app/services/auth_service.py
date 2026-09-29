@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, ConflictError, PermissionDeniedError
-from app.core.permissions import RoleCode
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -27,7 +26,6 @@ from app.core.security import (
 )
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
-from app.schemas.user import UserCreate
 from app.services import rbac_service
 
 logger = logging.getLogger(__name__)
@@ -53,15 +51,6 @@ async def create_user(db: AsyncSession, *, name: str, email: str, password: str)
     user = User(name=name, email=email, password_hash=hash_password(password))
     db.add(user)
     await db.flush()
-    return user
-
-
-async def register_patient(db: AsyncSession, data: UserCreate) -> User:
-    """Self-registration. Always a patient; staff accounts are created by an admin."""
-    user = await create_user(db, name=data.name, email=data.email, password=data.password)
-    await rbac_service.grant_roles(db, user.id, [RoleCode.patient])
-    await db.commit()
-    logger.info("user_registered", extra={"user_id": str(user.id)})
     return user
 
 

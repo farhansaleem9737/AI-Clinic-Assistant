@@ -10,8 +10,9 @@ from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.permissions import Principal
 from app.core.security import generate_csrf_token
 from app.db.session import get_db
-from app.schemas.user import AccessTokenResponse, MeResponse, UserCreate, UserLogin, UserResponse
-from app.services import auth_service, rbac_service
+from app.schemas.patient import PatientRegistration
+from app.schemas.user import AccessTokenResponse, MeResponse, UserLogin, UserResponse
+from app.services import auth_service, patient_service, rbac_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -73,8 +74,10 @@ def _access_response(access_token: str) -> AccessTokenResponse:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    user = await auth_service.register_patient(db, user_in)
+async def register(body: PatientRegistration, db: AsyncSession = Depends(get_db)):
+    """Self-registration always creates a patient (login + patient profile).
+    Any "role" in the body is ignored; staff accounts are created by an admin."""
+    user = await patient_service.register_self(db, body)
     return UserResponse(
         id=user.id,
         name=user.name,
@@ -137,4 +140,5 @@ async def me(principal: Principal = Depends(get_current_principal)):
         permissions=sorted(principal.permissions),
         created_at=user.created_at,
         doctor_id=principal.doctor_id,
+        patient_id=principal.patient_id,
     )

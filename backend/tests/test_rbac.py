@@ -15,9 +15,12 @@ async def test_every_built_in_role_is_seeded(db_session):
     assert {r.value for r in RoleCode} <= seeded
 
 
-async def test_admin_holds_every_permission(client, auth_headers):
+async def test_admin_holds_every_non_relationship_permission(client, auth_headers):
+    """Admins get every capability except those scoped to *one's own* records
+    or to patients one treats — those only make sense for patients/doctors."""
     me = await client.get("/api/v1/auth/me", headers=await auth_headers(RoleCode.admin))
-    assert set(me.json()["permissions"]) == {p.value for p in Perm}
+    expected = {p.value for p in Perm if not p.value.endswith(("_own", "_assigned"))}
+    assert expected <= set(me.json()["permissions"])
 
 
 async def test_user_without_roles_has_no_permissions(client, make_user):

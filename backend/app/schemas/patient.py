@@ -1,0 +1,117 @@
+import uuid
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.core.config import settings
+from app.models.patient import SexAtBirth
+
+
+def _validate_dob(value: date | None) -> date | None:
+    if value is None:
+        return value
+    today = datetime.now(ZoneInfo(settings.clinic_timezone)).date()
+    if value > today:
+        raise ValueError("Date of birth cannot be in the future")
+    if value.year < 1900:
+        raise ValueError("Date of birth is not plausible")
+    return value
+
+
+class _Contact(BaseModel):
+    phone: str | None = Field(default=None, max_length=30)
+    email: EmailStr | None = None
+    address: str | None = Field(default=None, max_length=500)
+    preferred_language: str | None = Field(default=None, max_length=35)
+
+
+class PatientCreate(_Contact):
+    """Registration of a patient by staff (walk-in) or completion of one's own profile."""
+
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    date_of_birth: date
+    sex_at_birth: SexAtBirth = SexAtBirth.unknown
+    gender_identity: str | None = Field(default=None, max_length=50)
+
+    _dob = field_validator("date_of_birth")(_validate_dob)
+
+
+class PatientUpdate(_Contact):
+    """Staff edit. Omitted fields are left unchanged."""
+
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    date_of_birth: date | None = None
+    sex_at_birth: SexAtBirth | None = None
+    gender_identity: str | None = Field(default=None, max_length=50)
+
+    _dob = field_validator("date_of_birth")(_validate_dob)
+
+
+class PatientContactUpdate(_Contact):
+    """What patients may change themselves (architecture §6: contact only).
+    Legal name and date of birth are corrected at the front desk."""
+
+
+class PatientRegistration(BaseModel):
+    """Self-registration: login + patient profile, created together."""
+
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    date_of_birth: date
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    phone: str | None = Field(default=None, max_length=30)
+    sex_at_birth: SexAtBirth = SexAtBirth.unknown
+
+    _dob = field_validator("date_of_birth")(_validate_dob)
+
+
+class LinkAccount(BaseModel):
+    user_id: uuid.UUID
+
+
+class PatientAccountCreate(BaseModel):
+    """Create a portal login for an existing (walk-in) patient."""
+
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class PatientRead(BaseModel):
+    """The patient's own view."""
+
+    id: uuid.UUID
+    mrn: str
+    first_name: str
+    last_name: str
+    date_of_birth: date
+    sex_at_birth: SexAtBirth
+    gender_identity: str | None
+    phone: str | None
+    email: str | None
+    address: str | None
+    preferred_language: str | None
+    has_account: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PatientStaffRead(PatientRead):
+    """Administrative view for staff. Still no clinical data: that lives in
+    clinical tables with their own, stricter access rules."""
+
+    user_id: uuid.UUID | None
+    is_active: bool
+    registered_by_user_id: uuid.UUID | None
+
+
+class PatientSummary(BaseModel):
+    """Minimal identification, e.g. embedded in an appointment."""
+
+    id: uuid.UUID
+    mrn: str
+    name: str
+    date_of_birth: date

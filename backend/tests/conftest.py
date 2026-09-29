@@ -225,3 +225,44 @@ def make_doctor(db_session: AsyncSession, make_user, make_department):
         return doctor
 
     return _make_doctor
+
+
+@pytest.fixture
+def make_patient(db_session: AsyncSession, make_user):
+    """A patient profile; with `with_account=True` it also gets a patient login."""
+    from datetime import date
+
+    from app.models.patient import Patient
+
+    async def _make_patient(
+        *,
+        first_name: str = "Pat",
+        last_name: str | None = None,
+        date_of_birth: date = date(1990, 5, 17),
+        with_account: bool = False,
+        is_active: bool = True,
+        **fields,
+    ) -> Patient:
+        user_id = None
+        if with_account:
+            user_id = (await make_user(RoleCode.patient, name=f"{first_name} {last_name or 'Patient'}")).id
+        patient = Patient(
+            user_id=user_id,
+            first_name=first_name,
+            last_name=last_name or f"Patient{os.urandom(2).hex()}",
+            date_of_birth=date_of_birth,
+            is_active=is_active,
+            **fields,
+        )
+        db_session.add(patient)
+        await db_session.commit()
+        db_session.expunge(patient)
+        return patient
+
+    return _make_patient
+
+
+async def login_as(client: AsyncClient, db_session: AsyncSession, user_id) -> dict[str, str]:
+    """Log in as an existing fixture user (by id)."""
+    user = await db_session.get(User, user_id)
+    return await login(client, user.email)
