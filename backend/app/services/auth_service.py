@@ -42,6 +42,8 @@ class SessionTokens:
     access_token: str
     # None when no new refresh token was issued (see the reuse grace period).
     refresh_token: str | None
+    # Whether the session cookie should outlive the browser ("Remember me").
+    persistent: bool = False
 
 
 async def create_user(db: AsyncSession, *, name: str, email: str, password: str) -> User:
@@ -55,14 +57,20 @@ async def create_user(db: AsyncSession, *, name: str, email: str, password: str)
 
 
 async def _issue_refresh_token(
-    db: AsyncSession, user_id: uuid.UUID, family_id: uuid.UUID, client: ClientInfo
+    db: AsyncSession, user_id: uuid.UUID, family_id: uuid.UUID, client: ClientInfo, *, persistent: bool
 ) -> tuple[RefreshToken, str]:
     raw = generate_refresh_token()
+    lifetime = (
+        timedelta(days=settings.refresh_token_expire_days)
+        if persistent
+        else timedelta(hours=settings.session_token_expire_hours)
+    )
     token = RefreshToken(
         user_id=user_id,
         family_id=family_id,
         token_hash=hash_token(raw),
-        expires_at=clock.utcnow() + timedelta(days=settings.refresh_token_expire_days),
+        persistent=persistent,
+        expires_at=clock.utcnow() + lifetime,
         user_agent=(client.user_agent or "")[:255] or None,
         ip_address=client.ip_address,
     )
@@ -75,7 +83,9 @@ async def _access_token_for(db: AsyncSession, user: User) -> str:
     return create_access_token(user.id, await rbac_service.role_codes_for(db, user.id))
 
 
-async def login(db: AsyncSession, email: str, password: str, client: ClientInfo) -> SessionTokens:
+async def login(
+    db: AsyncSession, email: str, password: str, client: ClientInfo, *, remember_me: bool = False
+) -> SessionTokens:
     user = await db.scalar(select(User).where(User.email == email))
 
     # Same error, and (via the dummy hash) the same timing, for an unknown
@@ -89,11 +99,11 @@ async def login(db: AsyncSession, email: str, password: str, client: ClientInfo)
         logger.info("login_rejected_inactive", extra={"user_id": str(user.id)})
         raise PermissionDeniedError("Account is inactive", code="ACCOUNT_INACTIVE")
 
-    _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client)
+    _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client, persistent=remember_me)
     access = await _access_token_for(db, user)
     await db.commit()
     logger.info("login_succeeded", extra={"user_id": str(user.id)})
-    return SessionTokens(access_token=access, refresh_token=raw)
+    return SessionTokens(access_token=access, refresh_token=raw, persistent=remember_me)
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
@@ -144,12 +154,12 @@ async def refresh(db: AsyncSession, raw_token: str, client: ClientInfo) -> Sessi
         await db.commit()
         raise invalid
 
-    successor, raw = await _issue_refresh_token(db, user.id, stored.family_id, client)
+    successor, raw = await _issue_refresh_token(db, user.id, stored.family_id, client, persistent=stored.persistent)
     stored.revoked_at = now
     stored.replaced_by_id = successor.id
     access = await _access_token_for(db, user)
     await db.commit()
-    return SessionTokens(access_token=access, refresh_token=raw)
+    return SessionTokens(access_token=access, refresh_token=raw, persistent=stored.persistent)
 
 
 async def logout(db: AsyncSession, raw_token: str | None) -> None:

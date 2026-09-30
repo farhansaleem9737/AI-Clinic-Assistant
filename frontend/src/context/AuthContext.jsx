@@ -38,8 +38,10 @@ export function AuthProvider({ children }) {
   }, [clearSession, fetchCurrentUser]);
 
   const login = useCallback(
-    async (email, password) => {
-      const res = await api.post("/auth/login", { email, password });
+    // rememberMe: keep the session after the browser closes. Only this flag is
+    // sent; the password is used for this one request and never stored.
+    async (email, password, rememberMe = false) => {
+      const res = await api.post("/auth/login", { email, password, remember_me: rememberMe });
       setAccessToken(res.data.access_token);
       return fetchCurrentUser();
     },

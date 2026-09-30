@@ -1,7 +1,8 @@
-import { ChevronRight, LogOut, Menu, Plus, Search } from "lucide-react";
+import { ChevronRight, LogOut, Menu, Search } from "lucide-react";
 import { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
+import BrandMark from "../components/BrandMark";
 import { useAuth } from "../context/useAuth";
 import { profilePath, visibleNavItems } from "../routes/navigation";
 
@@ -41,9 +42,7 @@ export default function AppLayout() {
     <div className={`shell${navOpen ? " nav-open" : ""}`}>
       <aside className="sidebar" aria-label="Main navigation">
         <Link to={user ? "/dashboard" : "/doctors"} className="brand">
-          <span className="brand-mark">
-            <Plus size={22} strokeWidth={3} aria-hidden="true" />
-          </span>
+          <BrandMark />
           Clinic AI Assistant
         </Link>
         {/* On small screens the sidebar is a drawer: any click inside closes it. */}

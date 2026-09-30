@@ -43,6 +43,18 @@ export function visibleNavItems(user, can) {
   });
 }
 
+// Every role lands on the same dashboard route; the page itself shows each
+// role its own view from what the API returns.
+export const HOME_PATH = "/dashboard";
+
+// A path to return to after signing in, only if it is inside this app.
+// Rejects absolute and protocol-relative URLs ("https://…", "//evil.example").
+export function safeReturnPath(path) {
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return null;
+  if (path.startsWith("/login")) return null;
+  return path;
+}
+
 // Where "my profile" lives for this user, if anywhere.
 export function profilePath(user, can) {
   if (can("patient:read_own")) return "/profile";

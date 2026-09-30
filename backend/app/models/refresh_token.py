@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CHAR, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import CHAR, Boolean, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,5 +30,9 @@ class RefreshToken(UUIDPrimaryKeyMixin, Base):
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("refresh_tokens.id", ondelete="SET NULL")
     )
+    # "Remember me": True keeps the session across browser restarts (long-lived
+    # cookie); False is a browser-session cookie with a short server lifetime.
+    # Successors inherit it when the token rotates.
+    persistent: Mapped[bool] = mapped_column(Boolean, default=False)
     user_agent: Mapped[str | None] = mapped_column(String(255))
     ip_address: Mapped[str | None] = mapped_column(INET)

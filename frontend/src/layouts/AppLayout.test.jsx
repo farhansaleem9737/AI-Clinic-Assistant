@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -88,7 +88,7 @@ describe("shell behaviour", () => {
     renderShell(auth);
     await userEvent.click(screen.getByRole("button", { name: "Logout" }));
     expect(auth.logout).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("where")).toHaveTextContent("/login");
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/login"));
   });
 });
 

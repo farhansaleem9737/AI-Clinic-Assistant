@@ -22,6 +22,9 @@ class MeResponse(UserResponse):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str = Field(max_length=128)
+    # Keep the session after the browser closes. Off by default: a shared
+    # clinic computer should not stay signed in.
+    remember_me: bool = False
 
 
 class AccessTokenResponse(BaseModel):

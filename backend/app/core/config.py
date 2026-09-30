@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 14
+    # Lifetime of a session signed in *without* "Remember me". Its cookie also
+    # disappears when the browser closes; this bounds it if the browser
+    # restores session cookies or is simply never closed.
+    session_token_expire_hours: int = 12
     # Two requests presenting the same refresh token within this many seconds
     # (e.g. two tabs opening at once) are treated as a race, not as theft.
     refresh_reuse_grace_seconds: int = 10

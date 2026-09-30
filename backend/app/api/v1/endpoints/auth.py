@@ -24,8 +24,10 @@ def _client_info(request: Request) -> auth_service.ClientInfo:
     )
 
 
-def _set_session_cookies(response: Response, refresh_token: str) -> None:
-    max_age = settings.refresh_token_expire_days * 24 * 3600
+def _set_session_cookies(response: Response, refresh_token: str, *, persistent: bool) -> None:
+    # "Remember me" off: no Max-Age, so the browser drops both cookies when it
+    # closes. On: they last as long as the refresh token does.
+    max_age = settings.refresh_token_expire_days * 24 * 3600 if persistent else None
     # HttpOnly: JavaScript (and therefore XSS) can never read it. Path-scoped:
     # the browser sends it only to /auth/*, not with every API call.
     response.set_cookie(
@@ -90,8 +92,10 @@ async def register(body: PatientRegistration, db: AsyncSession = Depends(get_db)
 
 @router.post("/login", response_model=AccessTokenResponse)
 async def login(credentials: UserLogin, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    tokens = await auth_service.login(db, credentials.email, credentials.password, _client_info(request))
-    _set_session_cookies(response, tokens.refresh_token)
+    tokens = await auth_service.login(
+        db, credentials.email, credentials.password, _client_info(request), remember_me=credentials.remember_me
+    )
+    _set_session_cookies(response, tokens.refresh_token, persistent=tokens.persistent)
     return _access_response(tokens.access_token)
 
 
@@ -115,7 +119,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         _clear_session_cookies(failed)
         return failed
     if tokens.refresh_token is not None:
-        _set_session_cookies(response, tokens.refresh_token)
+        _set_session_cookies(response, tokens.refresh_token, persistent=tokens.persistent)
     return _access_response(tokens.access_token)
 
 

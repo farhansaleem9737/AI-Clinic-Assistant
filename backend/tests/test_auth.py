@@ -263,3 +263,73 @@ async def test_expired_access_token_is_rejected(client, make_user):
     )
     assert (await client.get(ME, headers={"Authorization": f"Bearer {token}"})).status_code == 200
     assert (await client.get(ME, headers={"Authorization": f"Bearer {expired}"})).status_code == 401
+
+
+# ---- "Remember me" -------------------------------------------------------------------
+
+
+async def _login_with(client, make_user, **body):
+    user = await make_user(RoleCode.patient)
+    response = await client.post(LOGIN, json={"email": user.email, "password": TEST_PASSWORD, **body})
+    assert response.status_code == 200, response.text
+    return user, response
+
+
+async def test_login_without_remember_me_is_a_browser_session(client, make_user, db_session):
+    user, response = await _login_with(client, make_user)
+    cookies = cookies_from(response)
+    # No Max-Age / Expires: the browser discards both cookies when it closes.
+    for name in (settings.refresh_cookie_name, settings.csrf_cookie_name):
+        assert cookies[name]["max-age"] == "" and cookies[name]["expires"] == ""
+
+    stored = await db_session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert stored.persistent is False
+    lifetime = stored.expires_at - stored.created_at
+    assert timedelta(hours=settings.session_token_expire_hours - 1) < lifetime <= timedelta(
+        hours=settings.session_token_expire_hours, minutes=1
+    )
+
+
+async def test_remember_me_keeps_the_session_across_browser_restarts(client, make_user, db_session):
+    user, response = await _login_with(client, make_user, remember_me=True)
+    cookies = cookies_from(response)
+    expected = str(settings.refresh_token_expire_days * 24 * 3600)
+    assert cookies[settings.refresh_cookie_name]["max-age"] == expected
+    assert cookies[settings.csrf_cookie_name]["max-age"] == expected
+    # Still never readable by JavaScript, and still no password or token in the body.
+    assert cookies[settings.refresh_cookie_name]["httponly"] is True
+    assert set(response.json()) == {"access_token", "token_type", "expires_in"}
+
+    stored = await db_session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert stored.persistent is True
+
+
+@pytest.mark.parametrize("remember_me", [True, False])
+async def test_rotation_preserves_the_remember_me_choice(client, make_user, remember_me):
+    _, response = await _login_with(client, make_user, remember_me=remember_me)
+    session = Session(response)
+    refreshed = await client.post(REFRESH, headers=session.headers())
+    assert refreshed.status_code == 200
+    max_age = cookies_from(refreshed)[settings.refresh_cookie_name]["max-age"]
+    assert (max_age != "") is remember_me
+
+
+async def test_unremembered_session_expires_after_the_short_lifetime(client, make_user, advance_clock):
+    _, response = await _login_with(client, make_user)
+    session = Session(response)
+    advance_clock(timedelta(hours=settings.session_token_expire_hours, minutes=1))
+    assert (await client.post(REFRESH, headers=session.headers())).status_code == 401
+
+
+async def test_remembered_session_outlives_the_short_lifetime(client, make_user, advance_clock):
+    _, response = await _login_with(client, make_user, remember_me=True)
+    session = Session(response)
+    advance_clock(timedelta(hours=settings.session_token_expire_hours, minutes=1))
+    assert (await client.post(REFRESH, headers=session.headers())).status_code == 200
+
+
+async def test_login_response_never_contains_password_or_hash(client, make_user):
+    _, response = await _login_with(client, make_user, remember_me=True)
+    me = await client.get(ME, headers={"Authorization": f"Bearer {response.json()['access_token']}"})
+    for text in (response.text, me.text, str(response.headers)):
+        assert TEST_PASSWORD not in text and "password" not in text.lower() and "$2b$" not in text
