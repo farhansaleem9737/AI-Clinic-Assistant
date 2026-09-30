@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import api, { csrfHeaders, refreshAccessToken, setAccessToken, setSessionExpiredHandler } from "../services/api";
+import api, {
+  csrfHeaders,
+  mayHaveSession,
+  refreshAccessToken,
+  setAccessToken,
+  setSessionExpiredHandler,
+} from "../services/api";
 import { AuthContext } from "./AuthContextObject";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   // True until the first session-restore attempt finishes, so guarded routes
   // don't bounce a logged-in user to /login during a page reload.
-  const [initializing, setInitializing] = useState(true);
+  // A visitor with no session cookie has nothing to restore.
+  const [initializing, setInitializing] = useState(mayHaveSession);
 
   const fetchCurrentUser = useCallback(async () => {
     const res = await api.get("/auth/me");
@@ -22,7 +29,8 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     setSessionExpiredHandler(clearSession);
 
-    // Restore the session from the HttpOnly refresh cookie, if there is one.
+    if (!mayHaveSession()) return;
+    // Restore the session from the HttpOnly refresh cookie.
     refreshAccessToken()
       .then(fetchCurrentUser)
       .catch(clearSession)

@@ -20,10 +20,12 @@ export default function Appointments() {
   const { can } = useAuth();
   const isStaff = can("appointment:read_any");
   const [searchParams] = useSearchParams();
+  const day = searchParams.get("date") ?? "";
   const [filters, setFilters] = useState({
-    status: "active",
-    date_from: "",
-    date_to: "",
+    // A specific day shows everything on it, not just what is still active.
+    status: day ? "past" : "active",
+    date_from: day,
+    date_to: day,
     doctor_id: "",
     department_id: "",
     patient_id: searchParams.get("patient") ?? "",

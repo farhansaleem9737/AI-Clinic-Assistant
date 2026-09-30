@@ -1,57 +1,119 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { ChevronRight, LogOut, Menu, Plus, Search } from "lucide-react";
+import { useState } from "react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import Avatar from "../components/Avatar";
 import { useAuth } from "../context/useAuth";
-import { NAV_ITEMS } from "../routes/navigation";
+import { profilePath, visibleNavItems } from "../routes/navigation";
 
+// The application shell: sidebar navigation, top bar, page content.
 export default function AppLayout() {
   const { user, can, logout } = useAuth();
   const navigate = useNavigate();
+  const [navOpen, setNavOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   // Menu visibility is cosmetic; the API enforces every permission.
-  const items = NAV_ITEMS.filter((item) => {
-    if (item.public) return true;
-    if (!user) return false;
-    if (item.permission) return can(item.permission);
-    if (item.anyOf) return item.anyOf.some(can);
-    return true;
-  });
+  const items = visibleNavItems(user, can);
+  const myProfile = user ? profilePath(user, can) : null;
+  const role = user?.roles.join(", ") || "no role";
 
   const handleLogout = async () => {
     await logout();
     navigate("/login");
   };
 
-  return (
+  const handleSearch = (e) => {
+    e.preventDefault();
+    navigate(`/doctors${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`);
+  };
+
+  const userCard = user && (
     <>
-      <header className="app-header">
-        <NavLink to={user ? "/dashboard" : "/"} className="brand">
+      <Avatar name={user.name} size={36} />
+      <span className="who">
+        <strong>{user.name}</strong>
+        <span>{role}</span>
+      </span>
+    </>
+  );
+
+  return (
+    <div className={`shell${navOpen ? " nav-open" : ""}`}>
+      <aside className="sidebar" aria-label="Main navigation">
+        <Link to={user ? "/dashboard" : "/doctors"} className="brand">
+          <span className="brand-mark">
+            <Plus size={22} strokeWidth={3} aria-hidden="true" />
+          </span>
           Clinic AI Assistant
-        </NavLink>
-        <nav>
-          {items.map((item) => (
-            <NavLink key={item.to} to={item.to}>
-              {item.label}
+        </Link>
+        {/* On small screens the sidebar is a drawer: any click inside closes it. */}
+        <nav onClick={() => setNavOpen(false)}>
+          {items.map(({ to, label, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end}>
+              <Icon size={19} aria-hidden="true" />
+              {label}
             </NavLink>
           ))}
         </nav>
-        {user ? (
-          <div className="row">
-            <span className="who">
-              {user.name} · {user.roles.join(", ") || "no role"}
-            </span>
-            <button className="secondary" onClick={handleLogout}>
-              Log out
-            </button>
-          </div>
-        ) : (
-          <div className="row">
-            <NavLink to="/login">Log in</NavLink>
-            <NavLink to="/register">Register</NavLink>
-          </div>
+        {user &&
+          (myProfile ? (
+            <Link to={myProfile} className="sidebar-user">
+              {userCard}
+              <ChevronRight size={16} aria-hidden="true" />
+            </Link>
+          ) : (
+            <div className="sidebar-user">{userCard}</div>
+          ))}
+        {user && (
+          <button type="button" className="sidebar-logout" onClick={handleLogout}>
+            <LogOut size={19} aria-hidden="true" />
+            Logout
+          </button>
         )}
-      </header>
-      <main className="page">
-        <Outlet />
-      </main>
-    </>
+      </aside>
+      <div className="backdrop" onClick={() => setNavOpen(false)} />
+
+      <div className="shell-main">
+        <header className="topbar">
+          <button type="button" className="secondary menu-button" aria-label="Open menu" onClick={() => setNavOpen(true)}>
+            <Menu size={18} />
+          </button>
+          <form className="search" role="search" onSubmit={handleSearch}>
+            <Search size={18} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Search doctors"
+              placeholder="Search doctors…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </form>
+          <span className="spacer" />
+          {user ? (
+            myProfile ? (
+              <Link to={myProfile} className="topbar-user">
+                {userCard}
+              </Link>
+            ) : (
+              <span className="topbar-user">{userCard}</span>
+            )
+          ) : (
+            <div className="row">
+              <Link to="/login">
+                <button type="button" className="secondary">
+                  Log in
+                </button>
+              </Link>
+              <Link to="/register">
+                <button type="button">Register</button>
+              </Link>
+            </div>
+          )}
+        </header>
+        <main className="page">
+          <Outlet />
+        </main>
+      </div>
+    </div>
   );
 }

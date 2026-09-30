@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
 import Pager from "../components/Pager";
 import { getErrorMessage } from "../services/api";
@@ -12,9 +12,19 @@ const EMPTY_FILTERS = { q: "", department_id: "", specialization: "", min_experi
 
 // Public directory. Every filter is applied by the API in SQL.
 export default function Doctors() {
-  const [departments, setDepartments] = useState([]);
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState(1);
+  const urlQuery = searchParams.get("q") ?? "";
+  const urlDepartment = searchParams.get("department") ?? "";
+  const [departments, setDepartments] = useState([]);
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS, q: urlQuery, department_id: urlDepartment });
+  // A new search from the top bar (or a department link) replaces the filters.
+  const [seenUrl, setSeenUrl] = useState(`${urlQuery}|${urlDepartment}`);
+  if (seenUrl !== `${urlQuery}|${urlDepartment}`) {
+    setSeenUrl(`${urlQuery}|${urlDepartment}`);
+    setFilters({ ...EMPTY_FILTERS, q: urlQuery, department_id: urlDepartment });
+    setPage(1);
+  }
   const [data, setData] = useState({ items: [], total: 0 });
   const [error, setError] = useState("");
 

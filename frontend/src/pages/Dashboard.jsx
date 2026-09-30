@@ -1,64 +1,78 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import StatusBadge from "../components/StatusBadge";
+import { CalendarDays, ShieldQuestion } from "lucide-react";
+import Alert from "../components/Alert";
+import EmptyState from "../components/EmptyState";
+import DoctorDashboard from "../components/dashboard/DoctorDashboard";
+import FrontDeskDashboard from "../components/dashboard/FrontDeskDashboard";
+import PatientDashboard from "../components/dashboard/PatientDashboard";
 import { useAuth } from "../context/useAuth";
-import { listAppointments } from "../services/appointmentService";
-import { ACTIVE_STATUSES } from "../utils/appointments";
-import { formatDateTime, isoDateIn } from "../utils/datetime";
-import { doctorName } from "../utils/format";
+import { useFetch } from "../hooks/useFetch";
+import { getDashboardSummary } from "../services/dashboardService";
 
-const READ = ["appointment:read_own", "appointment:read_assigned", "appointment:read_any"];
+const SUBTITLES = {
+  patient: "Here's your healthcare overview.",
+  doctor: "Here's your day at a glance.",
+  front_desk: "Here's what's happening at the clinic today.",
+};
 
+function greeting(hour) {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/**
+ * One dashboard for every role. The API returns only the sections this user
+ * is entitled to; whichever sections arrive are the ones rendered, so the
+ * page cannot show a role's data the server did not send.
+ */
 export default function Dashboard() {
-  const { user, can } = useAuth();
-  const canSeeAppointments = READ.some(can);
-  const [upcoming, setUpcoming] = useState(null);
+  const { user } = useAuth();
+  const { data: summary, loading, error } = useFetch(getDashboardSummary, []);
+  const now = new Date();
+  const firstName = user.name.replace(/^(Dr\.?|Prof\.?)\s+/i, "").split(" ")[0];
 
-  useEffect(() => {
-    if (!canSeeAppointments) return;
-    listAppointments({ status: ACTIVE_STATUSES, date_from: isoDateIn(new Date()), page_size: 5 })
-      .then((res) => setUpcoming(res.data))
-      .catch(() => setUpcoming({ items: [], total: 0 }));
-  }, [canSeeAppointments]);
+  const sections = summary
+    ? [
+        summary.patient && { key: "patient", element: <PatientDashboard summary={summary} /> },
+        summary.doctor && { key: "doctor", element: <DoctorDashboard summary={summary} /> },
+        summary.front_desk && { key: "front_desk", element: <FrontDeskDashboard summary={summary} /> },
+      ].filter(Boolean)
+    : [];
 
   return (
     <div>
-      <div className="card">
-        <h2>Welcome, {user.name}</h2>
-        <p className="muted">{user.email}</p>
-        <p>
-          {user.roles.length
-            ? user.roles.map((r) => (
-                <span key={r} className="badge">
-                  {r}
-                </span>
-              ))
-            : "No role assigned"}
-        </p>
+      <div className="dash-head">
+        <div>
+          <h1>
+            {greeting(now.getHours())}, {firstName}!
+          </h1>
+          <span className="muted">{SUBTITLES[sections[0]?.key] ?? "Welcome to Clinic AI Assistant."}</span>
+        </div>
+        <span className="date">
+          <CalendarDays size={18} aria-hidden="true" />
+          {new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" }).format(now)}
+        </span>
       </div>
 
-      {canSeeAppointments && (
-        <div className="card">
-          <div className="spread">
-            <h3>Upcoming appointments</h3>
-            <Link to="/appointments">See all</Link>
-          </div>
-          {upcoming === null && <p className="muted">Loading…</p>}
-          {upcoming?.items.length === 0 && <p className="muted">Nothing scheduled.</p>}
-          {upcoming?.items.map((a) => (
-            <p key={a.id} className="spread">
-              <Link to={`/appointments/${a.id}`}>{formatDateTime(a.starts_at, a.timezone)}</Link>
-              <span>
-                {user.patient_id ? doctorName(a.doctor) : a.patient.name}
-              </span>
-              <StatusBadge status={a.status} />
-            </p>
+      <Alert>{error}</Alert>
+
+      {loading && (
+        <div className="stat-grid" role="status" aria-label="Loading dashboard">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="card skeleton" style={{ height: 96, margin: 0 }} />
           ))}
-          {(can("appointment:create") || can("appointment:create_own")) && (
-            <Link to="/appointments/book">
-              <button>Book an appointment</button>
-            </Link>
-          )}
+        </div>
+      )}
+
+      {sections.map(({ key, element }) => (
+        <div key={key}>{element}</div>
+      ))}
+
+      {summary && sections.length === 0 && (
+        <div className="card">
+          <EmptyState icon={ShieldQuestion}>
+            Your account has no role with a dashboard yet. Ask an administrator to assign you one.
+          </EmptyState>
         </div>
       )}
     </div>

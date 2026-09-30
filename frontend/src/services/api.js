@@ -32,6 +32,12 @@ function readCookie(name) {
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
+// The CSRF cookie is set and cleared together with the HttpOnly refresh
+// cookie, so its presence tells us whether a session may exist.
+export function mayHaveSession() {
+  return readCookie(CSRF_COOKIE) !== null;
+}
+
 // Headers for the endpoints authenticated by the refresh cookie (double-submit CSRF).
 export function csrfHeaders() {
   const token = readCookie(CSRF_COOKIE);

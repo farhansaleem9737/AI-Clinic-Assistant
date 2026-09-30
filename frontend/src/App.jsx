@@ -5,6 +5,7 @@ import AppLayout from "./layouts/AppLayout";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
+import Departments from "./pages/Departments";
 import Doctors from "./pages/Doctors";
 import DoctorDetail from "./pages/DoctorDetail";
 import MyDoctorProfile from "./pages/MyDoctorProfile";
@@ -48,6 +49,7 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/doctors" element={<Doctors />} />
             <Route path="/doctors/:id" element={<DoctorDetail />} />
+            <Route path="/departments" element={<Departments />} />
             {PROTECTED_ROUTES.map(({ path, element, permission, anyOf }) => (
               <Route
                 key={path}

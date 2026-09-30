@@ -29,9 +29,11 @@ export const CANCELLATION_REASONS = {
 
 export const ACTIVE_STATUSES = ["requested", "scheduled", "confirmed", "checked_in", "in_progress"];
 
+// Badge colours follow the design: confirmed green, scheduled blue, completed neutral.
 export function statusTone(status) {
-  if (status === "completed") return "ok";
-  if (status === "cancelled" || status === "no_show") return "danger";
+  if (status === "confirmed") return "ok";
+  if (status === "requested" || status === "scheduled") return "info";
   if (status === "checked_in" || status === "in_progress") return "warn";
+  if (status === "cancelled" || status === "no_show") return "danger";
   return "";
 }

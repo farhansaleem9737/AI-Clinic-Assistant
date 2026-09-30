@@ -49,3 +49,10 @@ async def test_permissions_are_read_per_request_not_from_the_token(client, make_
     await db_session.flush()
 
     assert (await client.post("/api/v1/departments/", json={"name": "After"}, headers=headers)).status_code == 403
+
+
+async def test_admin_does_not_hold_self_service_permissions(client, auth_headers):
+    """`*_own` permissions are for the patient/doctor whose record it is."""
+    me = await client.get("/api/v1/auth/me", headers=await auth_headers(RoleCode.admin))
+    own = [p for p in me.json()["permissions"] if p.endswith("_own")]
+    assert own == []
