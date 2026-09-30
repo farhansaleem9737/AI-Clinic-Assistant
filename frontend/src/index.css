@@ -52,10 +52,7 @@ p { margin: 0 0 0.6rem; }
   color: #fff; font-weight: 700; font-size: 1.1rem; line-height: 1.2;
 }
 .sidebar .brand:hover { text-decoration: none; }
-.brand-mark {
-  display: inline-grid; place-items: center; flex: none; color: #fff;
-  background: linear-gradient(135deg, #2f80ed, #34c3d3);
-}
+.brand-mark { display: block; flex: none; object-fit: contain; }
 .sidebar nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
 .sidebar nav a {
   display: flex; align-items: center; gap: 0.8rem; padding: 0.65rem 0.8rem; border-radius: 9px;
