@@ -45,6 +45,7 @@ def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
             id=a.doctor_id,
             name=view.doctor_name,
             title=view.doctor_title,
+            room_number=view.doctor_room,
             specialization=view.specialization,
             department_id=view.department_id,
             department_name=view.department_name,

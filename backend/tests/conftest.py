@@ -30,6 +30,7 @@ if _test_url.database == _dev_url.database:
 os.environ["DATABASE_URL"] = _test_url.render_as_string(hide_password=False)
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SQL_ECHO"] = "false"
+os.environ["CLINIC_TIMEZONE"] = "Asia/Karachi"
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402

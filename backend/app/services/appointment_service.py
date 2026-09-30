@@ -50,6 +50,7 @@ class AppointmentView:
     appointment: Appointment
     doctor_name: str
     doctor_title: str | None
+    doctor_room: str | None
     specialization: str
     department_id: uuid.UUID
     department_name: str
@@ -83,6 +84,7 @@ def _view_query() -> Select:
             Appointment,
             doctor_user.name,
             Doctor.title,
+            Doctor.room_number,
             Doctor.specialization,
             Department.id,
             Department.name,
@@ -102,13 +104,14 @@ def _view_query() -> Select:
 
 
 def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
-    (appt, doctor_name, title, specialization, dept_id, dept_name, tz, mrn, first, last, dob, successor_id) = row
+    (appt, doctor_name, title, room, specialization, dept_id, dept_name, tz, mrn, first, last, dob, successor_id) = row
     ctx = Context(principal=principal, appointment=appt, now=now, timezone=ZoneInfo(tz))
     allowed, can_reschedule = appointment_state.allowed_actions(ctx)
     return AppointmentView(
         appointment=appt,
         doctor_name=doctor_name,
         doctor_title=title,
+        doctor_room=room,
         specialization=specialization,
         department_id=dept_id,
         department_name=dept_name,

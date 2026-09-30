@@ -49,9 +49,14 @@ class Reschedule(BaseModel):
 
 
 class AppointmentDoctor(BaseModel):
+    """The doctor as shown on an appointment. Appointment responses only ever
+    reach people authorised for that appointment, so the room (where to go)
+    is included here even though it is not part of the public directory."""
+
     id: uuid.UUID
     name: str
     title: str | None
+    room_number: str | None
     specialization: str
     department_id: uuid.UUID
     department_name: str

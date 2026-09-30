@@ -34,17 +34,26 @@ def patient_visibility(principal: Principal) -> ColumnElement[bool]:
     return or_(*conditions) if conditions else false()
 
 
+def own_appointments(principal: Principal) -> ColumnElement[bool]:
+    """Appointments where the caller is the patient."""
+    if principal.has(Perm.appointment_read_own) and principal.patient_id is not None:
+        return Appointment.patient_id == principal.patient_id
+    return false()
+
+
+def assigned_appointments(principal: Principal) -> ColumnElement[bool]:
+    """Appointments where the caller is the doctor."""
+    if principal.has(Perm.appointment_read_assigned) and principal.doctor_id is not None:
+        return Appointment.doctor_id == principal.doctor_id
+    return false()
+
+
 def appointment_visibility(principal: Principal) -> ColumnElement[bool]:
     """Appointments the caller may see: any (staff), their own (patients),
     or those where they are the doctor (doctors)."""
     if principal.has(Perm.appointment_read_any):
         return true()
-    conditions = []
-    if principal.has(Perm.appointment_read_own) and principal.patient_id is not None:
-        conditions.append(Appointment.patient_id == principal.patient_id)
-    if principal.has(Perm.appointment_read_assigned) and principal.doctor_id is not None:
-        conditions.append(Appointment.doctor_id == principal.doctor_id)
-    return or_(*conditions) if conditions else false()
+    return or_(own_appointments(principal), assigned_appointments(principal))
 
 
 async def get_readable_patient(db: AsyncSession, principal: Principal, patient_id: uuid.UUID) -> Patient:
