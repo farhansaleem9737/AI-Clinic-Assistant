@@ -4,6 +4,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import AppLayout from "./layouts/AppLayout";
 import AuthLayout from "./layouts/AuthLayout";
 import ForgotPassword from "./pages/ForgotPassword";
+import LegalDocument from "./pages/LegalDocument";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -47,12 +48,16 @@ function App() {
       <BrowserRouter>
         <Routes>
           {/* Signed-out pages: full-screen, without the app shell. */}
-          <Route element={<AuthLayout />}>
+          <Route element={<AuthLayout variant="login" />}>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
           </Route>
-          <Route element={<AppLayout />}>
+          <Route element={<AuthLayout variant="register" />}>
             <Route path="/register" element={<Register />} />
+            <Route path="/terms" element={<LegalDocument document="terms" />} />
+            <Route path="/privacy" element={<LegalDocument document="privacy" />} />
+          </Route>
+          <Route element={<AppLayout />}>
             <Route path="/doctors" element={<Doctors />} />
             <Route path="/doctors/:id" element={<DoctorDetail />} />
             <Route path="/departments" element={<Departments />} />

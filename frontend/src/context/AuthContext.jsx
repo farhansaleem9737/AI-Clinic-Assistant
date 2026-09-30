@@ -52,7 +52,16 @@ export function AuthProvider({ children }) {
   const register = useCallback(
     async (data) => {
       await api.post("/auth/register", data);
-      return login(data.email, data.password);
+      try {
+        // Established flow: create the account, then sign in.
+        return await login(data.email, data.password);
+      } catch (err) {
+        // The account exists; only the sign-in step failed. Callers must not
+        // report this as a failed registration (the user would retry and be
+        // told the email is taken).
+        err.accountCreated = true;
+        throw err;
+      }
     },
     [login]
   );

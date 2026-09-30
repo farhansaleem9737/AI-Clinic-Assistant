@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+from app.schemas.common import LoginEmail
+
 # Money is Decimal end to end (Numeric(10, 2) in PostgreSQL), serialised as a
 # string in JSON — never a float.
 FEE_FIELD = {"ge": 0, "max_digits": 10, "decimal_places": 2}
@@ -13,7 +15,7 @@ class NewDoctorAccount(BaseModel):
     """Login to create together with the profile (the doctor role is granted)."""
 
     name: str = Field(min_length=1, max_length=100)
-    email: EmailStr
+    email: LoginEmail
     password: str = Field(min_length=8, max_length=128)
 
 

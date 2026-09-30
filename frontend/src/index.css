@@ -274,7 +274,7 @@ dl { margin: 0; }
   padding: clamp(2rem, 6vh, 4.5rem) clamp(1.5rem, 4.5vw, 4.25rem) 0;
   background: linear-gradient(165deg, #e9f1fc 0%, #f7faff 42%, #e3edfa 100%);
 }
-.auth-hero > * { position: relative; z-index: 1; }
+.auth-hero-text { position: relative; z-index: 1; }
 .auth-hero .eyebrow { border-left: 2px solid var(--accent); padding-left: 0.85rem; color: var(--heading); font-weight: 500; margin: 0; }
 .auth-hero h1 { font-size: clamp(2rem, 3.5vw, 3.15rem); line-height: 1.08; letter-spacing: -0.02em; margin: 1.1rem 0 1rem; }
 .auth-hero .lead { color: var(--muted); font-size: clamp(1rem, 1.25vw, 1.15rem); max-width: 25rem; }
@@ -285,6 +285,27 @@ dl { margin: 0; }
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 22%);
 }
+
+/* Create-account panel: the photo fills the panel and the text sits in its
+   clear top-left area. Sizes are in container units (cqw) so the text scales
+   with the photo and keeps to that area at every panel width. */
+.auth-hero-register { padding: 0; container-type: inline-size; background: #eaf1fb; }
+.auth-hero-register img {
+  inset: 0; width: 100%; height: 100%; object-position: left top;
+  -webkit-mask-image: none; mask-image: none;
+}
+.auth-hero-register .auth-hero-text { padding: 10cqw 0 0 11.4cqw; }
+.auth-hero-register .eyebrow { font-size: clamp(0.8rem, 2.4cqw, 1.15rem); padding-left: 1.9cqw; }
+.auth-hero-register h1 { font-size: clamp(1.6rem, 7cqw, 3.5rem); line-height: 1.05; margin: 3.4cqw 0 1.5cqw; }
+.auth-hero-register .lead { font-size: clamp(0.85rem, 2.7cqw, 1.3rem); line-height: 1.42; max-width: 50cqw; margin: 0; }
+.auth-benefits { list-style: none; padding: 0; margin: 4.6cqw 0 0; display: flex; flex-direction: column; gap: 2.6cqw; }
+.auth-benefits li { display: flex; align-items: center; gap: 2.4cqw; }
+.auth-benefits .tile {
+  display: grid; place-items: center; flex: none; width: clamp(30px, 6.5cqw, 48px); aspect-ratio: 1;
+  border-radius: 1.3cqw; background: #dce8fb; color: var(--accent);
+}
+.auth-benefits strong { display: block; color: var(--heading); font-size: clamp(0.78rem, 2.1cqw, 1rem); line-height: 1.3; }
+.auth-benefits small { color: var(--muted); font-size: clamp(0.7rem, 1.85cqw, 0.9rem); }
 .auth-panel { display: grid; place-items: center; padding: 2rem 1.25rem; background: linear-gradient(180deg, #f8fbff 0%, #eef4fd 100%); }
 .auth-card {
   width: 100%; max-width: 552px; background: var(--surface); border: 1px solid var(--border);
@@ -311,8 +332,11 @@ dl { margin: 0; }
 .icon-button { background: transparent; border: 0; color: var(--muted); padding: 0.35rem; border-radius: 6px; }
 .icon-button:hover { color: var(--heading); filter: none; }
 .icon-button:focus-visible, .auth a:focus-visible, .check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.check { flex-direction: row; align-items: center; gap: 0.55rem; color: var(--text); font-size: 0.95rem; cursor: pointer; }
-.check input { width: 18px; height: 18px; accent-color: var(--accent); padding: 0; }
+.field-hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.check { flex-direction: row; align-items: flex-start; gap: 0.55rem; color: var(--text); font-size: 0.95rem; cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 0.15rem 0 0; flex: none; accent-color: var(--accent); padding: 0; }
+.check input[aria-invalid="true"] { outline: 2px solid var(--danger); outline-offset: 1px; }
+.check a { font-weight: 500; text-decoration: underline; }
 button.large { min-height: 52px; font-size: 1.05rem; font-weight: 600; border-radius: 10px; }
 .auth-divider { display: flex; align-items: center; gap: 1rem; color: var(--muted); font-size: 0.9rem; margin: 1.4rem 0 1.1rem; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
@@ -321,6 +345,17 @@ button.large { min-height: 52px; font-size: 1.05rem; font-weight: 600; border-ra
 .auth-note { text-align: center; margin: 0.6rem 0 0; }
 .auth-footer { text-align: center; margin: 1.5rem 0 0; color: var(--muted); }
 .auth-footer a { font-weight: 600; }
+
+/* The create-account card has more fields: slightly tighter so it fits a
+   desktop screen without scrolling. Same components, same look. */
+.auth-register .auth-card { padding-block: clamp(1.25rem, 3vw, 2rem); }
+.auth-register .auth-brand { margin-bottom: 1.1rem; }
+.auth-register .auth-subtitle { margin-bottom: 1.1rem; }
+.auth-register .auth-form { gap: 0.8rem; }
+.auth-register .input-icon { min-height: 48px; }
+.auth-register button.large { min-height: 50px; }
+.auth-register .auth-divider { margin: 1rem 0 0.85rem; }
+.auth-register .auth-footer { margin-top: 1.1rem; }
 
 @media (max-width: 900px) {
   /* Small screens: signing in is the whole job, so only the card is shown. */

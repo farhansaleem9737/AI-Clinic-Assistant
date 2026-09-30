@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.schemas.common import LoginEmail
+
 
 class UserResponse(BaseModel):
     id: uuid.UUID
@@ -20,7 +22,7 @@ class MeResponse(UserResponse):
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email: LoginEmail
     password: str = Field(max_length=128)
     # Keep the session after the browser closes. Off by default: a shared
     # clinic computer should not stay signed in.
@@ -40,14 +42,14 @@ class AccountCreate(BaseModel):
     """Admin-created account. Roles are granted in the same transaction."""
 
     name: str = Field(min_length=1, max_length=100)
-    email: EmailStr
+    email: LoginEmail
     password: str = Field(min_length=8, max_length=128)
     roles: list[str] = Field(min_length=1)
 
 
 class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    email: EmailStr | None = None
+    email: LoginEmail | None = None
 
 
 class RolesUpdate(BaseModel):
