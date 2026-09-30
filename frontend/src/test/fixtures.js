@@ -151,3 +151,29 @@ export const PERMISSIONS = {
     "user:read",
   ],
 };
+
+// One entry of GET /public/doctors (also the body of GET /public/doctors/{id}).
+export function publicDoctor(overrides = {}) {
+  return {
+    id: "doc-1",
+    name: "Sarah Khan",
+    title: "Dr.",
+    specialization: "Cardiologist",
+    department_id: "dep-1",
+    department_name: "Cardiology",
+    years_of_experience: 10,
+    consultation_fee: "150.00",
+    qualifications: "MBBS, FCPS (Cardiology)",
+    bio: "Treats heart conditions.",
+    is_verified: true,
+    availability: { status: "available", next_available: "2026-10-05T04:00:00Z" },
+    ...overrides,
+  };
+}
+
+export const doctorsPage = (items, extra = {}) => ({
+  data: { items, total: items.length, page: 1, page_size: 6, total_pages: items.length ? 1 : 0, ...extra },
+});
+
+// What useAuth() returns for a visitor who is not signed in.
+export const anonymous = { user: null, initializing: false, can: () => false, hasRole: () => false, logout: async () => {} };

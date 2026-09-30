@@ -21,6 +21,8 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     title: Mapped[str | None] = mapped_column(String(20))
     specialization: Mapped[str] = mapped_column(String(150))
     license_number: Mapped[str | None] = mapped_column(String(50), unique=True)
+    # Degrees and certifications as shown to patients, e.g. "MBBS, FCPS (Cardiology)".
+    qualifications: Mapped[str | None] = mapped_column(String(500))
     bio: Mapped[str | None] = mapped_column(String(1000))
     years_of_experience: Mapped[int] = mapped_column(Integer, default=0)
     consultation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))

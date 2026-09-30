@@ -10,7 +10,9 @@ export default function ProtectedRoute({ children, permission, anyOf }) {
   const location = useLocation();
 
   if (initializing) return <p className="muted">Loading…</p>;
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  // Remember the full address (with its query) so sign-in can return here,
+  // e.g. to the booking page for the doctor that was chosen.
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
 
   const allowed = permission ? can(permission) : anyOf ? anyOf.some(can) : true;
   if (!allowed) return <Navigate to="/dashboard" replace />;

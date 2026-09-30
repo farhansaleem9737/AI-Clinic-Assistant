@@ -5,6 +5,7 @@ from decimal import Decimal
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.schemas.common import LoginEmail
+from app.services.availability_service import AvailabilityStatus
 
 # Money is Decimal end to end (Numeric(10, 2) in PostgreSQL), serialised as a
 # string in JSON — never a float.
@@ -29,6 +30,7 @@ class DoctorCreate(BaseModel):
     title: str | None = Field(default=None, max_length=20)
     specialization: str = Field(min_length=1, max_length=150)
     license_number: str | None = Field(default=None, max_length=50)
+    qualifications: str | None = Field(default=None, max_length=500)
     bio: str | None = Field(default=None, max_length=1000)
     years_of_experience: int = Field(default=0, ge=0, le=80)
     consultation_fee: Decimal | None = Field(default=None, **FEE_FIELD)
@@ -49,6 +51,7 @@ class DoctorUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=20)
     specialization: str | None = Field(default=None, min_length=1, max_length=150)
     license_number: str | None = Field(default=None, max_length=50)
+    qualifications: str | None = Field(default=None, max_length=500)
     bio: str | None = Field(default=None, max_length=1000)
     years_of_experience: int | None = Field(default=None, ge=0, le=80)
     consultation_fee: Decimal | None = Field(default=None, **FEE_FIELD)
@@ -63,8 +66,17 @@ class DoctorSelfUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=30)
 
 
+class DoctorAvailabilityRead(BaseModel):
+    """Coarse availability over the coming days. The exact free slots are
+    only shown to signed-in users (availability endpoint)."""
+
+    status: AvailabilityStatus
+    # Start of the earliest bookable slot, when there is one.
+    next_available: datetime | None
+
+
 class DoctorPublic(BaseModel):
-    """Public directory entry: no contact details, license, or account data."""
+    """Public directory entry: no contact details, license number, or account data."""
 
     id: uuid.UUID
     name: str
@@ -72,9 +84,14 @@ class DoctorPublic(BaseModel):
     specialization: str
     department_id: uuid.UUID
     department_name: str
+    qualifications: str | None
     bio: str | None
     years_of_experience: int
     consultation_fee: Decimal | None
+    # The clinic holds a medical license number for this doctor. The number
+    # itself is never published.
+    is_verified: bool
+    availability: DoctorAvailabilityRead
 
 
 class DoctorResponse(DoctorPublic):

@@ -9,9 +9,16 @@ from app.api.deps.pagination import page_params
 from app.core.permissions import Perm, Principal
 from app.db.session import get_db
 from app.schemas.common import Page
-from app.schemas.doctor import DoctorCreate, DoctorPublic, DoctorResponse, DoctorSelfUpdate, DoctorUpdate
+from app.schemas.doctor import (
+    DoctorAvailabilityRead,
+    DoctorCreate,
+    DoctorPublic,
+    DoctorResponse,
+    DoctorSelfUpdate,
+    DoctorUpdate,
+)
 from app.services import doctor_service
-from app.services.doctor_service import DoctorFilters, DoctorRow
+from app.services.doctor_service import DoctorFilters, DoctorRow, DoctorSort
 from app.services.pagination import PageParams
 
 router = APIRouter(prefix="/doctors", tags=["doctors"])
@@ -21,13 +28,14 @@ public_router = APIRouter(prefix="/public/doctors", tags=["public"])
 def doctor_filters(
     department_id: uuid.UUID | None = None,
     specialization: str | None = Query(None, max_length=150),
-    q: str | None = Query(None, max_length=100, description="Search by doctor name"),
+    q: str | None = Query(None, max_length=100, description="Search doctor name, specialization or department"),
     min_experience: int | None = Query(None, ge=0),
     fee_min: Decimal | None = Query(None, ge=0),
     fee_max: Decimal | None = Query(None, ge=0),
     is_active: bool | None = Query(None, description="Staff listing only"),
+    sort: DoctorSort = DoctorSort.name_asc,
 ) -> DoctorFilters:
-    return DoctorFilters(department_id, specialization, q, min_experience, fee_min, fee_max, is_active)
+    return DoctorFilters(department_id, specialization, q, min_experience, fee_min, fee_max, is_active, sort)
 
 
 def to_public(row: DoctorRow) -> DoctorPublic:
@@ -39,9 +47,14 @@ def to_public(row: DoctorRow) -> DoctorPublic:
         specialization=d.specialization,
         department_id=d.department_id,
         department_name=row.department_name,
+        qualifications=d.qualifications,
         bio=d.bio,
         years_of_experience=d.years_of_experience,
         consultation_fee=d.consultation_fee,
+        is_verified=bool(d.license_number),
+        availability=DoctorAvailabilityRead(
+            status=row.availability.status, next_available=row.availability.next_available
+        ),
     )
 
 
@@ -71,6 +84,12 @@ async def public_list_doctors(
 ):
     rows, total = await doctor_service.list_doctors(db, params, filters, public=True)
     return Page(items=[to_public(r) for r in rows], total=total, page=params.page, page_size=params.page_size)
+
+
+@public_router.get("/specializations", response_model=list[str])
+async def public_list_specializations(db: AsyncSession = Depends(get_db)):
+    """Options for the directory specialization filter."""
+    return await doctor_service.list_specializations(db)
 
 
 @public_router.get("/{doctor_id}", response_model=DoctorPublic)

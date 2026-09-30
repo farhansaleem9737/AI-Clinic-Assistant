@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     no_show_grace_minutes: int = 15
     # Length of slots opened by an "extra availability" schedule exception.
     default_slot_minutes: int = 30
+    # How far ahead the directory looks when labelling a doctor Available / Busy / Unavailable.
+    availability_status_days: int = 7
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

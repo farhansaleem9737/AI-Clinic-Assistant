@@ -20,6 +20,7 @@ const PROFILE_FIELDS = {
   title: "Dr.",
   specialization: "",
   license_number: "",
+  qualifications: "",
   years_of_experience: 0,
   consultation_fee: "",
   phone: "",
@@ -88,6 +89,10 @@ function ProfileFields({ values, onChange, departments }) {
           <input {...field("room_number")} style={{ width: 100 }} />
         </label>
       </div>
+      <label>
+        Qualifications (shown on the public profile)
+        <input {...field("qualifications")} placeholder="e.g. MBBS, FCPS (Cardiology)" maxLength={500} />
+      </label>
       <label>
         Bio
         <textarea {...field("bio")} />

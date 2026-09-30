@@ -22,6 +22,9 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       setupFiles: './src/test/setup.js',
       env: { VITE_API_BASE_URL: '/api/v1' },
+      // Tests that type into forms take seconds on a busy machine; the 5s
+      // default made them fail intermittently.
+      testTimeout: 20000,
     },
   }
 })

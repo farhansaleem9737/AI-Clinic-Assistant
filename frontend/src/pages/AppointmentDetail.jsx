@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import Alert from "../components/Alert";
 import SlotPicker from "../components/SlotPicker";
 import StatusBadge from "../components/StatusBadge";
@@ -23,7 +23,9 @@ export default function AppointmentDetail() {
   const [appointment, setAppointment] = useState(null);
   const [history, setHistory] = useState([]);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const location = useLocation();
+  // e.g. "Your appointment is booked." when arriving from the booking page.
+  const [notice, setNotice] = useState(location.state?.notice ?? "");
   const [cancelling, setCancelling] = useState(false);
   const [cancel, setCancel] = useState({ cancellation_reason: "patient_request", note: "" });
   const [rescheduling, setRescheduling] = useState(false);

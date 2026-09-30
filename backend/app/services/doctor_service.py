@@ -2,17 +2,20 @@ import logging
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import clock
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.schemas.doctor import DoctorCreate, DoctorSelfUpdate, DoctorUpdate
-from app.services import appointment_service, auth_service, rbac_service
+from app.services import appointment_service, auth_service, availability_service, rbac_service
+from app.services.availability_service import AvailabilityStatus, DoctorAvailability
 from app.services.pagination import PageParams, paginate
 
 logger = logging.getLogger(__name__)
@@ -26,17 +29,41 @@ class DoctorRow:
     name: str
     email: str
     department_name: str
+    availability: DoctorAvailability = DoctorAvailability(AvailabilityStatus.unavailable)
+
+
+class DoctorSort(StrEnum):
+    name_asc = "name_asc"
+    name_desc = "name_desc"
+    experience_asc = "experience_asc"
+    experience_desc = "experience_desc"
+    fee_asc = "fee_asc"
+    fee_desc = "fee_desc"
+
+
+# Doctors without a listed fee sort last either way; name and id break ties so
+# pages are stable.
+_ORDER_BY = {
+    DoctorSort.name_asc: (User.name.asc(),),
+    DoctorSort.name_desc: (User.name.desc(),),
+    DoctorSort.experience_asc: (Doctor.years_of_experience.asc(), User.name.asc()),
+    DoctorSort.experience_desc: (Doctor.years_of_experience.desc(), User.name.asc()),
+    DoctorSort.fee_asc: (Doctor.consultation_fee.asc().nulls_last(), User.name.asc()),
+    DoctorSort.fee_desc: (Doctor.consultation_fee.desc().nulls_last(), User.name.asc()),
+}
 
 
 @dataclass(frozen=True)
 class DoctorFilters:
     department_id: uuid.UUID | None = None
     specialization: str | None = None
+    # Free text: matches the doctor's name, specialization or department.
     q: str | None = None
     min_experience: int | None = None
     fee_min: Decimal | None = None
     fee_max: Decimal | None = None
     is_active: bool | None = None
+    sort: DoctorSort = DoctorSort.name_asc
 
 
 def _base_query() -> Select:
@@ -53,15 +80,21 @@ def _visible_publicly(query: Select) -> Select:
     return query.where(Doctor.is_active.is_(True), User.is_active.is_(True), Department.is_active.is_(True))
 
 
-def _row(row) -> DoctorRow:
-    doctor, name, email, department_name = row
-    return DoctorRow(doctor, name, email, department_name)
+async def _rows(db: AsyncSession, rows) -> list[DoctorRow]:
+    """Attach each doctor's availability (one batch computation for the list)."""
+    availability = await availability_service.availability_status(
+        db, [row[0].id for row in rows], now=clock.utcnow()
+    )
+    return [
+        DoctorRow(doctor, name, email, department_name, availability[doctor.id])
+        for doctor, name, email, department_name in rows
+    ]
 
 
 async def list_doctors(
     db: AsyncSession, params: PageParams, filters: DoctorFilters, *, public: bool
 ) -> tuple[list[DoctorRow], int]:
-    query = _base_query().order_by(User.name, Doctor.id)
+    query = _base_query().order_by(*_ORDER_BY[filters.sort], Doctor.id)
     if public:
         query = _visible_publicly(query)
     elif filters.is_active is not None:
@@ -70,8 +103,11 @@ async def list_doctors(
         query = query.where(Doctor.department_id == filters.department_id)
     if filters.specialization:
         query = query.where(Doctor.specialization.ilike(f"%{filters.specialization.strip()}%"))
-    if filters.q:
-        query = query.where(User.name.ilike(f"%{filters.q.strip()}%"))
+    if filters.q and filters.q.strip():
+        pattern = f"%{filters.q.strip()}%"
+        query = query.where(
+            or_(User.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern))
+        )
     if filters.min_experience is not None:
         query = query.where(Doctor.years_of_experience >= filters.min_experience)
     if filters.fee_min is not None:
@@ -79,7 +115,17 @@ async def list_doctors(
     if filters.fee_max is not None:
         query = query.where(Doctor.consultation_fee <= filters.fee_max)
     rows, total = await paginate(db, query, params)
-    return [_row(r) for r in rows], total
+    return await _rows(db, rows), total
+
+
+async def list_specializations(db: AsyncSession) -> list[str]:
+    """Distinct specializations among publicly listed doctors (filter options)."""
+    query = _visible_publicly(
+        select(Doctor.specialization)
+        .join(User, User.id == Doctor.user_id)
+        .join(Department, Department.id == Doctor.department_id)
+    )
+    return list((await db.scalars(query.distinct().order_by(Doctor.specialization))).all())
 
 
 async def get_doctor(db: AsyncSession, doctor_id: uuid.UUID, *, public: bool = False) -> DoctorRow:
@@ -89,7 +135,7 @@ async def get_doctor(db: AsyncSession, doctor_id: uuid.UUID, *, public: bool = F
     row = (await db.execute(query)).one_or_none()
     if row is None:
         raise NotFoundError("Doctor not found")
-    return _row(row)
+    return (await _rows(db, [row]))[0]
 
 
 async def get_own_profile(db: AsyncSession, principal: Principal) -> DoctorRow:

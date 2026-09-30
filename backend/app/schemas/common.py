@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, EmailStr
+from pydantic import AfterValidator, BaseModel, EmailStr, computed_field
 
 
 def _lowercase(value: str) -> str:
@@ -28,3 +28,8 @@ class Page[T](BaseModel):
     total: int
     page: int
     page_size: int
+
+    @computed_field
+    @property
+    def total_pages(self) -> int:
+        return -(-self.total // self.page_size)  # ceiling division

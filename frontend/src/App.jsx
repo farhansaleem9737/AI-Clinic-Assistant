@@ -3,6 +3,7 @@ import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AppLayout from "./layouts/AppLayout";
 import AuthLayout from "./layouts/AuthLayout";
+import DirectoryLayout from "./layouts/DirectoryLayout";
 import ForgotPassword from "./pages/ForgotPassword";
 import LegalDocument from "./pages/LegalDocument";
 import Login from "./pages/Login";
@@ -57,10 +58,14 @@ function App() {
             <Route path="/terms" element={<LegalDocument document="terms" />} />
             <Route path="/privacy" element={<LegalDocument document="privacy" />} />
           </Route>
-          <Route element={<AppLayout />}>
+          {/* Open to everyone: visitors get the public top navigation,
+              signed-in users keep their app shell. */}
+          <Route element={<DirectoryLayout />}>
             <Route path="/doctors" element={<Doctors />} />
             <Route path="/doctors/:id" element={<DoctorDetail />} />
             <Route path="/departments" element={<Departments />} />
+          </Route>
+          <Route element={<AppLayout />}>
             {PROTECTED_ROUTES.map(({ path, element, permission, anyOf }) => (
               <Route
                 key={path}

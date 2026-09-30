@@ -1,5 +1,5 @@
 // Currency label is configuration, not code (VITE_CURRENCY in frontend/.env).
-const CURRENCY = import.meta.env.VITE_CURRENCY || "";
+export const CURRENCY = import.meta.env.VITE_CURRENCY || "";
 
 // Fees arrive as decimal strings ("150.00"): format without float arithmetic.
 export function formatFee(fee) {

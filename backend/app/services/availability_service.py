@@ -12,9 +12,11 @@ under concurrency.
 """
 
 import uuid
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select
@@ -172,3 +174,106 @@ async def available_slots(
         if s.starts_at >= earliest and s.starts_at <= latest and window_start <= s.starts_at < window_end
     }
     return bookable, sorted(free)
+
+
+# ---- directory status (many doctors at once) ---------------------------------------
+
+
+class AvailabilityStatus(StrEnum):
+    # At least one bookable slot in the coming days.
+    available = "available"
+    # Working in the coming days, but every slot is taken.
+    busy = "busy"
+    # No working hours in the coming days (no schedule, or on leave).
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True)
+class DoctorAvailability:
+    status: AvailabilityStatus
+    next_available: datetime | None = None
+
+
+async def availability_status(
+    db: AsyncSession, doctor_ids: Sequence[uuid.UUID], *, now: datetime
+) -> dict[uuid.UUID, DoctorAvailability]:
+    """Availability badge for each doctor, over the next
+    ``settings.availability_status_days`` days.
+
+    Uses the same templates, exceptions and bookings as ``available_slots`` (so
+    the badge and the bookable slots cannot disagree), but in four queries for
+    the whole list instead of several per doctor. Judged from a patient's
+    point of view: the booking lead time applies.
+    """
+    from app.models.appointment import ACTIVE_STATUSES, Appointment
+
+    result = {doctor_id: DoctorAvailability(AvailabilityStatus.unavailable) for doctor_id in doctor_ids}
+    if not doctor_ids:
+        return result
+
+    timezones = dict(
+        (
+            await db.execute(
+                select(Doctor.id, Department.timezone)
+                .join(Department, Department.id == Doctor.department_id)
+                .where(Doctor.id.in_(doctor_ids), Doctor.is_active.is_(True), Department.is_active.is_(True))
+            )
+        ).all()
+    )
+    earliest = now + timedelta(minutes=settings.booking_min_lead_minutes)
+    horizon = now + timedelta(days=settings.availability_status_days)
+    # One day either side covers every department timezone.
+    first_day, last_day = (now - timedelta(days=1)).date(), (horizon + timedelta(days=1)).date()
+
+    templates: dict[uuid.UUID, list[ScheduleTemplate]] = defaultdict(list)
+    for template in await db.scalars(
+        select(ScheduleTemplate).where(
+            ScheduleTemplate.doctor_id.in_(timezones),
+            ScheduleTemplate.is_active.is_(True),
+            ScheduleTemplate.valid_from <= last_day,
+            or_(ScheduleTemplate.valid_until.is_(None), ScheduleTemplate.valid_until >= first_day),
+        )
+    ):
+        templates[template.doctor_id].append(template)
+
+    exceptions: dict[uuid.UUID, list[ScheduleException]] = defaultdict(list)
+    for exception in await db.scalars(
+        select(ScheduleException).where(
+            ScheduleException.doctor_id.in_(timezones),
+            ScheduleException.starts_at < horizon,
+            ScheduleException.ends_at > now,
+        )
+    ):
+        exceptions[exception.doctor_id].append(exception)
+
+    booked: dict[uuid.UUID, list[tuple[datetime, datetime]]] = defaultdict(list)
+    for doctor_id, starts_at, ends_at in await db.execute(
+        select(Appointment.doctor_id, Appointment.starts_at, Appointment.ends_at).where(
+            Appointment.doctor_id.in_(timezones),
+            Appointment.status.in_(ACTIVE_STATUSES),
+            Appointment.starts_at < horizon,
+            Appointment.ends_at > now,
+        )
+    ):
+        booked[doctor_id].append((starts_at, ends_at))
+
+    for doctor_id, tz_name in timezones.items():
+        tz = ZoneInfo(tz_name)
+        slots = expand_templates(templates[doctor_id], tz, first_day, last_day)
+        blocking = []
+        for exception in exceptions[doctor_id]:
+            if exception.kind is ExceptionKind.extra_availability:
+                slots.extend(
+                    slice_window(
+                        exception.starts_at.astimezone(tz), exception.ends_at.astimezone(tz), settings.default_slot_minutes
+                    )
+                )
+            else:
+                blocking.append((exception.starts_at, exception.ends_at))
+        working = [s for s in remove_busy(slots, blocking) if earliest <= s.starts_at <= horizon]
+        free = remove_busy(working, booked[doctor_id])
+        if free:
+            result[doctor_id] = DoctorAvailability(AvailabilityStatus.available, min(free).starts_at)
+        elif working:
+            result[doctor_id] = DoctorAvailability(AvailabilityStatus.busy)
+    return result

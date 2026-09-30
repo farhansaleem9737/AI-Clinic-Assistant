@@ -3,6 +3,8 @@ import api from "./api";
 // Public directory (no login).
 export const getPublicDoctors = (params) => api.get("/public/doctors/", { params });
 export const getPublicDoctor = (id) => api.get(`/public/doctors/${id}`);
+// Distinct specializations of the listed doctors: options for the filter.
+export const getPublicSpecializations = () => api.get("/public/doctors/specializations");
 
 // Staff (doctor:read / doctor:create / doctor:update / doctor:deactivate).
 export const listDoctors = (params) => api.get("/doctors/", { params });

@@ -25,7 +25,9 @@ export default function BookAppointment() {
   const [patient, setPatient] = useState(null);
   const [patientQuery, setPatientQuery] = useState("");
   const [patientMatches, setPatientMatches] = useState([]);
-  const [slot, setSlot] = useState(null);
+  // A time picked on the doctor profile arrives in the URL; the server
+  // re-checks that it is still free when the booking is submitted.
+  const [slot, setSlot] = useState(() => (params.get("slot") ? { starts_at: params.get("slot") } : null));
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -77,7 +79,8 @@ export default function BookAppointment() {
       const body = { doctor_id: doctor.id, starts_at: slot.starts_at, reason: reason || null };
       if (isStaff) body.patient_id = patient.id;
       const res = await bookAppointment(body, idempotencyKey);
-      navigate(`/appointments/${res.data.id}`);
+      // The appointment page is the confirmation: it shows what was booked.
+      navigate(`/appointments/${res.data.id}`, { state: { notice: "Your appointment is booked." } });
     } catch (err) {
       setError(getErrorMessage(err, "Booking failed"));
       // The slot may have just been taken: let the user pick another, with a fresh key.
