@@ -77,6 +77,7 @@ async def list_appointments(
     status_: list[AppointmentStatus] | None = Query(None, alias="status"),
     date_from: date | None = Query(None, description="Clinic-local calendar date"),
     date_to: date | None = Query(None, description="Clinic-local calendar date, inclusive"),
+    upcoming: bool = Query(False, description="Only open appointments that have not ended yet"),
     newest_first: bool = False,
     params: PageParams = Depends(page_params),
     db: AsyncSession = Depends(get_db),
@@ -89,6 +90,7 @@ async def list_appointments(
         statuses=tuple(status_ or ()),
         date_from=date_from,
         date_to=date_to,
+        upcoming=upcoming,
         newest_first=newest_first,
     )
     views, total = await appointment_service.list_appointments(db, principal, params, filters)

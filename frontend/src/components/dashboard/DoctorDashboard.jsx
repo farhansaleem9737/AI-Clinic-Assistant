@@ -31,7 +31,7 @@ function ProfileCard() {
       {profile && (
         <>
           <div className="profile-head">
-            <Avatar name={profile.name} size={72} />
+            <Avatar name={profile.name} role="doctor" size={72} />
             <div>
               <h3 style={{ marginBottom: "0.15rem" }}>{doctorName(profile)}</h3>
               <div className="muted">

@@ -13,7 +13,7 @@ export default function DoctorCard({ doctor }) {
   return (
     <article className="card doctor-card" aria-label={name}>
       <div className="doctor-card-head">
-        <Avatar name={doctor.name} size={88} />
+        <Avatar name={doctor.name} role="doctor" size={88} />
         <div className="doctor-card-id">
           <h3>
             <Link to={`/doctors/${doctor.id}`}>

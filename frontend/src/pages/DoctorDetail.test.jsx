@@ -106,10 +106,10 @@ describe("profile", () => {
     expect(screen.getByText("No education has been added yet.")).toBeInTheDocument();
   });
 
-  it("uses initials when there is no photo", async () => {
+  it("uses the illustrated doctor avatar when there is no photo", async () => {
     const { container } = renderProfile();
     await screen.findByRole("heading", { level: 1 });
-    expect(container.querySelector(".doctor-summary .avatar")).toHaveTextContent("SK");
+    expect(container.querySelector(".doctor-summary .avatar")).toHaveAttribute("data-avatar", "doctor");
     expect(container.querySelector(".doctor-summary img")).toBeNull();
   });
 
@@ -175,7 +175,9 @@ describe("booking panel", () => {
   it("loads this month's free dates and only lets those be chosen", async () => {
     renderProfile();
     const booking = await panel();
-    expect(getPublicAvailability).toHaveBeenCalledWith("doc-1", `${THIS_MONTH}-01`, expect.stringMatching(new RegExp(`^${THIS_MONTH}-(28|29|30|31)$`)));
+    await waitFor(() =>
+      expect(getPublicAvailability).toHaveBeenCalledWith("doc-1", `${THIS_MONTH}-01`, expect.stringMatching(new RegExp(`^${THIS_MONTH}-(28|29|30|31)$`)))
+    );
     expect(within(booking).getByText(monthLabel(THIS_MONTH))).toBeInTheDocument();
 
     const tenth = await within(booking).findByRole("button", { name: day(10) });

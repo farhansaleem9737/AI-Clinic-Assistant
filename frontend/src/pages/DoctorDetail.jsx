@@ -74,7 +74,7 @@ export default function DoctorDetail() {
       />
 
       <section className="card doctor-summary" aria-label="Summary">
-        <Avatar name={doctor.name} size={128} />
+        <Avatar name={doctor.name} role="doctor" size={128} />
         <div className="doctor-summary-main">
           <h1>
             {name}

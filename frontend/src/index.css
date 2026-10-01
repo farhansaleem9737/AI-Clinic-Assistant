@@ -54,24 +54,20 @@ p { margin: 0 0 0.6rem; }
 .sidebar .brand:hover { text-decoration: none; }
 .brand-mark { display: block; flex: none; object-fit: contain; }
 .sidebar nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
-.sidebar nav a {
-  display: flex; align-items: center; gap: 0.8rem; padding: 0.65rem 0.8rem; border-radius: 9px;
+.sidebar nav a, .sidebar-foot a {
+  display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 0.85rem; border-radius: 9px;
   color: var(--sidebar-text); font-weight: 500;
 }
-.sidebar nav a:hover { background: rgba(255, 255, 255, 0.08); color: #fff; text-decoration: none; }
-.sidebar nav a.active { background: var(--accent); color: #fff; }
-.sidebar-user {
-  display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem; border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14); color: #fff;
-}
-.sidebar-user:hover { text-decoration: none; background: rgba(255, 255, 255, 0.06); }
-.sidebar-user .who { display: flex; flex-direction: column; min-width: 0; flex: 1; font-size: 0.85rem; }
-.sidebar-user .who span:last-child { color: var(--sidebar-text); font-size: 0.78rem; text-transform: capitalize; }
+.sidebar nav a:hover, .sidebar-foot a:hover { background: rgba(255, 255, 255, 0.08); color: #fff; text-decoration: none; }
+.sidebar nav a.active, .sidebar-foot a.active { background: var(--accent); color: #fff; }
+.sidebar nav a:focus-visible, .sidebar-foot a:focus-visible, .sidebar-logout:focus-visible { outline: 2px solid #9cc0ff; outline-offset: 1px; }
+.sidebar-foot { display: flex; flex-direction: column; gap: 0.2rem; padding-top: 0.6rem; border-top: 1px solid rgba(255, 255, 255, 0.1); }
 .sidebar-logout {
-  display: flex; align-items: center; gap: 0.8rem; width: 100%; padding: 0.65rem 0.8rem;
+  display: flex; align-items: center; gap: 0.8rem; width: 100%; padding: 0.7rem 0.85rem; font-weight: 500;
   background: transparent; border: 0; color: var(--sidebar-text); text-align: left; border-radius: 9px;
+  justify-content: flex-start;
 }
-.sidebar-logout:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.sidebar-logout:hover { background: rgba(255, 255, 255, 0.08); color: #fff; filter: none; }
 
 .shell-main { flex: 1; min-width: 0; margin-left: var(--sidebar-width); display: flex; flex-direction: column; }
 .topbar {
@@ -89,7 +85,8 @@ p { margin: 0 0 0.6rem; }
 .topbar-user:hover { text-decoration: none; }
 .topbar-user .who { display: flex; flex-direction: column; line-height: 1.2; }
 .topbar-user .who strong { font-size: 0.92rem; }
-.topbar-user .who span { color: var(--muted); font-size: 0.8rem; text-transform: capitalize; }
+.topbar-user .who span { color: var(--muted); font-size: 0.8rem; }
+.topbar-user:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
 main.page { width: 100%; max-width: 1320px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }
 .backdrop { display: none; }
 
@@ -110,8 +107,14 @@ main.page { width: 100%; max-width: 1320px; margin: 0 auto; padding: 1.5rem 1.5r
 .link-more { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; font-weight: 500; white-space: nowrap; }
 
 .avatar {
-  display: inline-grid; place-items: center; flex: none; border-radius: 50%;
+  display: inline-grid; place-items: center; flex: none; border-radius: 50%; overflow: hidden;
   color: #fff; font-weight: 600; letter-spacing: 0.02em; user-select: none;
+}
+.avatar.photo { object-fit: cover; background: var(--accent-soft); }
+.avatar.illustrated { box-shadow: inset 0 0 0 1px var(--border); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
 .empty { text-align: center; color: var(--muted); padding: 1.5rem 0.5rem; }
@@ -397,6 +400,32 @@ th { font-size: 0.8rem; font-weight: 600; color: var(--muted); background: #f8fa
 .appt-item .who strong { color: var(--heading); }
 .appt-item .meta { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
 .appt-item .meta span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.appt-side { display: flex; flex-direction: column; align-items: stretch; gap: 0.5rem; flex: none; min-width: 130px; }
+.appt-side .badge { text-align: center; padding: 0.3rem 0.7rem; }
+a.button.small { padding: 0.4rem 0.75rem; font-size: 0.88rem; gap: 0.35rem; justify-content: center; }
+
+/* Patient dashboard: appointments | profile, then quick actions | help. */
+.patient-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.48fr); align-items: start; }
+.patient-grid > .card { margin: 0; }
+.patient-grid > .card:nth-child(3) { align-self: stretch; }
+.patient-grid > .help-card { align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; }
+.help-head { display: flex; gap: 0.85rem; align-items: flex-start; }
+.help-head h3 { margin: 0.15rem 0 0.35rem; }
+.help-head p { margin: 0; }
+.help-icon { display: grid; place-items: center; width: 44px; height: 44px; flex: none; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+a.button.block { display: flex; width: 100%; justify-content: center; }
+.profile-head h3 { margin: 0 0 0.15rem; font-size: 1.15rem; }
+.profile-head .mrn { color: var(--muted); font-weight: 600; letter-spacing: 0.03em; margin-bottom: 0.45rem; }
+.status-pill { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.7rem; }
+.profile-facts.list { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.profile-facts.list dt { min-width: 140px; }
+
+.help-page h1 { margin: 0 0 0.25rem; }
+.help-topics { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 1.25rem 0 1rem; }
+.help-topics .card { margin: 0; }
+.help-page h2 { font-size: 1.05rem; margin: 0; }
+.help-page .card p { margin: 0.25rem 0 0; line-height: 1.55; }
+.help-contact { margin: 0.25rem 0 0.75rem; padding-left: 1.1rem; }
 
 .quick-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .quick-action {
@@ -434,7 +463,7 @@ dl { margin: 0; }
 /* ---- Responsive ------------------------------------------------------------ */
 @media (max-width: 1180px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .dash-grid, .patient-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 860px) {
   .sidebar { transform: translateX(-100%); transition: transform 0.2s ease; }
@@ -449,7 +478,9 @@ dl { margin: 0; }
   .dash-pair, .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
-  .stat-grid, .dash-pair, .profile-facts { grid-template-columns: minmax(0, 1fr); }
+  .stat-grid, .dash-pair, .profile-facts, .help-topics { grid-template-columns: minmax(0, 1fr); }
+  .profile-facts.list dt { min-width: 118px; }
+  .appt-side { flex-direction: row; align-items: center; flex-basis: 100%; min-width: 0; justify-content: space-between; }
   /* Appointment rows: drop the avatar and chevron so the name keeps its line. */
   .appt-item { gap: 0.6rem; flex-wrap: wrap; }
   .appt-item .avatar, .appt-item > svg { display: none; }

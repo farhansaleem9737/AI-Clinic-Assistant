@@ -135,6 +135,29 @@ async def test_finished_appointments_are_not_upcoming(client, clinic, scene, fre
     assert (await summary(client, headers["alice"]))["patient"]["upcoming_appointments"] == 1
 
 
+async def test_upcoming_list_matches_the_upcoming_count(client, clinic, scene, freeze_clock):
+    """The dashboard lists exactly the appointments its "upcoming" card counts."""
+    headers, _ = scene
+    for now in (clinic.slot(0, "08:00"), clinic.slot(3, "09:45")):
+        freeze_clock(now)
+        count = (await summary(client, headers["alice"]))["patient"]["upcoming_appointments"]
+        listed = await client.get(APPOINTMENTS, params={"upcoming": "true", "page_size": 50}, headers=headers["alice"])
+        items = listed.json()["items"]
+        assert listed.json()["total"] == count == len(items)
+        assert [i["starts_at"] for i in items] == sorted(i["starts_at"] for i in items)  # soonest first
+        assert all(i["status"] not in {"cancelled", "completed", "no_show"} for i in items)
+        assert all(i["patient"]["id"] == str(clinic.patient_a.id) for i in items)  # only Alice's own
+
+
+async def test_patient_cannot_list_another_patients_appointments(client, clinic, scene):
+    headers, _ = scene
+    response = await client.get(
+        APPOINTMENTS, params={"patient_id": str(clinic.patient_b.id), "upcoming": "true"}, headers=headers["alice"]
+    )
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
 # ---- doctor ----------------------------------------------------------------------------
 
 

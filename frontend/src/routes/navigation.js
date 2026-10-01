@@ -19,7 +19,8 @@ const APPOINTMENT_READ = ["appointment:read_own", "appointment:read_assigned", "
 export const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/appointments", label: "Appointments", icon: CalendarDays, anyOf: APPOINTMENT_READ, end: true },
-  { to: "/appointments/book", label: "Book appointment", icon: CalendarPlus, anyOf: ["appointment:create", "appointment:create_own"] },
+  // Staff book on a patient's behalf; patients start from a doctor (directory, profile, dashboard).
+  { to: "/appointments/book", label: "Book appointment", icon: CalendarPlus, permission: "appointment:create" },
   { to: "/schedule", label: "Schedule", icon: CalendarClock, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
   { to: "/doctors", label: "Doctors", icon: Stethoscope, public: true },
   { to: "/departments", label: "Departments", icon: Building2, public: true },
@@ -53,6 +54,14 @@ export function safeReturnPath(path) {
   if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return null;
   if (path.startsWith("/login")) return null;
   return path;
+}
+
+const ROLE_LABELS = { patient: "Patient", doctor: "Doctor", receptionist: "Receptionist", admin: "Administrator" };
+
+// "Patient", "Doctor, Administrator", ... for the signed-in user's roles.
+export function roleLabel(roles = []) {
+  if (roles.length === 0) return "No role";
+  return roles.map((r) => ROLE_LABELS[r] ?? r.charAt(0).toUpperCase() + r.slice(1).replace(/_/g, " ")).join(", ");
 }
 
 // Where "my profile" lives for this user, if anywhere.

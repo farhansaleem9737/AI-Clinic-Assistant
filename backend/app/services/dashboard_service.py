@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import clock
 from app.core.config import settings
 from app.core.permissions import Perm, Principal
-from app.models.appointment import ACTIVE_STATUSES, Appointment, AppointmentStatus
+from app.models.appointment import ACTIVE_STATUSES, Appointment, AppointmentStatus, upcoming_condition
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.patient import Patient
@@ -36,9 +36,6 @@ from app.services import access
 
 S = AppointmentStatus
 
-# Booked and not finished: what "upcoming" means on every dashboard.
-_OPEN = (S.requested, S.scheduled, S.confirmed, S.checked_in, S.in_progress)
-
 
 def _count(condition: ColumnElement[bool] | None = None):
     counter = func.count()
@@ -46,7 +43,7 @@ def _count(condition: ColumnElement[bool] | None = None):
 
 
 def _upcoming(now: datetime) -> ColumnElement[bool]:
-    return Appointment.status.in_(_OPEN) & (Appointment.ends_at > now)
+    return upcoming_condition(now)
 
 
 async def _today_counts(db: AsyncSession, scope: ColumnElement[bool], now: datetime, tz: ZoneInfo) -> TodayCounts:

@@ -120,7 +120,7 @@ function BookingReview({ doctorId, startsAt }) {
       <p className="muted">Check the details below. The time is not reserved until you confirm.</p>
       <Alert>{error}</Alert>
       <div className="booking-review-doctor">
-        <Avatar name={doctor.name} size={64} />
+        <Avatar name={doctor.name} role="doctor" size={64} />
         <div>
           <strong>{name}</strong>
           <p className="muted">

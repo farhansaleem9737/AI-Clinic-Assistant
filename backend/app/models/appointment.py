@@ -47,6 +47,21 @@ ACTIVE_STATUSES = (
     AppointmentStatus.completed,
 )
 
+# Booked and not finished: what "upcoming" means everywhere (dashboards and
+# the appointment list's `upcoming` filter).
+OPEN_STATUSES = (
+    AppointmentStatus.requested,
+    AppointmentStatus.scheduled,
+    AppointmentStatus.confirmed,
+    AppointmentStatus.checked_in,
+    AppointmentStatus.in_progress,
+)
+
+
+def upcoming_condition(now):
+    """Open appointments that have not ended yet."""
+    return Appointment.status.in_(OPEN_STATUSES) & (Appointment.ends_at > now)
+
 
 class CancellationReason(enum.StrEnum):
     patient_request = "patient_request"

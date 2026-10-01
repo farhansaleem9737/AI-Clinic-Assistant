@@ -29,6 +29,7 @@ from app.models.appointment import (
     AppointmentStatus,
     AppointmentStatusHistory,
     CancellationReason,
+    upcoming_condition,
 )
 from app.models.department import Department
 from app.models.doctor import Doctor
@@ -71,6 +72,8 @@ class AppointmentFilters:
     statuses: tuple[AppointmentStatus, ...] = ()
     date_from: date | None = None
     date_to: date | None = None
+    # Only open appointments that have not ended yet (the dashboards' "upcoming").
+    upcoming: bool = False
     newest_first: bool = False
 
 
@@ -160,11 +163,13 @@ async def list_appointments(
         query = query.where(Appointment.starts_at >= _local_day_start(filters.date_from))
     if filters.date_to:
         query = query.where(Appointment.starts_at < _local_day_start(filters.date_to + timedelta(days=1)))
+    now = clock.utcnow()
+    if filters.upcoming:
+        query = query.where(upcoming_condition(now))
     order = Appointment.starts_at.desc() if filters.newest_first else Appointment.starts_at.asc()
     query = query.order_by(order, Appointment.id)
 
     rows, total = await paginate(db, query, params)
-    now = clock.utcnow()
     return [_to_view(r, principal, now) for r in rows], total
 
 

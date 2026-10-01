@@ -5,6 +5,7 @@ import AppLayout from "./layouts/AppLayout";
 import AuthLayout from "./layouts/AuthLayout";
 import DirectoryLayout from "./layouts/DirectoryLayout";
 import ForgotPassword from "./pages/ForgotPassword";
+import Help from "./pages/Help";
 import LegalDocument from "./pages/LegalDocument";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -31,6 +32,7 @@ const APPOINTMENT_READ = ["appointment:read_own", "appointment:read_assigned", "
 
 const PROTECTED_ROUTES = [
   { path: "/dashboard", element: <Dashboard /> },
+  { path: "/help", element: <Help /> },
   { path: "/appointments", element: <Appointments />, anyOf: APPOINTMENT_READ },
   { path: "/appointments/book", element: <BookAppointment />, anyOf: ["appointment:create", "appointment:create_own"] },
   { path: "/appointments/:id", element: <AppointmentDetail />, anyOf: APPOINTMENT_READ },

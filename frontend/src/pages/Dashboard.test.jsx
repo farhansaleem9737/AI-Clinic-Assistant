@@ -54,11 +54,57 @@ describe("patient dashboard", () => {
   it("lists upcoming appointments with doctor, room and status, linking to the detail page", async () => {
     renderDashboard("patient");
     const section = await screen.findByRole("region", { name: "Upcoming Appointments" });
-    const item = await within(section).findByRole("link", { name: /Dr\. Sarah Khan/ });
-    expect(item).toHaveAttribute("href", "/appointments/appt-1");
-    expect(item).toHaveTextContent("Cardiologist · Cardiology");
-    expect(item).toHaveTextContent("Room B-12");
-    expect(item).toHaveTextContent("Confirmed");
+    const row = await within(section).findByRole("article", { name: /Dr\. Sarah Khan/ });
+    expect(row).toHaveTextContent("Cardiologist · Cardiology");
+    expect(row).toHaveTextContent("Room B-12");
+    expect(row).toHaveTextContent("Confirmed");
+    expect(row).toHaveTextContent("Oct5Mon"); // date block, in the clinic's timezone
+    expect(within(row).getByRole("link", { name: /View details/ })).toHaveAttribute("href", "/appointments/appt-1");
+    // The doctor gets the illustrated avatar, not initials or a photo.
+    expect(row.querySelector('[data-avatar="doctor"]')).not.toBeNull();
+    expect(row.querySelector("img")).toBeNull();
+    // Asked for with the same "upcoming" rule the count uses.
+    expect(listAppointments).toHaveBeenCalledWith({ upcoming: true, page_size: 3 });
+  });
+
+  it("shows the counts from the summary, not from the list", async () => {
+    renderDashboard("patient");
+    const card = (label) => screen.getAllByText(label).map((el) => el.closest(".stat-card")).find(Boolean);
+    await screen.findByRole("region", { name: "Upcoming Appointments" });
+    expect(card("Upcoming Appointments")).toHaveTextContent("2");
+    expect(card("Total Appointments")).toHaveTextContent("5");
+    expect(card("My Doctors")).toHaveTextContent("3");
+    expect(card("Account Status")).toHaveTextContent("Active");
+    expect(within(card("My Doctors")).getByRole("link", { name: /View doctors/ })).toHaveAttribute("href", "/doctors");
+  });
+
+  it("shows the profile summary with the MRN, formatted details and an active badge", async () => {
+    renderDashboard("patient");
+    const profile = await screen.findByRole("region", { name: "My Profile" });
+    expect(await within(profile).findByText("MRN00000001")).toBeInTheDocument();
+    expect(profile).toHaveTextContent("John Doe");
+    expect(profile).toHaveTextContent("Active");
+    expect(profile).toHaveTextContent(new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date("1990-01-01T00:00:00Z")));
+    expect(profile).toHaveTextContent("Male");
+    expect(profile).toHaveTextContent("123 Main St");
+    expect(within(profile).getByRole("link", { name: /View profile/ })).toHaveAttribute("href", "/profile");
+    // Patients get initials until they upload a picture.
+    expect(profile.querySelector('[data-avatar="initials"]')).toHaveTextContent("JD");
+  });
+
+  it("says when a profile detail is missing instead of leaving it blank", async () => {
+    getMyPatientProfile.mockResolvedValue({ data: { ...patientProfile, phone: null, address: null } });
+    renderDashboard("patient");
+    const profile = await screen.findByRole("region", { name: "My Profile" });
+    await within(profile).findByText("MRN00000001");
+    expect(within(profile).getAllByText("Not provided")).toHaveLength(2);
+    expect(profile).not.toHaveTextContent(/null|undefined/);
+  });
+
+  it("offers help and support without inventing contact details", async () => {
+    renderDashboard("patient");
+    const help = await screen.findByRole("region", { name: "Need Help?" });
+    expect(within(help).getByRole("link", { name: /Contact Support/ })).toHaveAttribute("href", "/help#contact");
   });
 
   it("offers the quick actions and profile, all pointing at existing pages", async () => {
@@ -79,12 +125,12 @@ describe("patient dashboard", () => {
     expect(screen.queryByText("Clinic Overview")).not.toBeInTheDocument();
   });
 
-  it("shows an empty state with a booking action when there are no appointments", async () => {
+  it("shows an empty state with a way to find a doctor when there are no upcoming appointments", async () => {
     listAppointments.mockResolvedValue(page([]));
     renderDashboard("patient");
-    expect(await screen.findByText("You have no upcoming appointments.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Book an appointment" })).toBeInTheDocument();
-    expect(await screen.findByText("No appointments yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No upcoming appointments.")).toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Upcoming Appointments" });
+    expect(within(section).getByRole("link", { name: /Find a doctor/ })).toHaveAttribute("href", "/doctors");
   });
 
   it("asks a patient without a profile to complete it", async () => {
@@ -93,8 +139,9 @@ describe("patient dashboard", () => {
     });
     renderDashboard("patient");
     expect(await screen.findByText("Incomplete")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Complete profile" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Complete profile" })).toHaveAttribute("href", "/profile");
     expect(getMyPatientProfile).not.toHaveBeenCalled();
+    expect(listAppointments).not.toHaveBeenCalled();
   });
 
   it("keeps the rest of the page when one section fails to load", async () => {
@@ -131,7 +178,7 @@ describe("other roles", () => {
     getDashboardSummary.mockResolvedValue({ data: summaries.receptionist });
     renderDashboard("receptionist");
     const worklist = await screen.findByRole("region", { name: "Today's Worklist" });
-    expect(await within(worklist).findByRole("link", { name: /John Doe/ })).toHaveTextContent("MRN00000001 · Dr. Sarah Khan");
+    expect(await within(worklist).findByRole("article", { name: /John Doe/ })).toHaveTextContent("MRN00000001 · Dr. Sarah Khan");
     expect(screen.getByText("Awaiting Check-in").closest(".stat-card")).toHaveTextContent("3");
 
     const overview = screen.getByRole("region", { name: "Clinic Overview" });

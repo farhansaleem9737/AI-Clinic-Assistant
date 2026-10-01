@@ -40,7 +40,7 @@ const menu = () => within(screen.getByRole("navigation")).getAllByRole("link").m
 describe("sidebar navigation is role-aware", () => {
   it("patient", () => {
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
-    expect(menu()).toEqual(["Dashboard", "Appointments", "Book appointment", "Doctors", "Departments", "My Profile"]);
+    expect(menu()).toEqual(["Dashboard", "Appointments", "Doctors", "Departments", "My Profile"]);
   });
 
   it("doctor", () => {
@@ -64,16 +64,34 @@ describe("sidebar navigation is role-aware", () => {
   it("anonymous visitors see only the public pages and the sign-in actions", () => {
     renderShell({ user: null, initializing: false, can: () => false, logout: async () => {} }, "/doctors");
     expect(menu()).toEqual(["Doctors", "Departments"]);
-    expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
     expect(screen.queryByRole("button", { name: "Logout" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Help/ })).not.toBeInTheDocument();
   });
 });
 
 describe("shell behaviour", () => {
-  it("shows the signed-in user and their role", () => {
+  it("shows the signed-in user and their role in the top bar", () => {
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
-    expect(screen.getAllByText("John Doe").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("patient").length).toBeGreaterThan(0);
+    const me = screen.getByRole("link", { name: /John Doe, Patient/ });
+    expect(me).toHaveAttribute("href", "/profile");
+    expect(me).toHaveTextContent("John Doe");
+    expect(me).toHaveTextContent("Patient");
+  });
+
+  it("shows a doctor with the illustrated doctor avatar", () => {
+    const { container } = renderShell(authAs("Sarah Khan", ["doctor"], PERMISSIONS.doctor));
+    expect(container.querySelector('.topbar [data-avatar="doctor"]')).not.toBeNull();
+  });
+
+  it("offers Help & Support next to Logout", () => {
+    renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
+    expect(screen.getByRole("link", { name: "Help & Support" })).toHaveAttribute("href", "/help");
+  });
+
+  it("does not show a notification bell (there are no notifications yet)", () => {
+    renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
+    expect(screen.queryByRole("button", { name: /notification/i })).not.toBeInTheDocument();
   });
 
   it("searching from the top bar opens the doctor directory with the query", async () => {

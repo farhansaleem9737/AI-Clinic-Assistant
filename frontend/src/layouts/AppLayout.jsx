@@ -1,10 +1,10 @@
-import { ChevronRight, LogOut, Menu, Search } from "lucide-react";
+import { LifeBuoy, LogOut, Menu, Search } from "lucide-react";
 import { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import Avatar from "../components/Avatar";
 import BrandMark from "../components/BrandMark";
 import { useAuth } from "../context/useAuth";
-import { profilePath, visibleNavItems } from "../routes/navigation";
+import { profilePath, roleLabel, visibleNavItems } from "../routes/navigation";
 
 // The application shell: sidebar navigation, top bar, page content.
 export default function AppLayout() {
@@ -16,13 +16,14 @@ export default function AppLayout() {
   // Menu visibility is cosmetic; the API enforces every permission.
   const items = visibleNavItems(user, can);
   const myProfile = user ? profilePath(user, can) : null;
-  const role = user?.roles.join(", ") || "no role";
 
+  // Ends the server session (revokes the refresh token) before leaving.
   const handleLogout = async () => {
     await logout();
     navigate("/login");
   };
 
+  // The directory search matches doctor names, specialties and departments.
   const handleSearch = (e) => {
     e.preventDefault();
     navigate(`/doctors${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`);
@@ -30,10 +31,10 @@ export default function AppLayout() {
 
   const userCard = user && (
     <>
-      <Avatar name={user.name} size={36} />
+      <Avatar name={user.name} role={user.doctor_id ? "doctor" : undefined} size={40} />
       <span className="who">
         <strong>{user.name}</strong>
-        <span>{role}</span>
+        <span>{roleLabel(user.roles)}</span>
       </span>
     </>
   );
@@ -54,20 +55,17 @@ export default function AppLayout() {
             </NavLink>
           ))}
         </nav>
-        {user &&
-          (myProfile ? (
-            <Link to={myProfile} className="sidebar-user">
-              {userCard}
-              <ChevronRight size={16} aria-hidden="true" />
-            </Link>
-          ) : (
-            <div className="sidebar-user">{userCard}</div>
-          ))}
         {user && (
-          <button type="button" className="sidebar-logout" onClick={handleLogout}>
-            <LogOut size={19} aria-hidden="true" />
-            Logout
-          </button>
+          <div className="sidebar-foot" onClick={() => setNavOpen(false)}>
+            <NavLink to="/help">
+              <LifeBuoy size={19} aria-hidden="true" />
+              Help &amp; Support
+            </NavLink>
+            <button type="button" className="sidebar-logout" onClick={handleLogout}>
+              <LogOut size={19} aria-hidden="true" />
+              Logout
+            </button>
+          </div>
         )}
       </aside>
       <div className="backdrop" onClick={() => setNavOpen(false)} />
@@ -82,7 +80,7 @@ export default function AppLayout() {
             <input
               type="search"
               aria-label="Search doctors"
-              placeholder="Search doctors…"
+              placeholder="Search doctors, specialties, departments…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -90,7 +88,7 @@ export default function AppLayout() {
           <span className="spacer" />
           {user ? (
             myProfile ? (
-              <Link to={myProfile} className="topbar-user">
+              <Link to={myProfile} className="topbar-user" aria-label={`${user.name}, ${roleLabel(user.roles)}: my profile`}>
                 {userCard}
               </Link>
             ) : (
@@ -98,13 +96,11 @@ export default function AppLayout() {
             )
           ) : (
             <div className="row">
-              <Link to="/login">
-                <button type="button" className="secondary">
-                  Log in
-                </button>
+              <Link to="/login" className="button secondary">
+                Log in
               </Link>
-              <Link to="/register">
-                <button type="button">Register</button>
+              <Link to="/register" className="button">
+                Register
               </Link>
             </div>
           )}
