@@ -3,6 +3,8 @@ import api from "./api";
 export const listAppointments = (params) =>
   // `status` may be an array: send it as repeated ?status=a&status=b.
   api.get("/appointments/", { params, paramsSerializer: { indexes: null } });
+// Upcoming / past / all totals under the same filters as the list.
+export const countAppointments = (params) => api.get("/appointments/counts", { params, paramsSerializer: { indexes: null } });
 export const getAppointment = (id) => api.get(`/appointments/${id}`);
 export const getAppointmentHistory = (id) => api.get(`/appointments/${id}/history`);
 export const updateAppointment = (id, data) => api.patch(`/appointments/${id}`, data);

@@ -98,3 +98,11 @@ class StatusHistoryRead(BaseModel):
     changed_by_user_id: uuid.UUID | None
     reason: str | None
     changed_at: datetime
+
+
+class AppointmentCounts(BaseModel):
+    """Totals per tab of the appointment list."""
+
+    upcoming: int
+    past: int
+    all: int

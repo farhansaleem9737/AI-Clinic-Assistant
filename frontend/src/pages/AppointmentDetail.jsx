@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
 import SlotPicker from "../components/SlotPicker";
 import StatusBadge from "../components/StatusBadge";
@@ -28,7 +28,9 @@ export default function AppointmentDetail() {
   const [notice, setNotice] = useState(location.state?.notice ?? "");
   const [cancelling, setCancelling] = useState(false);
   const [cancel, setCancel] = useState({ cancellation_reason: "patient_request", note: "" });
-  const [rescheduling, setRescheduling] = useState(false);
+  const [searchParams] = useSearchParams();
+  // "Reschedule" in the appointments list links here with ?reschedule=1.
+  const [rescheduling, setRescheduling] = useState(searchParams.get("reschedule") === "1");
   const [newSlot, setNewSlot] = useState(null);
   const [notes, setNotes] = useState("");
 
@@ -172,7 +174,7 @@ export default function AppointmentDetail() {
         </div>
       )}
 
-      {rescheduling && (
+      {rescheduling && a.can_reschedule && (
         <div className="stack" style={{ maxWidth: "none" }}>
           <h3>Pick a new time</h3>
           <SlotPicker doctorId={a.doctor.id} selected={newSlot} onSelect={setNewSlot} />

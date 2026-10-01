@@ -64,7 +64,7 @@ describe("patient dashboard", () => {
     expect(row.querySelector('[data-avatar="doctor"]')).not.toBeNull();
     expect(row.querySelector("img")).toBeNull();
     // Asked for with the same "upcoming" rule the count uses.
-    expect(listAppointments).toHaveBeenCalledWith({ upcoming: true, page_size: 3 });
+    expect(listAppointments).toHaveBeenCalledWith({ scope: "upcoming", page_size: 3 });
   });
 
   it("shows the counts from the summary, not from the list", async () => {

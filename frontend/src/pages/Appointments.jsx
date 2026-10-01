@@ -11,12 +11,21 @@ import { listDoctors } from "../services/doctorService";
 import { ACTIVE_STATUSES, STATUS_LABELS } from "../utils/appointments";
 import { formatDateTime } from "../utils/datetime";
 import { cleanParams, doctorName } from "../utils/format";
+import PatientAppointments from "./PatientAppointments";
 
 const PAGE_SIZE = 20;
 
-// One list for every role. The API returns only what the caller may see
-// (own / as the doctor / all); the extra filters below are for staff.
+// Patients (who can only read their own) get the patient page; doctors and
+// staff the working table. The API decides what each may see either way.
 export default function Appointments() {
+  const { can } = useAuth();
+  const patientOnly = can("appointment:read_own") && !can("appointment:read_any") && !can("appointment:read_assigned");
+  return patientOnly ? <PatientAppointments /> : <StaffAppointments />;
+}
+
+// One table for doctors and staff. The API returns only what the caller may
+// see (as the doctor / all); the extra filters below are for staff.
+function StaffAppointments() {
   const { can } = useAuth();
   const isStaff = can("appointment:read_any");
   const [searchParams] = useSearchParams();

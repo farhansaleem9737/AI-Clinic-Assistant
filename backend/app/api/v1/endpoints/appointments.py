@@ -10,6 +10,7 @@ from app.core.permissions import Perm, Principal
 from app.db.session import get_db
 from app.models.appointment import AppointmentStatus
 from app.schemas.appointment import (
+    AppointmentCounts,
     AppointmentCreate,
     AppointmentDoctor,
     AppointmentRead,
@@ -22,7 +23,7 @@ from app.schemas.appointment import (
 from app.schemas.common import Page
 from app.schemas.patient import PatientSummary
 from app.services import appointment_service
-from app.services.appointment_service import AppointmentFilters, AppointmentView
+from app.services.appointment_service import AppointmentFilters, AppointmentScope, AppointmentView
 from app.services.pagination import PageParams
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
@@ -69,34 +70,53 @@ def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
 ResponseModel = AppointmentStaffRead | AppointmentRead
 
 
-@router.get("/", response_model=Page[AppointmentStaffRead] | Page[AppointmentRead])
-async def list_appointments(
+def appointment_filters(
     patient_id: uuid.UUID | None = None,
     doctor_id: uuid.UUID | None = None,
     department_id: uuid.UUID | None = None,
     status_: list[AppointmentStatus] | None = Query(None, alias="status"),
     date_from: date | None = Query(None, description="Clinic-local calendar date"),
     date_to: date | None = Query(None, description="Clinic-local calendar date, inclusive"),
-    upcoming: bool = Query(False, description="Only open appointments that have not ended yet"),
+    q: str | None = Query(None, max_length=100, description="Search doctor name, specialization or department"),
+    scope: AppointmentScope = Query(AppointmentScope.all, description="upcoming, past or all"),
     newest_first: bool = False,
-    params: PageParams = Depends(page_params),
-    db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require_any_permission(*READ)),
-):
-    filters = AppointmentFilters(
+) -> AppointmentFilters:
+    return AppointmentFilters(
         patient_id=patient_id,
         doctor_id=doctor_id,
         department_id=department_id,
         statuses=tuple(status_ or ()),
         date_from=date_from,
         date_to=date_to,
-        upcoming=upcoming,
+        q=q,
+        scope=scope,
         newest_first=newest_first,
     )
+
+
+@router.get("/", response_model=Page[AppointmentStaffRead] | Page[AppointmentRead])
+async def list_appointments(
+    filters: AppointmentFilters = Depends(appointment_filters),
+    params: PageParams = Depends(page_params),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_any_permission(*READ)),
+):
     views, total = await appointment_service.list_appointments(db, principal, params, filters)
     return Page(
         items=[to_response(v, principal) for v in views], total=total, page=params.page, page_size=params.page_size
     )
+
+
+@router.get("/counts", response_model=AppointmentCounts)
+async def count_appointments(
+    filters: AppointmentFilters = Depends(appointment_filters),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_any_permission(*READ)),
+):
+    """Upcoming / past / all totals for the list's tabs, under the same
+    filters (the `scope` parameter itself is ignored)."""
+    counts = await appointment_service.count_by_scope(db, principal, filters)
+    return AppointmentCounts(upcoming=counts.upcoming, past=counts.past, all=counts.all)
 
 
 @router.post("/", response_model=ResponseModel, status_code=status.HTTP_201_CREATED)

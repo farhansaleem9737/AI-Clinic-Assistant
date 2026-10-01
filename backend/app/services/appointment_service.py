@@ -12,9 +12,10 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import ColumnElement, Select, func, or_, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -64,6 +65,15 @@ class AppointmentView:
     can_reschedule: bool
 
 
+class AppointmentScope(StrEnum):
+    """Upcoming: open and not yet ended (the dashboards' definition).
+    Past: everything else (finished, cancelled, missed or over)."""
+
+    upcoming = "upcoming"
+    past = "past"
+    all = "all"
+
+
 @dataclass(frozen=True)
 class AppointmentFilters:
     patient_id: uuid.UUID | None = None
@@ -72,16 +82,17 @@ class AppointmentFilters:
     statuses: tuple[AppointmentStatus, ...] = ()
     date_from: date | None = None
     date_to: date | None = None
-    # Only open appointments that have not ended yet (the dashboards' "upcoming").
-    upcoming: bool = False
+    # Free text: the doctor's name, specialization or department.
+    q: str | None = None
+    scope: AppointmentScope = AppointmentScope.all
     newest_first: bool = False
 
 
 _Successor = aliased(Appointment)
 
 
-def _view_query() -> Select:
-    doctor_user = aliased(User)
+def _view_query(doctor_user=None) -> Select:
+    doctor_user = doctor_user if doctor_user is not None else aliased(User)
     return (
         select(
             Appointment,
@@ -146,10 +157,18 @@ def _local_day_start(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.clinic_timezone))
 
 
-async def list_appointments(
-    db: AsyncSession, principal: Principal, params: PageParams, filters: AppointmentFilters
-) -> tuple[list[AppointmentView], int]:
-    query = _view_query().where(access.appointment_visibility(principal))
+def _scope_condition(scope: AppointmentScope, now: datetime) -> ColumnElement[bool] | None:
+    if scope is AppointmentScope.upcoming:
+        return upcoming_condition(now)
+    if scope is AppointmentScope.past:
+        return ~upcoming_condition(now)
+    return None
+
+
+def _filtered(query: Select, filters: AppointmentFilters, doctor_user) -> Select:
+    """Every list filter except the scope, shared by the list and its counts."""
+    if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
+        raise BusinessRuleError("date_from must not be after date_to", code="INVALID_RANGE")
     if filters.patient_id:
         query = query.where(Appointment.patient_id == filters.patient_id)
     if filters.doctor_id:
@@ -163,14 +182,53 @@ async def list_appointments(
         query = query.where(Appointment.starts_at >= _local_day_start(filters.date_from))
     if filters.date_to:
         query = query.where(Appointment.starts_at < _local_day_start(filters.date_to + timedelta(days=1)))
+    if filters.q and filters.q.strip():
+        pattern = f"%{filters.q.strip()}%"
+        query = query.where(
+            or_(doctor_user.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern))
+        )
+    return query
+
+
+async def list_appointments(
+    db: AsyncSession, principal: Principal, params: PageParams, filters: AppointmentFilters
+) -> tuple[list[AppointmentView], int]:
+    doctor_user = aliased(User)
+    query = _filtered(_view_query(doctor_user).where(access.appointment_visibility(principal)), filters, doctor_user)
     now = clock.utcnow()
-    if filters.upcoming:
-        query = query.where(upcoming_condition(now))
+    scope = _scope_condition(filters.scope, now)
+    if scope is not None:
+        query = query.where(scope)
     order = Appointment.starts_at.desc() if filters.newest_first else Appointment.starts_at.asc()
     query = query.order_by(order, Appointment.id)
 
     rows, total = await paginate(db, query, params)
     return [_to_view(r, principal, now) for r in rows], total
+
+
+@dataclass(frozen=True)
+class ScopeCounts:
+    upcoming: int
+    past: int
+    all: int
+
+
+async def count_by_scope(db: AsyncSession, principal: Principal, filters: AppointmentFilters) -> ScopeCounts:
+    """How many visible appointments fall in each tab, under the same filters
+    as the list (one aggregate query; no rows are loaded)."""
+    doctor_user = aliased(User)
+    now = clock.utcnow()
+    upcoming = upcoming_condition(now)
+    query = (
+        select(func.count().filter(upcoming), func.count().filter(~upcoming), func.count())
+        .select_from(Appointment)
+        .join(Doctor, Doctor.id == Appointment.doctor_id)
+        .join(doctor_user, doctor_user.id == Doctor.user_id)
+        .join(Department, Department.id == Doctor.department_id)
+        .where(access.appointment_visibility(principal))
+    )
+    up, past, total = (await db.execute(_filtered(query, filters, doctor_user))).one()
+    return ScopeCounts(upcoming=up, past=past, all=total)
 
 
 async def history(db: AsyncSession, principal: Principal, appointment_id: uuid.UUID) -> list[AppointmentStatusHistory]:

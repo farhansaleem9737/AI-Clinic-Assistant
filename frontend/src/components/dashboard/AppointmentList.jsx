@@ -1,18 +1,10 @@
 import { ArrowRight, CalendarX, Clock, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
-import { formatDateTime, formatTime } from "../../utils/datetime";
+import { dayParts, formatDateTime, formatTime } from "../../utils/datetime";
 import { doctorName } from "../../utils/format";
 import Avatar from "../Avatar";
 import EmptyState from "../EmptyState";
 import StatusBadge from "../StatusBadge";
-
-function dayParts(iso, timeZone) {
-  const parts = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short", timeZone }).formatToParts(
-    new Date(iso)
-  );
-  const get = (type) => parts.find((p) => p.type === type)?.value;
-  return { month: get("month"), day: get("day"), weekday: get("weekday") };
-}
 
 /**
  * Appointment rows in the dashboard style. `perspective` decides who is the

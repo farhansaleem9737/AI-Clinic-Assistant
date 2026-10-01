@@ -460,6 +460,109 @@ a.button.block { display: flex; width: 100%; justify-content: center; }
 .profile-facts dd { margin: 0; overflow-wrap: anywhere; }
 dl { margin: 0; }
 
+/* ---- Patient appointments ------------------------------------------------------ */
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.page-head h1 { font-size: 2.1rem; margin: 0 0 0.2rem; letter-spacing: -0.02em; }
+.page-head p { margin: 0; font-size: 1.05rem; }
+a.button.large { min-height: 48px; padding: 0.6rem 1.3rem; font-weight: 600; border-radius: 10px; }
+
+.tab-strip { display: flex; gap: 2.25rem; padding: 0 1.25rem; margin-bottom: 1rem; overflow-x: auto; }
+.tab-strip [role="tab"] {
+  background: none; border: 0; border-bottom: 3px solid transparent; border-radius: 0; color: var(--text);
+  padding: 0.95rem 0.15rem 0.8rem; font-weight: 600; white-space: nowrap;
+}
+.tab-strip [role="tab"]:hover { color: var(--accent); filter: none; }
+.tab-strip [role="tab"].active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-strip [role="tab"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.appt-filters {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(170px, 1fr) minmax(280px, 1.25fr) auto;
+  gap: 1rem; align-items: end; padding: 1rem 1.1rem;
+}
+.appt-filters label, .appt-filters legend { font-size: 0.88rem; color: var(--text); }
+.appt-filters select { width: 100%; min-height: 46px; margin-top: 0.3rem; }
+.appt-filters > button { min-height: 46px; }
+.appt-search { align-self: end; min-height: 46px; }
+.date-range { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.date-range legend { padding: 0; margin-bottom: 0.3rem; float: left; width: 100%; }
+.date-range input { flex: 1 1 110px; min-width: 0; min-height: 46px; }
+
+.appt-card {
+  display: grid; grid-template-columns: 64px minmax(220px, 1.3fr) minmax(180px, 1fr) auto 40px;
+  align-items: center; gap: 1.25rem; padding: 1rem 1.1rem; margin-bottom: 0.85rem;
+}
+.appt-card .day {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15;
+  background: var(--bg); border-radius: 10px; padding: 0.55rem 0;
+}
+.appt-card .day .month { font-size: 0.75rem; font-weight: 700; color: var(--heading); text-transform: uppercase; }
+.appt-card .day .num { font-size: 1.6rem; font-weight: 700; color: var(--heading); }
+.appt-card .day .dow { font-size: 0.8rem; color: var(--muted); }
+.appt-card-doctor { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.appt-card-doctor h3 { margin: 0 0 0.2rem; font-size: 1.1rem; }
+.appt-card-doctor p { margin: 0; }
+.appt-card-facts {
+  list-style: none; margin: 0; padding: 0 0 0 1.25rem; border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 0.4rem; color: var(--text); font-size: 0.93rem; min-width: 0;
+}
+.appt-card-facts li { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.appt-card-facts svg { color: var(--muted); flex: none; }
+.appt-card-facts .reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.appt-card-side { display: flex; flex-direction: column; align-items: stretch; gap: 0.55rem; min-width: 150px; }
+.appt-card-side .badge { align-self: flex-start; }
+.badge.with-icon { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; }
+.appt-skeleton { height: 112px; }
+
+.action-menu { position: relative; }
+.icon-button { width: 40px; height: 40px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); border-radius: 50%; }
+.icon-button:hover, .icon-button[aria-expanded="true"] { background: var(--bg); color: var(--heading); filter: none; }
+.action-menu-list {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 15; min-width: 200px; padding: 0.35rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(15, 35, 70, 0.14);
+  display: flex; flex-direction: column;
+}
+.action-menu-list [role="menuitem"] {
+  display: block; width: 100%; text-align: left; padding: 0.55rem 0.75rem; border: 0; border-radius: 7px;
+  background: none; color: var(--text); font: inherit; justify-content: flex-start;
+}
+.action-menu-list [role="menuitem"]:hover, .action-menu-list [role="menuitem"]:focus { background: var(--accent-soft); color: var(--accent); outline: none; text-decoration: none; filter: none; }
+.action-menu-list [role="menuitem"].danger { color: var(--danger); }
+.action-menu-list [role="menuitem"].danger:hover, .action-menu-list [role="menuitem"].danger:focus { background: var(--danger-bg); color: var(--danger); }
+
+.list-footer { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.list-footer p { margin: 0; }
+.list-footer .pagination { margin-top: 0; }
+
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem; background: rgba(10, 20, 45, 0.45); }
+.dialog { width: min(460px, 100%); margin: 0; padding: 1.4rem 1.5rem; }
+.dialog h2 { font-size: 1.25rem; margin: 0 0 0.6rem; }
+.dialog label { margin-top: 0.75rem; }
+.dialog-actions { justify-content: flex-end; margin-top: 1rem; }
+button.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+@media (max-width: 1180px) {
+  .appt-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .appt-search { grid-column: 1 / -1; }
+  .appt-card { grid-template-columns: 64px minmax(0, 1fr) auto 40px; }
+  .appt-card-facts { grid-column: 2 / 3; grid-row: 2; padding-left: 0; border-left: 0; flex-direction: row; flex-wrap: wrap; gap: 0.4rem 1.1rem; }
+}
+@media (max-width: 640px) {
+  .page-head h1 { font-size: 1.7rem; }
+  .page-head .button { width: 100%; }
+  .tab-strip { gap: 1.4rem; padding: 0 0.9rem; }
+  .appt-filters { grid-template-columns: minmax(0, 1fr); }
+  /* Each appointment becomes a stacked card: date + status, doctor, details, actions. */
+  .appt-card { grid-template-columns: auto minmax(0, 1fr) 40px; gap: 0.75rem; }
+  .appt-card .day { flex-direction: row; gap: 0.35rem; padding: 0.35rem 0.6rem; grid-column: 1 / 3; justify-self: start; }
+  .appt-card .day .num { font-size: 1.05rem; }
+  .appt-card-menu { grid-column: 3; grid-row: 1; }
+  .appt-card-doctor { grid-column: 1 / -1; }
+  .appt-card-doctor .avatar { width: 56px !important; height: 56px !important; }
+  .appt-card-facts { grid-column: 1 / -1; grid-row: auto; }
+  .appt-card-side { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; min-width: 0; }
+  .list-footer { flex-direction: column; align-items: stretch; text-align: center; }
+}
+
 /* ---- Responsive ------------------------------------------------------------ */
 @media (max-width: 1180px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

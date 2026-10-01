@@ -141,7 +141,7 @@ async def test_upcoming_list_matches_the_upcoming_count(client, clinic, scene, f
     for now in (clinic.slot(0, "08:00"), clinic.slot(3, "09:45")):
         freeze_clock(now)
         count = (await summary(client, headers["alice"]))["patient"]["upcoming_appointments"]
-        listed = await client.get(APPOINTMENTS, params={"upcoming": "true", "page_size": 50}, headers=headers["alice"])
+        listed = await client.get(APPOINTMENTS, params={"scope": "upcoming", "page_size": 50}, headers=headers["alice"])
         items = listed.json()["items"]
         assert listed.json()["total"] == count == len(items)
         assert [i["starts_at"] for i in items] == sorted(i["starts_at"] for i in items)  # soonest first
@@ -152,7 +152,7 @@ async def test_upcoming_list_matches_the_upcoming_count(client, clinic, scene, f
 async def test_patient_cannot_list_another_patients_appointments(client, clinic, scene):
     headers, _ = scene
     response = await client.get(
-        APPOINTMENTS, params={"patient_id": str(clinic.patient_b.id), "upcoming": "true"}, headers=headers["alice"]
+        APPOINTMENTS, params={"patient_id": str(clinic.patient_b.id), "scope": "upcoming"}, headers=headers["alice"]
     )
     assert response.status_code == 200
     assert response.json()["items"] == []

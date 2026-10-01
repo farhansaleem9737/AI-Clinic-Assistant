@@ -148,7 +148,7 @@ function HelpCard() {
 export default function PatientDashboard({ summary }) {
   const figures = summary.patient;
   const status = accountStatus(summary);
-  const upcoming = useFetch(() => listAppointments({ upcoming: true, page_size: 3 }), [], {
+  const upcoming = useFetch(() => listAppointments({ scope: "upcoming", page_size: 3 }), [], {
     enabled: figures.has_profile,
   });
 

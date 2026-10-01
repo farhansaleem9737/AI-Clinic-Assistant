@@ -37,3 +37,12 @@ export function localInputToIso(value) {
 }
 
 export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+// { month: "Oct", day: "5", weekday: "Mon" } for an instant, in the given timezone.
+export function dayParts(iso, timeZone) {
+  const parts = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short", timeZone }).formatToParts(
+    new Date(iso)
+  );
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return { month: get("month"), day: get("day"), weekday: get("weekday") };
+}
