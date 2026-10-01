@@ -85,3 +85,21 @@ class AvailabilityRead(BaseModel):
     doctor_id: uuid.UUID
     timezone: str
     slots: list[SlotRead]
+
+
+class AvailableDay(BaseModel):
+    date: date  # local calendar date in `timezone`
+    slots: list[SlotRead]
+
+
+class PublicAvailabilityRead(BaseModel):
+    """Free slots for the public booking calendar, grouped by local date.
+
+    Only days with at least one free slot appear. Nothing about existing
+    appointments is exposed beyond the absence of a slot."""
+
+    doctor_id: uuid.UUID
+    timezone: str
+    # Last local date that can be booked at all (maximum advance booking).
+    bookable_until: date
+    days: list[AvailableDay]

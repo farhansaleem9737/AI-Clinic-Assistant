@@ -1,5 +1,5 @@
-"""Seed fictional demo data for development: departments, doctors, working
-hours, and enough bookings to show every availability state.
+"""Seed fictional demo data for development: departments, doctors, career
+history, working hours, and enough bookings to show every availability state.
 
     cd backend
     python -m scripts.seed_demo
@@ -31,7 +31,7 @@ from app.core.security import hash_password
 from app.db.database import AsyncSessionLocal, engine
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentStatusHistory
 from app.models.department import Department
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.patient import Patient
 from app.models.schedule import ExceptionKind, ScheduleException, ScheduleTemplate
 from app.models.user import User
@@ -129,6 +129,40 @@ async def _fully_booked_clinic(db: AsyncSession, doctor: Doctor, tz: ZoneInfo, t
                                         reason="Created by the demo seed"))
 
 
+# Fictional employers and schools for the demo career histories.
+HOSPITALS = ["Riverside General Hospital", "Northgate Medical Centre", "St. Aurelia Teaching Hospital"]
+SCHOOLS = ["Westbrook Medical College", "Royal Demo College of Physicians", "Eastfield University of Health Sciences"]
+
+
+def _career_history(db: AsyncSession, doctor: Doctor, this_year: int) -> None:
+    """A plausible, clearly fictional history matching the doctor's listed
+    years of experience and qualifications."""
+    years = doctor.years_of_experience
+    specialization = doctor.specialization
+    joined = this_year - min(years, 4)
+    db.add(DoctorExperience(
+        doctor_id=doctor.id, title=f"Consultant {specialization}", organization="Clinic AI Assistant",
+        location="Lahore", start_year=joined, end_year=None,
+        description="Outpatient consultations and follow-up care. (Fictional demo history.)",
+    ))
+    if years > 4:
+        db.add(DoctorExperience(
+            doctor_id=doctor.id, title=specialization, organization=HOSPITALS[years % len(HOSPITALS)],
+            location="Lahore", start_year=this_year - years, end_year=joined,
+            description="Inpatient and outpatient care as part of a hospital team. (Fictional demo history.)",
+        ))
+
+    degrees = [d.strip() for d in (doctor.qualifications or "").split(",") if d.strip()]
+    finished = this_year - years  # the last degree was completed when practice began
+    for position, degree in enumerate(reversed(degrees)):
+        length = 5 if degree.startswith("MBBS") else 3
+        db.add(DoctorEducation(
+            doctor_id=doctor.id, qualification=degree, institution=SCHOOLS[(years + position) % len(SCHOOLS)],
+            start_year=finished - length, end_year=finished,
+        ))
+        finished -= length
+
+
 async def seed() -> None:
     if settings.environment is Environment.production:
         sys.exit("Refusing to seed demo data: ENVIRONMENT=production")
@@ -160,6 +194,7 @@ async def seed() -> None:
             )
             db.add(doctor)
             await db.flush()
+            _career_history(db, doctor, today.year)
 
             if schedule == "busy":
                 await _fully_booked_clinic(db, doctor, tz, today, user)
@@ -175,6 +210,17 @@ async def seed() -> None:
                 _weekly_hours(db, doctor, schedule, today)
             created += 1
             print(f"  + Dr. {name}: {specialization}, {dept} ({schedule})")
+
+        # Doctors seeded before career histories existed get one too.
+        print("Career history for demo doctors that have none")
+        bare = await db.scalars(
+            select(Doctor)
+            .join(User, User.id == Doctor.user_id)
+            .where(User.email.like("%@clinic-demo.example"), ~Doctor.id.in_(select(DoctorExperience.doctor_id)))
+        )
+        for doctor in bare.all():
+            _career_history(db, doctor, today.year)
+            print(f"  + history for {doctor.specialization} {doctor.id}")
 
         # A doctor with no working hours at all cannot be booked. Give any
         # such existing doctor a standard week so the directory is usable.

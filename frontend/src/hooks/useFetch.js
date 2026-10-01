@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { getErrorMessage } from "../services/api";
 
-const IDLE = { data: null, loading: false, error: "" };
+const IDLE = { data: null, loading: false, error: "", status: null };
 const sameDeps = (a, b) => a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
 
 /**
- * Run an API call and expose it as { data, loading, error }.
+ * Run an API call and expose it as { data, loading, error, status }.
+ * `status` is the HTTP status of a failed call (e.g. 404), or null.
  *
  * `fetcher` returns an axios promise and is re-run when `deps` change.
  * Pass `enabled: false` to skip the call (e.g. a section this role lacks).
@@ -22,10 +23,16 @@ export function useFetch(fetcher, deps, { enabled = true } = {}) {
     if (!enabled) return;
     let cancelled = false;
     fetcher()
-      .then((res) => !cancelled && setResult({ deps, data: res.data, error: "" }))
+      .then((res) => !cancelled && setResult({ deps, data: res.data, error: "", status: null }))
       .catch(
         (err) =>
-          !cancelled && setResult({ deps, data: null, error: getErrorMessage(err, "Could not load this section") })
+          !cancelled &&
+          setResult({
+            deps,
+            data: null,
+            error: getErrorMessage(err, "Could not load this section"),
+            status: err.response?.status ?? null,
+          })
       );
     return () => {
       cancelled = true;
@@ -34,6 +41,8 @@ export function useFetch(fetcher, deps, { enabled = true } = {}) {
   }, [enabled, ...deps]);
 
   if (!enabled) return IDLE;
-  if (result && sameDeps(result.deps, deps)) return { data: result.data, loading: false, error: result.error };
-  return { data: result?.data ?? null, loading: true, error: "" };
+  if (result && sameDeps(result.deps, deps)) {
+    return { data: result.data, loading: false, error: result.error, status: result.status };
+  }
+  return { data: result?.data ?? null, loading: true, error: "", status: null };
 }

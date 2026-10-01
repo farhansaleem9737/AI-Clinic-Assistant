@@ -11,7 +11,7 @@ from app.core import clock
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.models.department import Department
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.user import User
 from app.schemas.doctor import DoctorCreate, DoctorSelfUpdate, DoctorUpdate
 from app.services import appointment_service, auth_service, availability_service, rbac_service
@@ -136,6 +136,50 @@ async def get_doctor(db: AsyncSession, doctor_id: uuid.UUID, *, public: bool = F
     if row is None:
         raise NotFoundError("Doctor not found")
     return (await _rows(db, [row]))[0]
+
+
+@dataclass(frozen=True)
+class PublicProfile:
+    row: DoctorRow
+    experience: list[DoctorExperience]
+    education: list[DoctorEducation]
+
+
+async def get_public_profile(db: AsyncSession, doctor_id: uuid.UUID) -> PublicProfile:
+    """A publicly listed doctor with their career history, newest first
+    (current positions and in-progress studies before finished ones)."""
+    row = await get_doctor(db, doctor_id, public=True)
+    experience = await db.scalars(
+        select(DoctorExperience)
+        .where(DoctorExperience.doctor_id == doctor_id)
+        .order_by(
+            DoctorExperience.end_year.desc().nulls_first(),
+            DoctorExperience.start_year.desc(),
+            DoctorExperience.id,
+        )
+    )
+    education = await db.scalars(
+        select(DoctorEducation)
+        .where(DoctorEducation.doctor_id == doctor_id)
+        .order_by(
+            DoctorEducation.end_year.desc().nulls_first(),
+            DoctorEducation.start_year.desc().nulls_last(),
+            DoctorEducation.id,
+        )
+    )
+    return PublicProfile(row, list(experience.all()), list(education.all()))
+
+
+async def ensure_publicly_listed(db: AsyncSession, doctor_id: uuid.UUID) -> None:
+    """404 unless the doctor appears in the public directory."""
+    query = _visible_publicly(
+        select(Doctor.id)
+        .join(User, User.id == Doctor.user_id)
+        .join(Department, Department.id == Doctor.department_id)
+        .where(Doctor.id == doctor_id)
+    )
+    if await db.scalar(query) is None:
+        raise NotFoundError("Doctor not found")
 
 
 async def get_own_profile(db: AsyncSession, principal: Principal) -> DoctorRow:

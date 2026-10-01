@@ -1,18 +1,169 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
+import Avatar from "../components/Avatar";
 import SlotPicker from "../components/SlotPicker";
 import { useAuth } from "../context/useAuth";
+import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { bookAppointment } from "../services/appointmentService";
 import { getPublicDepartments } from "../services/departmentService";
-import { getPublicDoctor, getPublicDoctors } from "../services/doctorService";
+import { getPublicAvailability, getPublicDoctor, getPublicDoctors } from "../services/doctorService";
 import { getPatient, listPatients } from "../services/patientService";
-import { formatDateTime } from "../utils/datetime";
+import { addDays, formatDateTime, isoDateIn } from "../utils/datetime";
 import { doctorName, formatFee } from "../utils/format";
 
-// Patients book for themselves; staff (appointment:create) pick the patient.
+const BOOKED_NOTICE = { state: { notice: "Your appointment is booked." } };
+
+/**
+ * Patients who chose a doctor and time on the doctor's profile land on a
+ * confirmation step; everyone else gets the full booking form. Staff
+ * (appointment:create) always use the form, because they pick the patient.
+ */
 export default function BookAppointment() {
+  const { can } = useAuth();
+  const [params] = useSearchParams();
+  const doctorId = params.get("doctor");
+  const startsAt = params.get("slot");
+  if (!can("appointment:create") && doctorId && startsAt) {
+    return <BookingReview key={`${doctorId} ${startsAt}`} doctorId={doctorId} startsAt={startsAt} />;
+  }
+  return <BookingForm />;
+}
+
+// The confirmation step: shows what will be booked. Nothing is booked until
+// "Confirm appointment", and the server re-checks the time then.
+function BookingReview({ doctorId, startsAt }) {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [taken, setTaken] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+
+  const valid = !Number.isNaN(Date.parse(startsAt));
+  const day = valid ? isoDateIn(startsAt) : null;
+  const doctorFetch = useFetch(() => getPublicDoctor(doctorId), [doctorId]);
+  // Free times around the chosen instant (the clinic's date can differ from
+  // the browser's): confirms it is still offered and gives its timezone.
+  const check = useFetch(() => getPublicAvailability(doctorId, addDays(day, -1), addDays(day, 1)), [doctorId, day], {
+    enabled: valid,
+  });
+
+  const doctor = doctorFetch.data;
+  const offered = check.data?.days
+    .flatMap((d) => d.slots)
+    .find((s) => Date.parse(s.starts_at) === Date.parse(startsAt));
+  const timezone = check.data?.timezone;
+  const backToProfile = `/doctors/${doctorId}#book`;
+
+  if (!valid || doctorFetch.status === 404 || doctorFetch.status === 422) {
+    return (
+      <div className="card booking-review">
+        <h2>Book an appointment</h2>
+        <Alert>That appointment link is not valid.</Alert>
+        <Link to="/doctors" className="button secondary">
+          Find a doctor
+        </Link>
+      </div>
+    );
+  }
+  if (doctorFetch.error || check.error) {
+    return (
+      <div className="card booking-review">
+        <h2>Book an appointment</h2>
+        <Alert>{doctorFetch.error || check.error}</Alert>
+        <Link to={backToProfile} className="button secondary">
+          Back to the doctor
+        </Link>
+      </div>
+    );
+  }
+  if (!doctor || !check.data) return <div className="card skeleton" style={{ height: 320 }} role="status" aria-label="Loading" />;
+
+  const name = doctorName(doctor);
+  if (!offered || taken) {
+    return (
+      <div className="card booking-review">
+        <h2>Book an appointment</h2>
+        <Alert kind="warn">
+          {taken
+            ? "Sorry, this time was just booked by someone else. Please choose another time."
+            : "This time is no longer available. Please choose another time."}
+        </Alert>
+        <Link to={backToProfile} className="button">
+          Choose another time
+        </Link>
+      </div>
+    );
+  }
+
+  const confirm = async () => {
+    setError("");
+    setSubmitting(true);
+    try {
+      const body = { doctor_id: doctor.id, starts_at: offered.starts_at, reason: reason.trim() || null };
+      const res = await bookAppointment(body, idempotencyKey);
+      navigate(`/appointments/${res.data.id}`, BOOKED_NOTICE);
+    } catch (err) {
+      if (err.response?.status === 409) setTaken(true);
+      else setError(getErrorMessage(err, "Booking failed"));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="card booking-review">
+      <h2>Review your appointment</h2>
+      <p className="muted">Check the details below. The time is not reserved until you confirm.</p>
+      <Alert>{error}</Alert>
+      <div className="booking-review-doctor">
+        <Avatar name={doctor.name} size={64} />
+        <div>
+          <strong>{name}</strong>
+          <p className="muted">
+            {doctor.specialization} · {doctor.department_name}
+          </p>
+        </div>
+      </div>
+      <dl className="booking-review-facts">
+        <div>
+          <dt>Date and time</dt>
+          <dd>
+            {formatDateTime(offered.starts_at, timezone)} <span className="muted small">({timezone})</span>
+          </dd>
+        </div>
+        {doctor.consultation_fee != null && (
+          <div>
+            <dt>Consultation fee</dt>
+            <dd>{formatFee(doctor.consultation_fee)}</dd>
+          </div>
+        )}
+        <div>
+          <dt>Patient</dt>
+          <dd>{user.name}</dd>
+        </div>
+      </dl>
+      <label>
+        Reason for visit (optional)
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+      </label>
+      <div className="row">
+        <button type="button" disabled={submitting} onClick={confirm}>
+          {submitting ? "Booking…" : "Confirm appointment"}
+        </button>
+        <Link to={backToProfile} className="button secondary">
+          Change time
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// The full form: choose department, doctor and time (and, for staff, the patient).
+function BookingForm() {
   const { can, user } = useAuth();
   const isStaff = can("appointment:create");
   const navigate = useNavigate();
@@ -80,7 +231,7 @@ export default function BookAppointment() {
       if (isStaff) body.patient_id = patient.id;
       const res = await bookAppointment(body, idempotencyKey);
       // The appointment page is the confirmation: it shows what was booked.
-      navigate(`/appointments/${res.data.id}`, { state: { notice: "Your appointment is booked." } });
+      navigate(`/appointments/${res.data.id}`, BOOKED_NOTICE);
     } catch (err) {
       setError(getErrorMessage(err, "Booking failed"));
       // The slot may have just been taken: let the user pick another, with a fresh key.

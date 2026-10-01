@@ -35,3 +35,8 @@ export function monthGrid(month) {
     return { date: iso(d), inMonth: d.getUTCMonth() === m - 1 };
   });
 }
+
+// "Thursday, October 1, 2026" for a "YYYY-MM-DD" date (no timezone shift).
+export function longDate(isoDate) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
+}

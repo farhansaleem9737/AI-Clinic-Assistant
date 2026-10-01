@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from app.schemas.common import LoginEmail
 from app.services.availability_service import AvailabilityStatus
@@ -92,6 +92,34 @@ class DoctorPublic(BaseModel):
     # itself is never published.
     is_verified: bool
     availability: DoctorAvailabilityRead
+
+
+class DoctorExperienceRead(BaseModel):
+    title: str
+    organization: str
+    location: str | None
+    start_year: int
+    end_year: int | None  # None: current position
+    description: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DoctorEducationRead(BaseModel):
+    qualification: str
+    institution: str
+    field_of_study: str | None
+    start_year: int | None
+    end_year: int | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DoctorProfilePublic(DoctorPublic):
+    """The public profile page: the directory entry plus career history."""
+
+    experience: list[DoctorExperienceRead]
+    education: list[DoctorEducationRead]
 
 
 class DoctorResponse(DoctorPublic):

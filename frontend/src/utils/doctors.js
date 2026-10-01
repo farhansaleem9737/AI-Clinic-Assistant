@@ -97,3 +97,11 @@ export function pageWindow(current, total) {
   }
   return result;
 }
+
+// "2016 – 2020", "2020 – Present" (when `ongoing` is given), "2011", or null.
+export function yearRange(start, end, { ongoing } = {}) {
+  if (start && end) return start === end ? String(end) : `${start} – ${end}`;
+  if (start) return ongoing ? `${start} – ${ongoing}` : `From ${start}`;
+  if (end) return String(end);
+  return null;
+}

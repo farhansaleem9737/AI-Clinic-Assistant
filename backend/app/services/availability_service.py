@@ -27,6 +27,7 @@ from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.schedule import ExceptionKind, ScheduleException, ScheduleTemplate
+from app.models.user import User
 
 MAX_RANGE_DAYS = 31
 
@@ -74,6 +75,19 @@ def expand_templates(
     return slots
 
 
+def by_local_date(slots: Iterable[Slot], tz: ZoneInfo) -> dict[date, list[Slot]]:
+    """Group slots by the calendar date they start on in `tz`, in time order."""
+    days: dict[date, list[Slot]] = defaultdict(list)
+    for slot in sorted(slots):
+        days[slot.starts_at.astimezone(tz).date()].append(slot)
+    return dict(days)
+
+
+def bookable_until(now: datetime, tz: ZoneInfo) -> date:
+    """The last local date on which anything can still be booked."""
+    return (now + timedelta(days=settings.booking_max_advance_days)).astimezone(tz).date()
+
+
 def remove_busy(slots: Iterable[Slot], busy: Sequence[tuple[datetime, datetime]]) -> list[Slot]:
     return [s for s in slots if not any(s.overlaps(start, end) for start, end in busy)]
 
@@ -93,7 +107,13 @@ async def bookable_doctor(db: AsyncSession, doctor_id: uuid.UUID) -> BookableDoc
         await db.execute(
             select(Doctor, Department.timezone)
             .join(Department, Department.id == Doctor.department_id)
-            .where(Doctor.id == doctor_id, Doctor.is_active.is_(True), Department.is_active.is_(True))
+            .join(User, User.id == Doctor.user_id)
+            .where(
+                Doctor.id == doctor_id,
+                Doctor.is_active.is_(True),
+                Department.is_active.is_(True),
+                User.is_active.is_(True),
+            )
         )
     ).one_or_none()
     if row is None:

@@ -5,6 +5,10 @@ export const getPublicDoctors = (params) => api.get("/public/doctors/", { params
 export const getPublicDoctor = (id) => api.get(`/public/doctors/${id}`);
 // Distinct specializations of the listed doctors: options for the filter.
 export const getPublicSpecializations = () => api.get("/public/doctors/specializations");
+// Free appointment times for the profile's booking calendar, grouped by the
+// clinic's local date. Seeing a time reserves nothing; booking re-checks it.
+export const getPublicAvailability = (id, dateFrom, dateTo) =>
+  api.get(`/public/doctors/${id}/availability`, { params: { date_from: dateFrom, date_to: dateTo } });
 
 // Staff (doctor:read / doctor:create / doctor:update / doctor:deactivate).
 export const listDoctors = (params) => api.get("/doctors/", { params });

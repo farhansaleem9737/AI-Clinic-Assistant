@@ -14,6 +14,7 @@ import Doctors from "./pages/Doctors";
 import DoctorDetail from "./pages/DoctorDetail";
 import MyDoctorProfile from "./pages/MyDoctorProfile";
 import MyPatientProfile from "./pages/MyPatientProfile";
+import NotFound from "./pages/NotFound";
 import Patients from "./pages/Patients";
 import PatientDetail from "./pages/PatientDetail";
 import AdminDepartments from "./pages/AdminDepartments";
@@ -78,7 +79,7 @@ function App() {
               />
             ))}
             <Route path="/" element={<Navigate to="/doctors" replace />} />
-            <Route path="*" element={<p>Page not found.</p>} />
+            <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
       </BrowserRouter>

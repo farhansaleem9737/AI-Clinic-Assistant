@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, status
@@ -6,18 +7,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import require_permission
 from app.api.deps.pagination import page_params
+from app.core import clock
+from app.core.config import settings
 from app.core.permissions import Perm, Principal
 from app.db.session import get_db
 from app.schemas.common import Page
 from app.schemas.doctor import (
     DoctorAvailabilityRead,
     DoctorCreate,
+    DoctorEducationRead,
+    DoctorExperienceRead,
+    DoctorProfilePublic,
     DoctorPublic,
     DoctorResponse,
     DoctorSelfUpdate,
     DoctorUpdate,
 )
-from app.services import doctor_service
+from app.schemas.schedule import AvailableDay, PublicAvailabilityRead, SlotRead
+from app.services import availability_service, doctor_service
 from app.services.doctor_service import DoctorFilters, DoctorRow, DoctorSort
 from app.services.pagination import PageParams
 
@@ -92,9 +99,44 @@ async def public_list_specializations(db: AsyncSession = Depends(get_db)):
     return await doctor_service.list_specializations(db)
 
 
-@public_router.get("/{doctor_id}", response_model=DoctorPublic)
+@public_router.get("/{doctor_id}", response_model=DoctorProfilePublic)
 async def public_get_doctor(doctor_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return to_public(await doctor_service.get_doctor(db, doctor_id, public=True))
+    profile = await doctor_service.get_public_profile(db, doctor_id)
+    return DoctorProfilePublic(
+        **to_public(profile.row).model_dump(),
+        experience=[DoctorExperienceRead.model_validate(e) for e in profile.experience],
+        education=[DoctorEducationRead.model_validate(e) for e in profile.education],
+    )
+
+
+@public_router.get("/{doctor_id}/availability", response_model=PublicAvailabilityRead)
+async def public_doctor_availability(
+    doctor_id: uuid.UUID,
+    date_from: date = Query(description="Local calendar date in the doctor's department timezone"),
+    date_to: date = Query(description="Inclusive; at most 31 days after date_from"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Free slots for the booking calendar on the public profile.
+
+    The same computation as the signed-in availability endpoint, with the
+    patient booking notice applied. Seeing a slot reserves nothing: booking
+    re-checks it.
+    """
+    await doctor_service.ensure_publicly_listed(db, doctor_id)
+    now = clock.utcnow()
+    bookable, slots = await availability_service.available_slots(
+        db, doctor_id, date_from, date_to, now=now, min_lead=timedelta(minutes=settings.booking_min_lead_minutes)
+    )
+    tz = bookable.timezone
+    return PublicAvailabilityRead(
+        doctor_id=doctor_id,
+        timezone=tz.key,
+        bookable_until=availability_service.bookable_until(now, tz),
+        days=[
+            AvailableDay(date=day, slots=[SlotRead(starts_at=s.starts_at, ends_at=s.ends_at) for s in day_slots])
+            for day, day_slots in availability_service.by_local_date(slots, tz).items()
+        ],
+    )
 
 
 # ---- Own profile (the doctor) ----------------------------------------------

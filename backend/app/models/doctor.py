@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Uuid
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Numeric, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -30,3 +30,43 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     phone: Mapped[str | None] = mapped_column(String(30))
     room_number: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class DoctorExperience(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One position in a doctor's public career history."""
+
+    __tablename__ = "doctor_experiences"
+    __table_args__ = (
+        CheckConstraint("start_year BETWEEN 1940 AND 2100", name="start_year_range"),
+        CheckConstraint("end_year IS NULL OR end_year >= start_year", name="end_after_start"),
+    )
+
+    doctor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("doctors.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(150))
+    organization: Mapped[str] = mapped_column(String(200))
+    location: Mapped[str | None] = mapped_column(String(150))
+    start_year: Mapped[int] = mapped_column(SmallInteger)
+    # NULL means the doctor still holds the position ("Present").
+    end_year: Mapped[int | None] = mapped_column(SmallInteger)
+    description: Mapped[str | None] = mapped_column(String(1000))
+
+
+class DoctorEducation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One degree, fellowship or certification on a doctor's public profile."""
+
+    __tablename__ = "doctor_education"
+    __table_args__ = (
+        CheckConstraint("start_year IS NULL OR start_year BETWEEN 1940 AND 2100", name="start_year_range"),
+        CheckConstraint("end_year IS NULL OR end_year BETWEEN 1940 AND 2100", name="end_year_range"),
+        CheckConstraint(
+            "start_year IS NULL OR end_year IS NULL OR end_year >= start_year", name="end_after_start"
+        ),
+    )
+
+    doctor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("doctors.id", ondelete="CASCADE"), index=True)
+    qualification: Mapped[str] = mapped_column(String(150))
+    institution: Mapped[str] = mapped_column(String(200))
+    field_of_study: Mapped[str | None] = mapped_column(String(150))
+    start_year: Mapped[int | None] = mapped_column(SmallInteger)
+    # Year of completion; NULL while still in progress or when not recorded.
+    end_year: Mapped[int | None] = mapped_column(SmallInteger)
