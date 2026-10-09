@@ -10,6 +10,17 @@ export function formatTime(iso, timeZone) {
   return new Intl.DateTimeFormat(undefined, { timeStyle: "short", timeZone }).format(new Date(iso));
 }
 
+// "Wednesday, October 7, 2026" for an instant, in the given timezone.
+export function formatLongDate(iso, timeZone) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone }).format(new Date(iso));
+}
+
+// "Jan 1, 1990" for a calendar date ("YYYY-MM-DD", e.g. a birthday). Read in
+// UTC so the browser's timezone can never move it to the previous day.
+export function formatCalendarDate(isoDate) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
+}
+
 // "YYYY-MM-DD" of an instant in a given timezone.
 export function isoDateIn(value, timeZone) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(

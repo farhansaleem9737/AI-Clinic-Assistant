@@ -1,5 +1,6 @@
 // Shared shape of the patient forms (see components/PatientFields.jsx).
 export const SEX_OPTIONS = ["unknown", "female", "male", "intersex"];
+export const SEX_LABELS = { male: "Male", female: "Female", intersex: "Intersex", unknown: "Not recorded" };
 
 export const EMPTY_PATIENT = {
   first_name: "",

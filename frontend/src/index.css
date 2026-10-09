@@ -563,6 +563,108 @@ button.danger-solid { background: var(--danger); border-color: var(--danger); co
   .list-footer { flex-direction: column; align-items: stretch; text-align: center; }
 }
 
+/* ---- Appointment detail ------------------------------------------------------- */
+.appt-summary {
+  display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(200px, auto);
+  align-items: center; gap: 1.5rem; padding: 1.5rem 1.6rem;
+}
+.appt-summary-doctor { display: flex; align-items: center; gap: 1.4rem; min-width: 0; }
+.appt-summary-doctor > div { min-width: 0; }
+.appt-summary-doctor h2 { font-size: 1.5rem; margin: 0 0 0.3rem; }
+.appt-summary-doctor p { margin: 0 0 0.1rem; }
+.appt-summary .specialization { font-weight: 600; color: var(--text); }
+.appt-summary-facts { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; list-style: none; padding: 0; margin: 0.85rem 0 0; color: var(--muted); font-size: 0.9rem; }
+.appt-summary-facts li { display: flex; align-items: center; gap: 0.5rem; }
+.appt-summary-when {
+  list-style: none; margin: 0; padding: 0 0 0 1.5rem; border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;
+}
+.appt-summary-when li { display: flex; align-items: flex-start; gap: 0.75rem; color: var(--heading); font-weight: 600; }
+.appt-summary-when svg { color: var(--muted); flex: none; margin-top: 0.1rem; }
+.appt-summary-when small { display: block; color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+.appt-summary-side {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem;
+  padding-left: 1.5rem; border-left: 1px solid var(--border);
+}
+.appt-summary-side .badge { align-self: center; margin-bottom: 0.2rem; }
+.appt-summary-side button { min-height: 44px; }
+
+.appt-reschedule h2 { font-size: 1.2rem; margin: 0 0 0.3rem; }
+.appt-reschedule h2:focus { outline: none; }
+.appt-reschedule h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.appt-reschedule .card { box-shadow: none; }
+
+.appt-detail-grid {
+  display: grid; gap: 0 1rem; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-areas: "main quick" "main doctor";
+  grid-template-rows: auto 1fr;
+}
+.appt-detail-main { grid-area: main; min-width: 0; container-type: inline-size; }
+.appt-quick { grid-area: quick; }
+.appt-doctor { grid-area: doctor; }
+
+.info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 2rem; }
+.info-grid > .info-list + .info-list, .info-grid > .info-list + p { border-left: 1px solid var(--border); padding-left: 2rem; }
+.info-list div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 1rem; padding: 0.55rem 0; }
+.info-list.ruled div + div { border-top: 1px solid var(--border); }
+.info-list dt { color: var(--muted); }
+.info-list dd { margin: 0; color: var(--heading); overflow-wrap: anywhere; }
+.panel-link { margin: 0.75rem 0 0; }
+.panel-subhead { font-size: 0.95rem; color: var(--heading); margin: 1rem 0 0.35rem; }
+.panel-subhead:first-of-type { margin-top: 0; }
+.panel-foot { margin: 1rem 0 0; }
+.stack.wide { max-width: none; }
+
+.quick-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.quick-item {
+  display: flex; align-items: center; justify-content: flex-start; gap: 0.85rem; width: 100%;
+  padding: 0.8rem 0.9rem; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); font-weight: 500; text-align: left;
+}
+.quick-item:hover { border-color: #c9d6ee; background: #f8fafd; text-decoration: none; filter: none; }
+.quick-item .icon { color: var(--accent); flex: none; }
+/* Only the icon is red; `button.danger` would otherwise tint the whole row. */
+button.quick-item.danger { color: var(--text); border-color: var(--border); }
+.quick-item.danger .icon { color: var(--danger); }
+.quick-item .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.quick-item small { color: var(--muted); font-weight: 400; font-size: 0.82rem; }
+.quick-item .chevron { color: var(--muted); flex: none; }
+.quick-item:disabled { opacity: 1; background: #f8fafd; color: var(--muted); }
+.quick-item:disabled:hover { border-color: var(--border); }
+.quick-item:disabled .icon { color: #a3afc2; }
+
+.doctor-mini { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.doctor-mini h4 { margin: 0 0 0.2rem; font-size: 1.1rem; color: var(--heading); }
+.doctor-mini p { margin: 0; }
+
+/* The info cards follow their own width, which depends on the sidebar too. */
+@container (max-width: 620px) {
+  .info-grid { grid-template-columns: minmax(0, 1fr); }
+  .info-grid > .info-list + .info-list, .info-grid > .info-list + p { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 0.4rem; }
+  .info-list div { grid-template-columns: 112px minmax(0, 1fr); gap: 0.75rem; }
+}
+@media (max-width: 1180px) {
+  /* One column: summary, actions, tabs, then the doctor. */
+  .appt-detail-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "quick" "main" "doctor"; grid-template-rows: none; }
+  .appt-summary { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+  .appt-summary-side {
+    grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center;
+    padding: 1rem 0 0; border-left: 0; border-top: 1px solid var(--border);
+  }
+  .appt-summary-side .badge { margin: 0 auto 0 0; }
+}
+@media (max-width: 640px) {
+  .appt-summary { grid-template-columns: minmax(0, 1fr); padding: 1.1rem; gap: 1rem; }
+  .appt-summary-doctor { gap: 1rem; }
+  .appt-summary-doctor .avatar { width: 76px !important; height: 76px !important; }
+  .appt-summary-doctor h2 { font-size: 1.25rem; }
+  .appt-summary-when { padding: 1rem 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  .appt-summary-side { flex-direction: column; align-items: stretch; }
+  .appt-summary-side .badge { align-self: flex-start; }
+  .appt-reschedule .row button { flex: 1 1 100%; }
+}
+
 /* ---- Responsive ------------------------------------------------------------ */
 @media (max-width: 1180px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

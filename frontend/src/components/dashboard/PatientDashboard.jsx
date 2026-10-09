@@ -20,6 +20,8 @@ import { Link } from "react-router-dom";
 import { useFetch } from "../../hooks/useFetch";
 import { listAppointments } from "../../services/appointmentService";
 import { getMyPatientProfile } from "../../services/patientService";
+import { formatCalendarDate } from "../../utils/datetime";
+import { SEX_LABELS } from "../../utils/patient";
 import Avatar from "../Avatar";
 import EmptyState from "../EmptyState";
 import SectionCard from "../SectionCard";
@@ -34,7 +36,6 @@ const ACTIONS = [
   { to: "/profile", label: "My Profile", hint: "Update your information", icon: UserRound },
 ];
 
-const SEX_LABELS = { male: "Male", female: "Female", intersex: "Intersex", unknown: "Not recorded" };
 
 function accountStatus(summary) {
   if (!summary.patient.has_profile) return { value: "Incomplete", good: false, note: "Complete your profile" };
@@ -44,10 +45,6 @@ function accountStatus(summary) {
 }
 
 // "1990-01-01" -> "Jan 1, 1990", without any timezone shift.
-function formatBirthDate(isoDate) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
-}
-
 function Fact({ icon: Icon, label, children }) {
   return (
     <div>
@@ -97,7 +94,7 @@ function ProfileCard({ hasProfile, active }) {
           </div>
           <dl className="profile-facts list">
             <Fact icon={Cake} label="Date of birth">
-              {profile.date_of_birth && formatBirthDate(profile.date_of_birth)}
+              {profile.date_of_birth && formatCalendarDate(profile.date_of_birth)}
             </Fact>
             <Fact icon={UserRound} label="Sex at birth">
               {SEX_LABELS[profile.sex_at_birth] ?? profile.sex_at_birth}

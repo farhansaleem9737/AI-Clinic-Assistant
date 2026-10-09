@@ -1,10 +1,7 @@
 import { CalendarPlus, CalendarSync, Headset, KeyRound, UserRound } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-
-// Optional clinic contact details, set per deployment (frontend .env).
-const SUPPORT_EMAIL = import.meta.env.VITE_SUPPORT_EMAIL?.trim();
-const SUPPORT_PHONE = import.meta.env.VITE_SUPPORT_PHONE?.trim();
+import { SUPPORT_EMAIL, SUPPORT_PHONE, telHref } from "../utils/support";
 
 const TOPICS = [
   {
@@ -77,7 +74,7 @@ export default function Help() {
           <ul className="help-contact">
             {SUPPORT_PHONE && (
               <li>
-                Phone: <a href={`tel:${SUPPORT_PHONE.replace(/[^\d+]/g, "")}`}>{SUPPORT_PHONE}</a>
+                Phone: <a href={telHref(SUPPORT_PHONE)}>{SUPPORT_PHONE}</a>
               </li>
             )}
             {SUPPORT_EMAIL && (

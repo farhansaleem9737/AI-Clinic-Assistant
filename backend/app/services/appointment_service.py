@@ -54,6 +54,8 @@ class AppointmentView:
     doctor_title: str | None
     doctor_room: str | None
     specialization: str
+    years_of_experience: int
+    doctor_verified: bool
     department_id: uuid.UUID
     department_name: str
     timezone: str
@@ -100,6 +102,8 @@ def _view_query(doctor_user=None) -> Select:
             Doctor.title,
             Doctor.room_number,
             Doctor.specialization,
+            Doctor.years_of_experience,
+            Doctor.license_number,
             Department.id,
             Department.name,
             Department.timezone,
@@ -118,7 +122,10 @@ def _view_query(doctor_user=None) -> Select:
 
 
 def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
-    (appt, doctor_name, title, room, specialization, dept_id, dept_name, tz, mrn, first, last, dob, successor_id) = row
+    (
+        appt, doctor_name, title, room, specialization, experience, license_number,
+        dept_id, dept_name, tz, mrn, first, last, dob, successor_id,
+    ) = row
     ctx = Context(principal=principal, appointment=appt, now=now, timezone=ZoneInfo(tz))
     allowed, can_reschedule = appointment_state.allowed_actions(ctx)
     return AppointmentView(
@@ -127,6 +134,9 @@ def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
         doctor_title=title,
         doctor_room=room,
         specialization=specialization,
+        years_of_experience=experience,
+        # Same rule as the public directory (D58); the number is never exposed.
+        doctor_verified=bool(license_number),
         department_id=dept_id,
         department_name=dept_name,
         timezone=tz,
@@ -151,6 +161,24 @@ async def get_view(db: AsyncSession, principal: Principal, appointment_id: uuid.
     if row is None:
         raise NotFoundError("Appointment not found")
     return _to_view(row, principal, clock.utcnow())
+
+
+@dataclass(frozen=True)
+class AppointmentDetail:
+    view: AppointmentView
+    # None when the caller may see the appointment but not the patient record.
+    patient: Patient | None
+
+
+async def get_detail(db: AsyncSession, principal: Principal, appointment_id: uuid.UUID) -> AppointmentDetail:
+    """One appointment plus the patient's profile for the detail page. The
+    profile goes through the patient visibility rule, not the appointment's:
+    seeing a booking does not by itself grant reading the patient record."""
+    view = await get_view(db, principal, appointment_id)
+    patient = await db.scalar(
+        select(Patient).where(Patient.id == view.appointment.patient_id, access.patient_visibility(principal))
+    )
+    return AppointmentDetail(view=view, patient=patient)
 
 
 def _local_day_start(day: date) -> datetime:

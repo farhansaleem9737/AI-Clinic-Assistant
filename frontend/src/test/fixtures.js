@@ -16,12 +16,35 @@ export function appointment(overrides = {}) {
       specialization: "Cardiologist",
       department_id: "dep-1",
       department_name: "Cardiology",
+      years_of_experience: 10,
+      is_verified: true,
     },
     patient: { id: "pat-1", mrn: "MRN00000001", name: "John Doe", date_of_birth: "1990-01-01" },
+    cancellation_reason: null,
+    cancellation_note: null,
+    cancelled_at: null,
+    rescheduled_from_id: null,
+    rescheduled_to_id: null,
     allowed_transitions: [],
     can_reschedule: false,
+    created_at: "2026-09-28T10:00:00Z",
+    updated_at: "2026-09-28T10:00:00Z",
     ...overrides,
   };
+}
+
+// GET /appointments/{id} adds the patient's profile to the list shape.
+export function appointmentDetail(overrides = {}) {
+  return appointment({
+    patient_profile: {
+      sex_at_birth: "male",
+      gender_identity: null,
+      phone: "+1 234 567 890",
+      email: "john@example.com",
+      address: "123 Main St, City",
+    },
+    ...overrides,
+  });
 }
 
 export const page = (items) => ({ data: { items, total: items.length, page: 1, page_size: 20 } });

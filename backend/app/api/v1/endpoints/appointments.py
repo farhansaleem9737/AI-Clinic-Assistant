@@ -12,8 +12,11 @@ from app.models.appointment import AppointmentStatus
 from app.schemas.appointment import (
     AppointmentCounts,
     AppointmentCreate,
+    AppointmentDetailRead,
     AppointmentDoctor,
+    AppointmentPatientProfile,
     AppointmentRead,
+    AppointmentStaffDetailRead,
     AppointmentStaffRead,
     AppointmentUpdate,
     Reschedule,
@@ -23,7 +26,7 @@ from app.schemas.appointment import (
 from app.schemas.common import Page
 from app.schemas.patient import PatientSummary
 from app.services import appointment_service
-from app.services.appointment_service import AppointmentFilters, AppointmentScope, AppointmentView
+from app.services.appointment_service import AppointmentDetail, AppointmentFilters, AppointmentScope, AppointmentView
 from app.services.pagination import PageParams
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
@@ -33,9 +36,9 @@ READ = (Perm.appointment_read_own, Perm.appointment_read_assigned, Perm.appointm
 STAFF_VIEW = (Perm.appointment_read_any, Perm.appointment_read_assigned)
 
 
-def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
+def _fields(view: AppointmentView) -> dict:
     a = view.appointment
-    base = dict(
+    return dict(
         id=a.id,
         status=a.status,
         starts_at=a.starts_at,
@@ -50,6 +53,8 @@ def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
             specialization=view.specialization,
             department_id=view.department_id,
             department_name=view.department_name,
+            years_of_experience=view.years_of_experience,
+            is_verified=view.doctor_verified,
         ),
         patient=PatientSummary(id=a.patient_id, mrn=view.patient_mrn, name=view.patient_name, date_of_birth=view.patient_dob),
         cancellation_reason=a.cancellation_reason,
@@ -62,9 +67,25 @@ def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
         created_at=a.created_at,
         updated_at=a.updated_at,
     )
+
+
+def _staff_fields(view: AppointmentView) -> dict:
+    return dict(staff_notes=view.appointment.staff_notes, booked_by_user_id=view.appointment.booked_by_user_id)
+
+
+def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
     if principal.has_any(*STAFF_VIEW):
-        return AppointmentStaffRead(**base, staff_notes=a.staff_notes, booked_by_user_id=a.booked_by_user_id)
-    return AppointmentRead(**base)
+        return AppointmentStaffRead(**_fields(view), **_staff_fields(view))
+    return AppointmentRead(**_fields(view))
+
+
+def to_detail_response(detail: AppointmentDetail, principal: Principal) -> AppointmentDetailRead:
+    profile = (
+        AppointmentPatientProfile.model_validate(detail.patient, from_attributes=True) if detail.patient else None
+    )
+    if principal.has_any(*STAFF_VIEW):
+        return AppointmentStaffDetailRead(**_fields(detail.view), **_staff_fields(detail.view), patient_profile=profile)
+    return AppointmentDetailRead(**_fields(detail.view), patient_profile=profile)
 
 
 ResponseModel = AppointmentStaffRead | AppointmentRead
@@ -134,13 +155,15 @@ async def book_appointment(
     return to_response(view, principal)
 
 
-@router.get("/{appointment_id}", response_model=ResponseModel)
+@router.get("/{appointment_id}", response_model=AppointmentStaffDetailRead | AppointmentDetailRead)
 async def get_appointment(
     appointment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_any_permission(*READ)),
 ):
-    return to_response(await appointment_service.get_view(db, principal, appointment_id), principal)
+    """One appointment with the patient's profile (when the caller may read
+    the patient record). Lists and mutations return the lighter shape."""
+    return to_detail_response(await appointment_service.get_detail(db, principal, appointment_id), principal)
 
 
 @router.patch("/{appointment_id}", response_model=AppointmentStaffRead)

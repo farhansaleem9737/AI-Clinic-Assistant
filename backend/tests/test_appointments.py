@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import RoleCode
@@ -231,6 +231,73 @@ async def test_staff_notes_are_hidden_from_patients(client, clinic, book, as_):
     assert "Needs wheelchair access" not in patient_view.text
 
 
+# ============================== detail page ===========================================
+
+
+async def test_detail_carries_patient_profile_and_doctor_facts(client, clinic, book, db_session, make_patient):
+    from app.models.doctor import Doctor
+
+    patient = await make_patient(
+        first_name="Dana", last_name="Lee", with_account=True, sex_at_birth="female",
+        phone="+92 300 1234567", email="dana@example.com", address="12 Mall Road",
+    )
+    await db_session.execute(update(Doctor).where(Doctor.id == clinic.doctor_a.id).values(license_number="PMC-123"))
+    await db_session.commit()
+    created = (await book("reception", patient=patient)).json()["id"]
+
+    body = (await client.get(f"{BASE}{created}", headers=await clinic.headers_for(patient.user_id))).json()
+    assert body["patient"]["name"] == "Dana Lee"
+    assert body["patient_profile"] == {
+        "sex_at_birth": "female",
+        "gender_identity": None,
+        "phone": "+92 300 1234567",
+        "email": "dana@example.com",
+        "address": "12 Mall Road",
+    }
+    assert body["doctor"]["years_of_experience"] == 5
+    assert body["doctor"]["is_verified"] is True
+    assert "PMC-123" not in str(body)  # the licence itself is never sent
+    assert "staff_notes" not in body  # still the patient view
+
+
+async def test_lists_and_mutations_keep_the_lighter_shape(client, clinic, book, as_):
+    appointment = (await book("alice")).json()
+    assert "patient_profile" not in appointment
+    assert appointment["doctor"]["is_verified"] is False
+    listed = (await client.get(BASE, headers=await as_("alice"))).json()["items"]
+    assert listed and all("patient_profile" not in a for a in listed)
+    changed = await status(client, await as_("alice"), appointment["id"], "confirmed")
+    assert "patient_profile" not in changed.json()
+
+
+async def test_staff_and_doctor_detail_include_profile_and_notes(client, clinic, book, as_):
+    appointment = (await book("alice")).json()["id"]
+    for who in ("reception", "dr_a"):
+        body = (await client.get(f"{BASE}{appointment}", headers=await as_(who))).json()
+        assert body["patient_profile"]["sex_at_birth"] == "unknown"
+        assert "staff_notes" in body
+
+
+async def test_appointment_access_alone_does_not_reveal_the_patient_profile(client, clinic, book, make_role, make_user):
+    """A custom role that can read appointments but not patients sees the
+    booking, never the patient's contact details."""
+    from tests.conftest import login
+
+    appointment = (await book("alice")).json()["id"]
+    await make_role("appointment_viewer", ["appointment:read_any"])
+    viewer = await make_user("appointment_viewer")
+    body = (await client.get(f"{BASE}{appointment}", headers=await login(client, viewer.email))).json()
+    assert body["id"] == appointment
+    assert body["patient_profile"] is None
+
+
+async def test_unknown_appointment_is_404(client, clinic, as_):
+    for who in ("alice", "reception"):
+        response = await client.get(f"{BASE}{uuid.uuid4()}", headers=await as_(who))
+        assert response.status_code == 404
+    assert (await client.get(f"{BASE}not-a-uuid", headers=await as_("alice"))).status_code == 422
+
+
 async def test_role_without_appointment_permissions_is_403(client, make_role, make_user, clinic):
     from tests.conftest import login
 
@@ -332,6 +399,29 @@ async def test_doctor_can_cancel_own_appointment(client, clinic, book, as_):
     assert response.json()["status"] == "cancelled"
 
 
+async def test_cancelling_twice_is_rejected_and_the_first_cancellation_stands(client, clinic, book, as_):
+    appointment = (await book("alice")).json()["id"]
+    alice = await as_("alice")
+    first = await status(client, alice, appointment, "cancelled", cancellation_reason="patient_request", note="Travelling")
+    assert first.status_code == 200
+    again = await status(client, alice, appointment, "cancelled", cancellation_reason="other")
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "INVALID_TRANSITION"
+    current = (await client.get(f"{BASE}{appointment}", headers=alice)).json()
+    assert current["cancellation_reason"] == "patient_request"
+    assert current["cancellation_note"] == "Travelling"
+    assert current["allowed_transitions"] == [] and current["can_reschedule"] is False
+
+
+async def test_another_patient_cannot_cancel_or_reschedule(client, clinic, book, as_):
+    mine = (await book("alice")).json()["id"]
+    bob = await as_("bob")
+    assert (await status(client, bob, mine, "cancelled", cancellation_reason="patient_request")).status_code == 404
+    moved = await client.post(f"{BASE}{mine}/reschedule", json={"starts_at": iso(clinic.slot(4, "11:00"))}, headers=bob)
+    assert moved.status_code == 404
+    assert (await client.get(f"{BASE}{mine}", headers=await as_("alice"))).json()["status"] == "scheduled"
+
+
 async def test_cannot_cancel_via_status_with_rescheduled_reason(client, clinic, book, as_):
     appointment = (await book("alice")).json()["id"]
     response = await status(client, await as_("alice"), appointment, "cancelled", cancellation_reason="rescheduled")
@@ -379,6 +469,16 @@ async def test_reschedule_to_another_doctor_by_staff(client, clinic, book, as_):
     )
     assert response.status_code == 201
     assert response.json()["doctor"]["id"] == str(clinic.doctor_b.id)
+
+
+async def test_reschedule_outside_the_doctors_hours_is_refused(client, clinic, book, as_):
+    mine = (await book("alice")).json()["id"]
+    alice = await as_("alice")
+    for when in (clinic.slot(3, "03:00"), clinic.slot(3, "10:10"), clinic.slot(-1, "10:00")):
+        response = await client.post(f"{BASE}{mine}/reschedule", json={"starts_at": iso(when)}, headers=alice)
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "SLOT_UNAVAILABLE"
+    assert (await client.get(f"{BASE}{mine}", headers=alice)).json()["status"] == "scheduled"
 
 
 async def test_finished_appointments_cannot_be_rescheduled(client, clinic, book, as_, freeze_clock):

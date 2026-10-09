@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.models.appointment import AppointmentStatus, CancellationReason
+from app.models.patient import SexAtBirth
 from app.schemas.patient import PatientSummary
 
 
@@ -51,7 +52,9 @@ class Reschedule(BaseModel):
 class AppointmentDoctor(BaseModel):
     """The doctor as shown on an appointment. Appointment responses only ever
     reach people authorised for that appointment, so the room (where to go)
-    is included here even though it is not part of the public directory."""
+    is included here even though it is not part of the public directory.
+    ``is_verified`` follows the directory's rule (a licence is on file); the
+    licence number itself is never sent."""
 
     id: uuid.UUID
     name: str
@@ -60,6 +63,8 @@ class AppointmentDoctor(BaseModel):
     specialization: str
     department_id: uuid.UUID
     department_name: str
+    years_of_experience: int
+    is_verified: bool
 
 
 class AppointmentRead(BaseModel):
@@ -90,6 +95,31 @@ class AppointmentStaffRead(AppointmentRead):
 
     staff_notes: str | None
     booked_by_user_id: uuid.UUID
+
+
+class AppointmentPatientProfile(BaseModel):
+    """The patient's details beyond identification, for the appointment page.
+    Never clinical data, never the login."""
+
+    sex_at_birth: SexAtBirth
+    gender_identity: str | None
+    phone: str | None
+    email: str | None
+    address: str | None
+
+
+class _WithPatientProfile(BaseModel):
+    # Null when the caller may see the appointment but not the patient's
+    # record (a custom role with appointment but no patient permissions).
+    patient_profile: AppointmentPatientProfile | None
+
+
+class AppointmentDetailRead(AppointmentRead, _WithPatientProfile):
+    """Single-appointment view (patient). Lists keep the lighter shape."""
+
+
+class AppointmentStaffDetailRead(AppointmentStaffRead, _WithPatientProfile):
+    """Single-appointment view (staff and doctors)."""
 
 
 class StatusHistoryRead(BaseModel):
