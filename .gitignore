@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Python
 __pycache__/
@@ -9,20 +13,34 @@ __pycache__/
 venv/
 .venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+*.egg-info/
+build/
 
 # Node / Vite
 node_modules/
 dist/
 dist-ssr/
+coverage/
 *.local
 
 # Logs
 *.log
+
+# Database dumps
+backup/
+*.dump
+*.backup
+*.sqlite3
 
 # Editors / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
