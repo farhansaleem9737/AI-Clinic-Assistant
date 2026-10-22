@@ -8,6 +8,8 @@ from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.refresh_token import RefreshToken
 from app.models.schedule import ScheduleException, ScheduleTemplate
 from app.models.user import User
+from app.models.patient_document import PatientDocument
+from app.models.stored_file import StoredFile
 
 __all__ = [
     "Appointment",

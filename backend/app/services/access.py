@@ -10,13 +10,14 @@ appointments, even confirming that a record exists is a disclosure.
 
 import uuid
 
-from sqlalchemy import ColumnElement, false, or_, select, true
+from sqlalchemy import ColumnElement, false, or_, select, true, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.core.permissions import Perm, Principal
 from app.models.appointment import Appointment
 from app.models.patient import Patient
+from app.models.patient_document import PatientDocument
 
 
 def patient_visibility(principal: Principal) -> ColumnElement[bool]:
@@ -58,6 +59,56 @@ def appointment_visibility(principal: Principal) -> ColumnElement[bool]:
 
 async def get_readable_patient(db: AsyncSession, principal: Principal, patient_id: uuid.UUID) -> Patient:
     patient = await db.scalar(select(Patient).where(Patient.id == patient_id, patient_visibility(principal)))
+    if patient is None:
+        raise NotFoundError("Patient not found")
+    return patient
+
+
+# ---- Patient documents -------------------------------------------------------
+# Clinical content: the patient, and doctors with an appointment with them.
+# Each scope takes the patient-id column it filters (Patient.id or
+# PatientDocument.patient_id), so the same rule serves both queries.
+
+def _treated_patient_ids(doctor_id: uuid.UUID):
+    return select(Appointment.patient_id).where(Appointment.doctor_id == doctor_id)
+
+
+def _patient_scope(principal: Principal, patient_id, *, own: Perm, assigned: Perm) -> ColumnElement[bool]:
+    conditions=[]
+    if principal.has(own) and principal.patient_id is not None:
+        conditions.append(patient_id == principal.patient_id)
+    if principal.has(assigned) and principal.doctor_id is not None:
+        conditions.append(patient_id.in_(_treated_patient_ids(principal.doctor_id)))
+    return or_(*conditions) if conditions else false()
+
+def document_read_scope(principal: Principal, patient_id) -> ColumnElement[bool]:
+    return _patient_scope(
+        principal, patient_id, own=Perm.document_read_own, assigned=Perm.document_read_assigned
+    )
+
+def document_upload_scope(principal: Principal, patient_id) -> ColumnElement[bool]:
+    return _patient_scope(
+        principal, patient_id, own=Perm.document_upload_own, assigned=Perm.document_upload_assigned
+    )
+
+def  document_retract_scope(principal: Principal) -> ColumnElement[bool]:
+    """Patients retract only what they uploaded themselves; doctors anything
+    in the record of a patient they treat."""
+    conditions=[]
+    if principal.has(Perm.document_retract_own) and principal.patient_id is not None:
+        conditions.append(
+            and_(
+                PatientDocument.patient_id==principal.patient_id,
+                PatientDocument.uploaded_by_user_id==principal.user_id
+            )
+        )
+    if principal.has(Perm.document_retract_assigned) and principal.doctor_id is not None:
+        conditions.append(PatientDocument.patient_id.in_(_treated_patient_ids(principal.doctor_id)))
+    return or_(*conditions) if conditions else false()
+
+
+async def get_patient_in_scope(db: AsyncSession, patient_id: uuid.UUID, scope: ColumnElement[bool]) -> Patient:
+    patient=await db.scalar(select(Patient).where(Patient.id==patient_id, scope))
     if patient is None:
         raise NotFoundError("Patient not found")
     return patient

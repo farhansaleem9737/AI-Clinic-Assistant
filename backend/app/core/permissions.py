@@ -69,6 +69,14 @@ class Perm(StrEnum):
     appointment_check_in = "appointment:check_in"
     appointment_consult = "appointment:consult"
 
+    # Document
+    document_read_own="document:read_own"
+    document_upload_own="document:upload_own"
+    document_retract_own="document:retract_own"
+    document_read_assigned="document:read_assigned"
+    document_upload_assigned="document:upload_assigned"
+    document_retract_assigned="document:retract_assigned"
+
 
 @dataclass(frozen=True)
 class Principal:

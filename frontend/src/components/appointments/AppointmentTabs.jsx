@@ -49,7 +49,6 @@ function PatientInformation({ appointment: a, canOpenRecord }) {
           <Info label="Full Name">{a.patient.name}</Info>
           <Info label="Date of Birth">{formatCalendarDate(a.patient.date_of_birth)}</Info>
           {profile && <Info label="Sex at birth">{SEX_LABELS[profile.sex_at_birth] ?? profile.sex_at_birth}</Info>}
-          {profile?.gender_identity && <Info label="Gender identity">{profile.gender_identity}</Info>}
           <Info label="MRN">{a.patient.mrn}</Info>
         </dl>
         {profile ? (

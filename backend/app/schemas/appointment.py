@@ -102,7 +102,6 @@ class AppointmentPatientProfile(BaseModel):
     Never clinical data, never the login."""
 
     sex_at_birth: SexAtBirth
-    gender_identity: str | None
     phone: str | None
     email: str | None
     address: str | None

@@ -52,3 +52,8 @@ def setup_logging(level: str = "INFO") -> None:
     logging.getLogger("uvicorn.access").disabled = True
     # SQL statement logging is controlled by the SQL_ECHO setting, not LOG_LEVEL.
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+
+    # boto3/botocore debug logs include signed request details. Warnings and
+    # errors still come through; our own storage module logs ids and codes only.
+    for name in ("boto3","botocore","urllib3","s3transfer"):
+        logging.getLogger(name).setLevel(logging.WARNING)

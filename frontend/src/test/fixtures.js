@@ -38,7 +38,6 @@ export function appointmentDetail(overrides = {}) {
   return appointment({
     patient_profile: {
       sex_at_birth: "male",
-      gender_identity: null,
       phone: "+1 234 567 890",
       email: "john@example.com",
       address: "123 Main St, City",

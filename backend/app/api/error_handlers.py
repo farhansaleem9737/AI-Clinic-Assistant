@@ -23,6 +23,9 @@ from app.core.exceptions import (
     DomainError,
     NotFoundError,
     PermissionDeniedError,
+    StorageUnavailableError,
+    FileTooLargeError,
+    UnsupportedFileError
 )
 from app.core.logging import request_id_var
 
@@ -34,6 +37,9 @@ _STATUS_BY_EXCEPTION: dict[type[DomainError], int] = {
     BusinessRuleError: status.HTTP_400_BAD_REQUEST,
     AuthenticationError: status.HTTP_401_UNAUTHORIZED,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
+    StorageUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
+    UnsupportedFileError:status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
 }
 
 _CODE_BY_HTTP_STATUS = {

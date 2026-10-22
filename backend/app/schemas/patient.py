@@ -34,7 +34,6 @@ class PatientCreate(_Contact):
     last_name: str = Field(min_length=1, max_length=100)
     date_of_birth: date
     sex_at_birth: SexAtBirth = SexAtBirth.unknown
-    gender_identity: str | None = Field(default=None, max_length=50)
 
     _dob = field_validator("date_of_birth")(_validate_dob)
 
@@ -46,7 +45,6 @@ class PatientUpdate(_Contact):
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     date_of_birth: date | None = None
     sex_at_birth: SexAtBirth | None = None
-    gender_identity: str | None = Field(default=None, max_length=50)
 
     _dob = field_validator("date_of_birth")(_validate_dob)
 
@@ -104,12 +102,12 @@ class PatientRead(BaseModel):
     last_name: str
     date_of_birth: date
     sex_at_birth: SexAtBirth
-    gender_identity: str | None
     phone: str | None
     email: str | None
     address: str | None
     preferred_language: str | None
     has_account: bool
+    photo_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

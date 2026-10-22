@@ -8,15 +8,19 @@ from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
+from app.core.storage import Storage
+from app.models.stored_file import FileCategory
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.user import User
 from app.schemas.doctor import DoctorCreate, DoctorSelfUpdate, DoctorUpdate
-from app.services import appointment_service, auth_service, availability_service, rbac_service
+from app.services import appointment_service, auth_service, availability_service, rbac_service, file_service
 from app.services.availability_service import AvailabilityStatus, DoctorAvailability
 from app.services.pagination import PageParams, paginate
+from app.services.file_validation import CheckedFile
+
 
 logger = logging.getLogger(__name__)
 
@@ -283,4 +287,34 @@ async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> Do
     doctor.is_active = active
     await db.commit()
     logger.info("doctor_activated" if active else "doctor_deactivated", extra={"doctor_id": str(doctor.id)})
+    return await get_doctor(db, doctor.id)
+
+
+# ---- Profile photo ---------------------------------------------------------
+def own_doctor_id(principal: Principal) -> uuid.UUID:
+    if principal.doctor_id is None:
+        raise NotFoundError("You do not have a doctor profile", code="NO_DOCTOR_PROFILE")
+    return principal.doctor_id
+
+
+async def _doctor(db: AsyncSession, doctor_id: uuid.UUID) -> Doctor:
+    doctor= await db.get(Doctor, doctor_id)
+    if doctor is None:
+        raise NotFoundError("Doctor not found")
+    return doctor
+
+async def set_photo(
+        db: AsyncSession, storage: Storage, principal: Principal, doctor_id:uuid.UUID, checked:CheckedFile
+) -> DoctorRow:
+    doctor= await _doctor(db, doctor_id)
+    await file_service.replace_photo(
+        db, storage, doctor, category=FileCategory.doctor_photo, checked=checked, uploaded_by=principal.user_id
+    )
+    logger.info("doctor_photo_updated", extra={"doctor_id": str(doctor.id), "by" : str(principal.user_id)})
+    return await get_doctor(db, doctor.id)
+
+async def remove_photo(db: AsyncSession, storage: Storage, principal: Principal,doctor_id: uuid.UUID) -> DoctorRow:
+    doctor=await _doctor(db, doctor_id)
+    await file_service.remove_photo(db, storage, doctor)
+    logger.info("doctor_photo_removed", extra={"doctor_id": str(doctor.id), "by": str(principal.user_id)})
     return await get_doctor(db, doctor.id)

@@ -92,6 +92,8 @@ class DoctorPublic(BaseModel):
     # itself is never published.
     is_verified: bool
     availability: DoctorAvailabilityRead
+    # short_lived signed link to the profile photo; None shows the default avatar.
+    photo_url: str | None = None
 
 
 class DoctorExperienceRead(BaseModel):

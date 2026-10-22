@@ -3,10 +3,11 @@ import uuid
 from datetime import date
 
 from sqlalchemy import Boolean, Date, Enum, ForeignKey, Index, String, Uuid, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.stored_file import StoredFile
 
 
 class SexAtBirth(enum.StrEnum):
@@ -46,7 +47,6 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(SexAtBirth, name="sex_at_birth", values_callable=lambda e: [m.value for m in e]),
         default=SexAtBirth.unknown,
     )
-    gender_identity: Mapped[str | None] = mapped_column(String(50))
 
     # Contact details: may differ from the login email on User.
     phone: Mapped[str | None] = mapped_column(String(30), index=True)
@@ -59,6 +59,15 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Deactivated, never deleted (architecture §20).
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Profile photo in R2; NULL shows the initials/illustration avatar.
+    photo_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("stored_files.id", ondelete="RESTRICT"), unique=True
+    )
+    # Joined into every load of the profile, so responses can sign the photo
+    # URL without another query. (A future SELECT ... FOR UPDATE on this
+    # table must use with_for_update(of=<Model>): PostgreSQL refuses to lock
+    # the nullable side of an outer join.)
+    photo: Mapped[StoredFile | None] = relationship(lazy="joined")
 
     @property
     def full_name(self) -> str:

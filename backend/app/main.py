@@ -10,6 +10,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.database import engine
+from app.core.storage import close_storage
 
 setup_logging(settings.log_level)
 logger = logging.getLogger("app")
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     )
     yield
     await engine.dispose()
+    close_storage()
     logger.info("shutdown")
 
 

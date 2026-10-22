@@ -54,3 +54,18 @@ class PermissionDeniedError(DomainError):
     """Caller is known but not allowed to do this."""
 
     code = "PERMISSION_DENIED"
+
+class StorageUnavailableError(DomainError):
+    """file storage is not configured, or R2 did not answer. Retrying later may work. """
+
+    code = "STORAGE_UNAVAILABLE"
+
+class FileTooLargeError(DomainError):
+    code = "FILE_TOO_LARGE"
+
+class UnsupportedFileError(DomainError):
+    """The file's real content is not a type we accept, or it could not be read"""
+
+    code = "UNSUPPORTED_FILE"
+
+

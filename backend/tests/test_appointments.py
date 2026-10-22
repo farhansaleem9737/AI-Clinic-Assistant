@@ -249,7 +249,6 @@ async def test_detail_carries_patient_profile_and_doctor_facts(client, clinic, b
     assert body["patient"]["name"] == "Dana Lee"
     assert body["patient_profile"] == {
         "sex_at_birth": "female",
-        "gender_identity": None,
         "phone": "+92 300 1234567",
         "email": "dana@example.com",
         "address": "12 Mall Road",

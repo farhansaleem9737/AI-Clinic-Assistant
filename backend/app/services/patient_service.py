@@ -7,6 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import Principal, RoleCode
+from app.core.storage import Storage
+from app.models.stored_file import FileCategory
+from app.services.file_validation import CheckedFile
 from app.models.patient import Patient
 from app.models.user import User
 from app.schemas.patient import (
@@ -15,7 +18,7 @@ from app.schemas.patient import (
     PatientRegistration,
     PatientUpdate,
 )
-from app.services import access, appointment_service, auth_service, rbac_service
+from app.services import access, appointment_service, auth_service, rbac_service, file_service
 from app.services.pagination import PageParams, paginate
 
 logger = logging.getLogger(__name__)
@@ -199,3 +202,32 @@ async def create_account(
     await _commit_and_reload(db, patient)
     logger.info("patient_account_created", extra={"patient_id": str(patient.id), "by": str(principal.user_id)})
     return patient
+
+# ---- Profile photo ---------------------------------------------------------
+
+async def _set_photo(db:AsyncSession, storage:Storage, principal: Principal, patient: Patient, checked:CheckedFile) -> Patient:
+    await file_service.replace_photo(
+        db, storage, patient, category=FileCategory.patient_photo, checked=checked, uploaded_by=principal.user_id
+    )
+    logger.info("patient_photo_updated", extra={"patient_id": str(patient.id),"by": str(principal.user_id)})
+    return patient
+
+async def _remove_photo(db: AsyncSession, storage: Storage, principal:Principal, patient: Patient) ->Patient:
+    await file_service.remove_photo(db, storage, patient)
+    logger.info("patient_photo_removed", extra={"patient_id": str(patient.id), "by":str(principal.user_id)})
+    return patient
+
+async def set_patient_photo(
+        db: AsyncSession, storage: Storage, principal: Principal, patient_id: uuid.UUID, checked: CheckedFile
+) -> Patient:
+    return await _set_photo(db, storage, principal, await _get_for_update(db, patient_id), checked)
+
+async def remove_patient_photo(db:AsyncSession, storage: Storage, principal:Principal, patient_id: uuid.UUID) -> Patient:
+    return await _remove_photo(db, storage, principal, await _get_for_update(db, patient_id))
+
+async def set_own_photo(db: AsyncSession, storage: Storage, principal: Principal, checked: CheckedFile) -> Patient:
+    return await _set_photo(db, storage, principal, await get_own(db, principal), checked)
+
+
+async def remove_own_photo(db: AsyncSession, storage: Storage, principal: Principal) -> Patient:
+    return await _remove_photo(db, storage, principal, await get_own(db, principal))

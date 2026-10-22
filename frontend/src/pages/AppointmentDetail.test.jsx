@@ -116,7 +116,7 @@ describe("appointment data", () => {
     getAppointment.mockResolvedValue({
       data: appointmentDetail({
         doctor: { ...confirmed.doctor, room_number: null, years_of_experience: 0, is_verified: false },
-        patient_profile: { sex_at_birth: "unknown", gender_identity: null, phone: null, email: null, address: null },
+        patient_profile: { sex_at_birth: "unknown", phone: null, email: null, address: null },
       }),
     });
     renderPage();

@@ -2,10 +2,11 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Numeric, SmallInteger, String, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.stored_file import StoredFile
 
 
 class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -30,6 +31,18 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     phone: Mapped[str | None] = mapped_column(String(30))
     room_number: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Profile photo in R2; NULL shows the initials/illustration avatar.
+    photo_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("stored_files.id", ondelete="RESTRICT"), unique=True
+    )
+
+    # Joined into every load of the profile, so responses can sign the photo
+    # URL without another query. (A future SELECT ... FOR UPDATE on this
+    # table must use with_for_update(of=<Model>): PostgreSQL refuses to lock
+    # the nullable side of an outer join.)
+    photo: Mapped[StoredFile | None] = relationship(lazy="joined")
+
+
 
 
 class DoctorExperience(UUIDPrimaryKeyMixin, TimestampMixin, Base):
