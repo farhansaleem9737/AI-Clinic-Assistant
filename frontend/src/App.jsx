@@ -12,6 +12,7 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Departments from "./pages/Departments";
 import Doctors from "./pages/Doctors";
+import DoctorApplication from "./pages/DoctorApplication";
 import DoctorDetail from "./pages/DoctorDetail";
 import MyDoctorProfile from "./pages/MyDoctorProfile";
 import MyPatientProfile from "./pages/MyPatientProfile";
@@ -38,6 +39,7 @@ const PROTECTED_ROUTES = [
   { path: "/appointments/:id", element: <AppointmentDetail />, anyOf: APPOINTMENT_READ },
   { path: "/schedule", element: <DoctorSchedule />, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
   { path: "/doctor/profile", element: <MyDoctorProfile />, permission: "doctor:update_own" },
+  { path: "/doctor/application", element: <DoctorApplication />, permission: "doctor_application:manage_own" },
   { path: "/profile", element: <MyPatientProfile />, permission: "patient:read_own" },
   { path: "/patients", element: <Patients />, permission: "patient:read_any" },
   { path: "/patients/:id", element: <PatientDetail />, anyOf: ["patient:read_any", "patient:read_assigned"] },

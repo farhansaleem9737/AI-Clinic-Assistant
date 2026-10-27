@@ -1,4 +1,5 @@
-import { CalendarDays, ShieldQuestion } from "lucide-react";
+import { CalendarDays, ClipboardCheck, ShieldQuestion } from "lucide-react";
+import { Link } from "react-router-dom";
 import Alert from "../components/Alert";
 import EmptyState from "../components/EmptyState";
 import DoctorDashboard from "../components/dashboard/DoctorDashboard";
@@ -26,7 +27,8 @@ function greeting(hour) {
  * page cannot show a role's data the server did not send.
  */
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const applicant = can("doctor_application:manage_own");
   const { data: summary, loading, error } = useFetch(getDashboardSummary, []);
   const now = new Date();
   const firstName = user.name.replace(/^(Dr\.?|Prof\.?)\s+/i, "").split(" ")[0];
@@ -68,7 +70,24 @@ export default function Dashboard() {
         <div key={key}>{element}</div>
       ))}
 
-      {summary && sections.length === 0 && (
+      {/* A self-registered doctor has no clinical dashboard until verified (D77). */}
+      {summary && sections.length === 0 && applicant && (
+        <section className="card applicant-notice" aria-labelledby="applicant-notice-title">
+          <ClipboardCheck className="icon" size={28} aria-hidden="true" />
+          <div>
+            <h2 id="applicant-notice-title">Your doctor account is pending verification</h2>
+            <p className="muted">
+              Complete your professional details and upload your credentials. Patients can find and book you once the
+              clinic administration has approved your application.
+            </p>
+            <Link to="/doctor/application" className="button">
+              Go to my application
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {summary && sections.length === 0 && !applicant && (
         <div className="card">
           <EmptyState icon={ShieldQuestion}>
             Your account has no role with a dashboard yet. Ask an administrator to assign you one.

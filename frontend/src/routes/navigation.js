@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CalendarDays,
   CalendarPlus,
+  ClipboardCheck,
   LayoutDashboard,
   Settings2,
   ShieldCheck,
@@ -28,6 +29,8 @@ export const NAV_ITEMS = [
   { to: "/profile", label: "My Profile", icon: UserRound, permission: "patient:read_own" },
   // Only for logins that actually have a doctor profile.
   { to: "/doctor/profile", label: "My Profile", icon: UserRound, permission: "doctor:update_own", when: (user) => Boolean(user.doctor_id) },
+  // Self-registered doctors until an administrator verifies them (D77).
+  { to: "/doctor/application", label: "My Application", icon: ClipboardCheck, permission: "doctor_application:manage_own" },
   { to: "/admin/doctors", label: "Manage doctors", icon: UserCog, permission: "doctor:read" },
   { to: "/admin/departments", label: "Manage departments", icon: Settings2, permission: "department:manage" },
   { to: "/admin/users", label: "Users", icon: ShieldCheck, permission: "user:read" },
@@ -56,7 +59,13 @@ export function safeReturnPath(path) {
   return path;
 }
 
-const ROLE_LABELS = { patient: "Patient", doctor: "Doctor", receptionist: "Receptionist", admin: "Administrator" };
+const ROLE_LABELS = {
+  patient: "Patient",
+  doctor: "Doctor",
+  doctor_applicant: "Doctor (pending verification)",
+  receptionist: "Receptionist",
+  admin: "Administrator",
+};
 
 // "Patient", "Doctor, Administrator", ... for the signed-in user's roles.
 export function roleLabel(roles = []) {
@@ -68,5 +77,6 @@ export function roleLabel(roles = []) {
 export function profilePath(user, can) {
   if (can("patient:read_own")) return "/profile";
   if (can("doctor:update_own") && user.doctor_id) return "/doctor/profile";
+  if (can("doctor_application:manage_own")) return "/doctor/application";
   return null;
 }

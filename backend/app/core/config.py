@@ -26,6 +26,24 @@ class Environment(StrEnum):
     production = "production"
 
 
+# Everything DOCTOR_APPROVAL_REQUIREMENTS may name: application fields and
+# credential document types.
+DOCTOR_APPROVAL_REQUIREMENT_NAMES = (
+    "license_number",
+    "registration_authority",
+    "years_of_experience",
+    "qualifications",
+    "institution",
+    "bio",
+    "consultation_fee",
+    "languages",
+    "phone",
+    "registration_certificate",
+    "degree_certificate",
+    "supporting_document",
+)
+
+
 class Settings(BaseSettings):
     environment: Environment = Environment.development
 
@@ -93,7 +111,29 @@ class Settings(BaseSettings):
     max_photo_bytes:int = 5 * 1024 * 1024
     max_document_bytes:int = 20 * 1024 * 1024
 
+    # What a doctor application must contain before an administrator can
+    # approve it, on top of specialization and department (a doctor profile
+    # cannot exist without those). Comma-separated in .env, e.g.
+    # DOCTOR_APPROVAL_REQUIREMENTS=license_number,registration_certificate
+    # Registration itself never requires any of these (D77).
+    doctor_approval_requirements: Annotated[list[str], NoDecode] = []
+
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+
+    @field_validator("doctor_approval_requirements", mode="before")
+    @classmethod
+    def split_requirements(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("doctor_approval_requirements")
+    @classmethod
+    def known_requirements(cls, value: list[str]) -> list[str]:
+        unknown = sorted(set(value) - set(DOCTOR_APPROVAL_REQUIREMENT_NAMES))
+        if unknown:
+            raise ValueError(f"Unknown DOCTOR_APPROVAL_REQUIREMENTS: {', '.join(unknown)}")
+        return value
 
     @field_validator("cors_origins", mode="before")
     @classmethod

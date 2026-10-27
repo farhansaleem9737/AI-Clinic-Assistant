@@ -52,6 +52,7 @@ function renderRegister() {
 }
 
 const field = {
+  type: () => screen.getByLabelText("Account Type"),
   name: () => screen.getByLabelText("Full name"),
   dob: () => screen.getByLabelText("Date of birth"),
   email: () => screen.getByLabelText("Email address"),
@@ -63,7 +64,8 @@ const submit = () => screen.getByRole("button", { name: /^Create account|Creatin
 
 const VALID = { name: "Amina Khan", dob: "1990-05-17", email: "amina@example.com", password: "secret-123", confirm: "secret-123" };
 
-async function fill(values = VALID, { agree = true } = {}) {
+async function fill(values = VALID, { agree = true, type = "patient" } = {}) {
+  if (type) await userEvent.selectOptions(field.type(), type);
   for (const [key, value] of Object.entries(values)) {
     if (value) await userEvent.type(field[key](), value);
   }
@@ -104,13 +106,20 @@ describe("rendering", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
   });
 
-  it("shows the three benefits and offers no role choice", () => {
+  it("shows the three benefits and offers only Patient or Doctor as the account type", () => {
     renderRegister();
     for (const title of ["Trusted Doctors", "Easy Appointments", "Better Care"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     expect(screen.queryByLabelText(/role/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    const type = field.type();
+    expect(type).toHaveValue("");
+    expect(within(type).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Select your account type",
+      "Patient",
+      "Doctor",
+    ]);
+    expect(within(type).getByRole("option", { name: "Select your account type" })).toBeDisabled();
   });
 
   it("does not pre-tick consent, and links to the legal pages", () => {
@@ -131,6 +140,8 @@ describe("validation", () => {
   it("reports every problem next to its field and sends nothing", async () => {
     renderRegister();
     await userEvent.click(submit());
+    expect(screen.getByText("Choose an account type.")).toBeInTheDocument();
+    expect(field.type()).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByText("Enter your full name.")).toBeInTheDocument();
     expect(screen.getByText("Enter your date of birth.")).toBeInTheDocument();
     expect(screen.getByText("Enter a valid email address.")).toBeInTheDocument();
@@ -212,6 +223,7 @@ describe("creating an account", () => {
     expect(await screen.findByTestId("where")).toHaveTextContent("/dashboard");
 
     expect(api.post).toHaveBeenNthCalledWith(1, "/auth/register", {
+      account_type: "patient",
       first_name: "Amina Bibi",
       last_name: "Khan",
       date_of_birth: "1990-05-17",
@@ -340,5 +352,167 @@ describe("navigation", () => {
     );
     expect(screen.getByRole("heading", { name: "Terms of Service" })).toBeInTheDocument();
     expect(within(document.body).getByText("This document has not been published yet.")).toBeInTheDocument();
+  });
+});
+
+describe("registering as a doctor", () => {
+  const DEPARTMENTS = [
+    { id: "dep-1", name: "Cardiology" },
+    { id: "dep-2", name: "Neurology" },
+  ];
+  const DOCTOR = { name: "Sara Malik", email: "sara@example.com", password: "secret-123", confirm: "secret-123" };
+  const pdf = (name = "pmdc.pdf", size = 1000) => new File([new Uint8Array(size)], name, { type: "application/pdf" });
+
+  beforeEach(() => {
+    api.get.mockImplementation((url) =>
+      Promise.resolve(url.startsWith("/public/departments") ? { data: { items: DEPARTMENTS } } : { data: USER })
+    );
+  });
+
+  const chooseDoctor = () => userEvent.selectOptions(field.type(), "doctor");
+
+  it("shows the professional sections only for doctors, without a date of birth", async () => {
+    renderRegister();
+    expect(screen.queryByRole("region", { name: "Professional Information" })).not.toBeInTheDocument();
+    await chooseDoctor();
+    expect(screen.getByRole("region", { name: "Professional Information" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Professional Verification Documents" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Date of birth")).not.toBeInTheDocument();
+    // Every professional field says it is optional, and none is required.
+    for (const label of [/Medical License Number/, /Specialization/, /^Department/, /Years of Experience/, /Consultation Fee/]) {
+      const control = screen.getByLabelText(label);
+      expect(control).not.toBeRequired();
+      expect(document.querySelector(`label[for="${control.id}"]`)).toHaveTextContent("(optional)");
+    }
+    expect(await screen.findByRole("option", { name: "Cardiology" })).toBeInTheDocument();
+    expect(screen.getByText(/You can also provide these later/)).toBeInTheDocument();
+  });
+
+  it("keeps the common fields when switching account type", async () => {
+    renderRegister();
+    await chooseDoctor();
+    await userEvent.type(field.name(), "Sara Malik");
+    await userEvent.type(field.email(), "sara@example.com");
+    await userEvent.selectOptions(field.type(), "patient");
+    expect(field.name()).toHaveValue("Sara Malik");
+    expect(field.email()).toHaveValue("sara@example.com");
+    expect(screen.getByLabelText("Date of birth")).toBeInTheDocument();
+  });
+
+  it("creates the account with basic information only and explains the pending review", async () => {
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.click(submit());
+
+    expect(await screen.findByRole("heading", { name: "Doctor Account Created" })).toBeInTheDocument();
+    expect(screen.getByText(/pending verification/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue to my application" })).toHaveAttribute("href", "/doctor/application");
+    expect(api.post).toHaveBeenNthCalledWith(1, "/auth/register", {
+      account_type: "doctor",
+      name: "Sara Malik",
+      email: "sara@example.com",
+      password: "secret-123",
+    });
+    // Register and sign in, nothing else: no documents were chosen.
+    expect(api.post).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the optional details given and uploads the chosen documents after signing in", async () => {
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.type(screen.getByLabelText(/Medical License Number/), " PMC-1 ");
+    await screen.findByRole("option", { name: "Neurology" });
+    await userEvent.selectOptions(screen.getByLabelText(/^Department/), "dep-2");
+    await userEvent.type(screen.getByLabelText(/Years of Experience/), "7");
+    await userEvent.type(screen.getByLabelText(/Consultation Fee/), "2000");
+    await userEvent.upload(screen.getByLabelText("Medical Registration Certificate file"), pdf());
+    expect(screen.getByText("pmdc.pdf")).toBeInTheDocument();
+    await userEvent.click(submit());
+
+    expect(await screen.findByText(/^uploaded$/)).toBeInTheDocument();
+    expect(api.post.mock.calls[0][1]).toEqual({
+      account_type: "doctor",
+      name: "Sara Malik",
+      email: "sara@example.com",
+      password: "secret-123",
+      license_number: "PMC-1",
+      department_id: "dep-2",
+      years_of_experience: 7,
+      consultation_fee: "2000",
+    });
+    const [url, body] = api.post.mock.calls[2];
+    expect(url).toBe("/doctor-applications/me/documents");
+    expect(body.get("document_type")).toBe("registration_certificate");
+    expect(body.get("file").name).toBe("pmdc.pdf");
+  });
+
+  it("says honestly when a document could not be uploaded", async () => {
+    api.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: { access_token: "token" } })
+      .mockRejectedValueOnce({ response: { status: 503, data: { error: { code: "STORAGE_NOT_CONFIGURED" } } } });
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.upload(screen.getByLabelText("Medical Degree / Qualification Certificate file"), pdf("degree.pdf"));
+    await userEvent.click(submit());
+    expect(await screen.findByRole("heading", { name: "Doctor Account Created" })).toBeInTheDocument();
+    expect(screen.getByText(/not uploaded\. Document storage is not available right now\./)).toBeInTheDocument();
+    expect(screen.getByText(/upload these documents again/)).toBeInTheDocument();
+  });
+
+  it("rejects files of the wrong type or size before anything is sent", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    renderRegister();
+    await chooseDoctor();
+    const input = screen.getByLabelText("Additional Supporting Document file");
+    await user.upload(input, new File(["MZ"], "setup.exe", { type: "application/x-msdownload" }));
+    expect(screen.getByText("Choose a PDF, JPG, JPEG or PNG file.")).toBeInTheDocument();
+    await user.upload(input, pdf("huge.pdf", 20 * 1024 * 1024 + 1));
+    expect(screen.getByText(/The file must be .* or smaller\./)).toBeInTheDocument();
+    expect(screen.queryByText("huge.pdf")).not.toBeInTheDocument();
+  });
+
+  it("can remove a chosen document before submitting", async () => {
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.upload(screen.getByLabelText("Medical Registration Certificate file"), pdf());
+    await userEvent.click(screen.getByRole("button", { name: "Remove Medical Registration Certificate" }));
+    expect(screen.queryByText("pmdc.pdf")).not.toBeInTheDocument();
+    await userEvent.click(submit());
+    await screen.findByRole("heading", { name: "Doctor Account Created" });
+    expect(api.post).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks optional values only when they are given", async () => {
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.type(screen.getByLabelText(/Years of Experience/), "90");
+    await userEvent.click(submit());
+    expect(screen.getByText("Enter whole years from 0 to 80.")).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("never sends doctor details with a patient registration", async () => {
+    renderRegister();
+    await chooseDoctor();
+    await userEvent.type(screen.getByLabelText(/Medical License Number/), "PMC-9");
+    await userEvent.upload(screen.getByLabelText("Medical Registration Certificate file"), pdf());
+    await fill(VALID, { type: "patient" });
+    await userEvent.click(submit());
+    expect(await screen.findByTestId("where")).toHaveTextContent("/dashboard");
+    const sent = api.post.mock.calls[0][1];
+    expect(sent.account_type).toBe("patient");
+    expect(sent).not.toHaveProperty("license_number");
+    expect(sent).not.toHaveProperty("name");
+    expect(api.post.mock.calls.map(([url]) => url)).toEqual(["/auth/register", "/auth/login"]);
+  });
+
+  it("puts a server department error under the department field", async () => {
+    api.post.mockRejectedValueOnce(httpError(400, "DEPARTMENT_UNAVAILABLE", { field: "department_id" }));
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.click(submit());
+    expect(await screen.findByText("Choose one of the listed departments.")).toBeInTheDocument();
+    expect(submit()).toBeEnabled();
   });
 });

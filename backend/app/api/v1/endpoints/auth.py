@@ -12,10 +12,11 @@ from app.core.security import generate_csrf_token
 from app.core.storage import Storage, get_optional_storage
 from app.db.session import get_db
 from app.schemas.patient import PatientRegistration
+from app.schemas.registration import RegistrationRequest
 from app.schemas.user import AccessTokenResponse, MeResponse, UserLogin, UserResponse
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.services import auth_service, file_service, patient_service, rbac_service
+from app.services import auth_service, doctor_application_service, file_service, patient_service, rbac_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -79,10 +80,16 @@ def _access_response(access_token: str) -> AccessTokenResponse:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: PatientRegistration, db: AsyncSession = Depends(get_db)):
-    """Self-registration always creates a patient (login + patient profile).
-    Any "role" in the body is ignored; staff accounts are created by an admin."""
-    user = await patient_service.register_self(db, body)
+async def register(body: RegistrationRequest, db: AsyncSession = Depends(get_db)):
+    """Self-registration as a patient (login + patient profile) or as a
+    doctor applicant (login + pending application, no clinical access until
+    an administrator approves it, D77). `account_type` defaults to "patient";
+    any other value is rejected. Any "role" in the body is ignored; staff
+    accounts are created by an admin. No session is issued here."""
+    if isinstance(body, PatientRegistration):
+        user = await patient_service.register_self(db, body)
+    else:
+        user = await doctor_application_service.register(db, body)
     return UserResponse(
         id=user.id,
         name=user.name,

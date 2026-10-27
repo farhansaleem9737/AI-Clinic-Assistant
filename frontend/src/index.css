@@ -1194,3 +1194,64 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
   .pro-layout .info-card .info-list div { grid-template-columns: 112px minmax(0, 1fr); }
   .edit-grid, .readonly-box dl { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- Registration: account type, doctor sections (D77) ---- */
+.alert.info { color: var(--info); background: var(--info-bg); }
+.optional { color: var(--muted); font-weight: 400; font-size: 0.85em; }
+.input-icon select {
+  flex: 1; min-width: 0; border: 0; padding: 0.7rem 0; background: transparent; outline: none;
+  font-size: 1rem; color: var(--text);
+}
+.input-icon select:invalid, .input-icon select:has(option[value=""]:checked) { color: var(--muted); }
+.register-section { display: flex; flex-direction: column; gap: 0.8rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.register-section-title { margin: 0; font-size: 1.05rem; color: var(--heading); }
+.pro-fields { display: flex; flex-direction: column; gap: 0.8rem; }
+.pro-fields-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+.pro-fields .control { width: 100%; min-height: 48px; border-radius: 10px; font-size: 1rem; }
+.pro-fields textarea.control { min-height: 6.5rem; resize: vertical; }
+.pro-fields .control:focus { outline: 3px solid var(--accent-soft); border-color: var(--accent); }
+.pro-fields .control[aria-invalid="true"] { border-color: var(--danger); }
+.credential-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.credential-slot {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.45rem;
+  border: 1px dashed var(--border); border-radius: 12px; padding: 0.85rem 0.95rem;
+}
+.credential-head { display: flex; align-items: center; gap: 0.55rem; color: var(--accent); }
+.credential-label { color: var(--heading); font-weight: 600; font-size: 0.95rem; }
+.credential-file { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; width: 100%; }
+.credential-name { font-weight: 500; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credential-file progress { flex: 1 1 8rem; height: 8px; accent-color: var(--accent); }
+.credential-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+.credential-slot button { min-height: 40px; display: inline-flex; align-items: center; }
+.upload-results { list-style: none; margin: 0.75rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.92rem; }
+.upload-results .ok { color: var(--ok); }
+.upload-results .failed { color: var(--danger); }
+.register-done { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; text-align: center; }
+.register-done-icon { color: var(--ok); }
+.register-done .alert { text-align: left; }
+.register-done .button { margin-top: 0.5rem; }
+
+/* ---- Doctor application page ---- */
+.doctor-application .card { margin-bottom: 1rem; }
+.application-status .badge { flex: none; }
+.review-notes { background: var(--surface-2, #f5f7fb); border-radius: 8px; padding: 0.6rem 0.8rem; }
+.missing-list ul { margin: 0.35rem 0 0; padding-left: 1.2rem; }
+.application-details .row { margin-top: 1rem; }
+.uploaded-documents { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.uploaded-documents li {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem;
+}
+.uploaded-documents li > span { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.doctor-application .subhead { margin: 0.5rem 0 0.75rem; font-size: 1rem; }
+.application-documents .row { margin-top: 0.85rem; }
+.applicant-notice { display: flex; gap: 1rem; align-items: flex-start; }
+.applicant-notice .icon { color: var(--accent); flex: none; }
+.applicant-notice h2 { font-size: 1.2rem; margin: 0 0 0.35rem; }
+
+@media (max-width: 560px) {
+  .pro-fields-row { grid-template-columns: minmax(0, 1fr); }
+  .credential-actions { margin-left: 0; }
+  .uploaded-documents li { flex-direction: column; align-items: flex-start; }
+  .applicant-notice { flex-direction: column; }
+}

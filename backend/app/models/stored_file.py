@@ -12,6 +12,7 @@ class FileCategory(enum.StrEnum):
     doctor_photo = "doctor_photo"
     patient_photo = "patient_photo"
     patient_document = "patient_document"
+    doctor_credential = "doctor_credential"
 
 
 class FileStatus(enum.StrEnum):
@@ -26,7 +27,8 @@ class StoredFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """One object in R2. Bytes live in R2; this row is the metadata.
 
     Ownership is not stored here: the owning row points at the file
-    (doctors.photo_file_id, patients.photo_file_id, patient_documents.file_id),
+    (doctors.photo_file_id, patients.photo_file_id, patient_documents.file_id,
+    doctor_application_documents.file_id),
     and authorization follows that owner. URLs are never stored: they are
     signed when a response needs one.
     """

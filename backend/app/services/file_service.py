@@ -32,6 +32,7 @@ _KEY_PREFIX = {
     FileCategory.doctor_photo : "doctor-photos",
     FileCategory.patient_photo : "patient-photos",
     FileCategory.patient_document : "patient-documents",
+    FileCategory.doctor_credential : "doctor-credentials",
 }
 
 def object_key(category: FileCategory, owner_id: uuid.UUID, file_id: uuid.UUID, extension: str) -> str:

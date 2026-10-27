@@ -18,6 +18,9 @@ class RoleCode(StrEnum):
     doctor = "doctor"
     receptionist = "receptionist"
     admin = "admin"
+    # Self-registered as a doctor, credentials not yet verified. Holds no
+    # clinical permission: only their own application (D77).
+    doctor_applicant = "doctor_applicant"
 
 
 class Perm(StrEnum):
@@ -38,6 +41,10 @@ class Perm(StrEnum):
     doctor_update = "doctor:update"
     doctor_deactivate = "doctor:deactivate"
     doctor_update_own = "doctor:update_own"
+
+    # Doctor applications: self-registration, then credential review
+    doctor_application_manage_own = "doctor_application:manage_own"
+    doctor_application_review = "doctor_application:review"
 
     # Patients
     patient_read_own = "patient:read_own"

@@ -31,6 +31,8 @@ os.environ["DATABASE_URL"] = _test_url.render_as_string(hide_password=False)
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SQL_ECHO"] = "false"
 os.environ["CLINIC_TIMEZONE"] = "Asia/Karachi"
+# The approval policy under test is set per test, never taken from .env.
+os.environ["DOCTOR_APPROVAL_REQUIREMENTS"] = ""
 # Tests never reach the real bucket: storage stays unconfigured unless a test
 # installs the in-memory fake (`storage` fixture). Empty counts as unset.
 for _name in ("R2_ACCOUNT_ID", "R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"):

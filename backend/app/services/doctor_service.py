@@ -207,7 +207,7 @@ async def get_own_profile(db: AsyncSession, principal: Principal) -> DoctorRow:
     return await get_doctor(db, principal.doctor_id)
 
 
-async def _active_department(db: AsyncSession, department_id: uuid.UUID) -> Department:
+async def ensure_active_department(db: AsyncSession, department_id: uuid.UUID) -> Department:
     department = await db.get(Department, department_id)
     if department is None:
         raise NotFoundError("Department not found")
@@ -216,7 +216,7 @@ async def _active_department(db: AsyncSession, department_id: uuid.UUID) -> Depa
     return department
 
 
-async def _ensure_license_free(db: AsyncSession, license_number: str | None, exclude_id: uuid.UUID | None = None):
+async def ensure_license_free(db: AsyncSession, license_number: str | None, exclude_id: uuid.UUID | None = None):
     if not license_number:
         return
     query = select(Doctor.id).where(Doctor.license_number == license_number)
@@ -227,8 +227,8 @@ async def _ensure_license_free(db: AsyncSession, license_number: str | None, exc
 
 
 async def create_doctor(db: AsyncSession, principal: Principal, data: DoctorCreate) -> DoctorRow:
-    await _active_department(db, data.department_id)
-    await _ensure_license_free(db, data.license_number)
+    await ensure_active_department(db, data.department_id)
+    await ensure_license_free(db, data.license_number)
 
     if data.account is not None:
         user = await auth_service.create_user(
@@ -271,9 +271,9 @@ async def update_doctor(db: AsyncSession, doctor_id: uuid.UUID, data: DoctorUpda
         raise NotFoundError("Doctor not found")
     changes = data.model_dump(exclude_unset=True)
     if changes.get("department_id") is not None:
-        await _active_department(db, changes["department_id"])
+        await ensure_active_department(db, changes["department_id"])
     if "license_number" in changes:
-        await _ensure_license_free(db, changes["license_number"], exclude_id=doctor.id)
+        await ensure_license_free(db, changes["license_number"], exclude_id=doctor.id)
     for required in ("department_id", "specialization", "years_of_experience"):
         if required in changes and changes[required] is None:
             del changes[required]
@@ -295,7 +295,7 @@ async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> Do
     if doctor is None:
         raise NotFoundError("Doctor not found")
     if active:
-        await _active_department(db, doctor.department_id)
+        await ensure_active_department(db, doctor.department_id)
     elif upcoming := await appointment_service.count_upcoming(db, doctor_id=doctor.id):
         raise ConflictError(
             "This doctor has upcoming appointments; reschedule or cancel them first",
