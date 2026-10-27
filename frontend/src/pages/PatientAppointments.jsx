@@ -52,7 +52,7 @@ function AppointmentCard({ appointment: a, onCancel, onConfirm }) {
         <span className="dow">{day.weekday}</span>
       </span>
       <div className="appt-card-doctor">
-        <Avatar name={a.doctor.name} role="doctor" size={72} />
+        <Avatar name={a.doctor.name} role="doctor" size={72} src={a.doctor.photo_url} />
         <div>
           <h3>{name}</h3>
           <p>{a.doctor.specialization}</p>

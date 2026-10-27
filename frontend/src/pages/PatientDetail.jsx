@@ -10,8 +10,13 @@ import {
   createPatientAccount,
   deactivatePatient,
   getPatient,
+  removePatientPhoto,
   updatePatient,
+  uploadPatientPhoto,
 } from "../services/patientService";
+import Avatar from "../components/Avatar";
+import PatientDocuments from "../components/documents/PatientDocuments";
+import PhotoUploader from "../components/PhotoUploader";
 
 // Staff view of one patient: demographics, portal login, status.
 export default function PatientDetail() {
@@ -49,7 +54,8 @@ export default function PatientDetail() {
     }
   };
 
-  if (!patient) return error ? <Alert>{error}</Alert> : <p className="muted">Loading…</p>;
+  if (!patient)
+    return error ? <Alert>{error}</Alert> : <p className="muted">Loading…</p>;
 
   return (
     <div>
@@ -57,12 +63,31 @@ export default function PatientDetail() {
         <Link to="/patients">← Patients</Link>
       </p>
       <div className="card spread">
+        {can("patient:update") ? (
+          <PhotoUploader
+            name={`${patient.first_name} ${patient.last_name}`}
+            photoUrl={patient.photo_url}
+            onUpload={async (file) =>
+              setPatient((await uploadPatientPhoto(id, file)).data)
+            }
+            onRemove={async () =>
+              setPatient((await removePatientPhoto(id)).data)
+            }
+          />
+        ) : (
+          <Avatar
+            name={`${patient.first_name} ${patient.last_name}`}
+            src={patient.photo_url}
+            size={72}
+          />
+        )}
         <div>
           <h2>
             {patient.first_name} {patient.last_name}
           </h2>
           <p className="muted small">
-            {patient.mrn} · Born {patient.date_of_birth} · Portal login: {patient.has_account ? "yes" : "no"}
+            {patient.mrn} · Born {patient.date_of_birth} · Portal login:{" "}
+            {patient.has_account ? "yes" : "no"}
           </p>
         </div>
         <div className="row">
@@ -78,11 +103,21 @@ export default function PatientDetail() {
           )}
           {can("patient:deactivate") &&
             (patient.is_active ? (
-              <button className="danger" onClick={() => run(() => deactivatePatient(id), "Patient deactivated")}>
+              <button
+                className="danger"
+                onClick={() =>
+                  run(() => deactivatePatient(id), "Patient deactivated")
+                }
+              >
                 Deactivate
               </button>
             ) : (
-              <button className="secondary" onClick={() => run(() => activatePatient(id), "Patient activated")}>
+              <button
+                className="secondary"
+                onClick={() =>
+                  run(() => activatePatient(id), "Patient activated")
+                }
+              >
                 Activate
               </button>
             ))}
@@ -96,7 +131,10 @@ export default function PatientDetail() {
           className="card stack"
           onSubmit={(e) => {
             e.preventDefault();
-            run(() => updatePatient(id, patientPayload(form)), "Patient updated");
+            run(
+              () => updatePatient(id, patientPayload(form)),
+              "Patient updated",
+            );
           }}
         >
           <h3>Details</h3>
@@ -110,14 +148,30 @@ export default function PatientDetail() {
           className="card stack"
           onSubmit={async (e) => {
             e.preventDefault();
-            if (await run(() => createPatientAccount(id, account), "Portal login created")) setAccount({ email: "", password: "" });
+            if (
+              await run(
+                () => createPatientAccount(id, account),
+                "Portal login created",
+              )
+            )
+              setAccount({ email: "", password: "" });
           }}
         >
           <h3>Create portal login</h3>
-          <p className="muted small">Give the patient access to book and view their own appointments online.</p>
+          <p className="muted small">
+            Give the patient access to book and view their own appointments
+            online.
+          </p>
           <label>
             Login email
-            <input type="email" value={account.email} onChange={(e) => setAccount({ ...account, email: e.target.value })} required />
+            <input
+              type="email"
+              value={account.email}
+              onChange={(e) =>
+                setAccount({ ...account, email: e.target.value })
+              }
+              required
+            />
           </label>
           <label>
             Temporary password (min 8)
@@ -125,12 +179,21 @@ export default function PatientDetail() {
               type="password"
               minLength={8}
               value={account.password}
-              onChange={(e) => setAccount({ ...account, password: e.target.value })}
+              onChange={(e) =>
+                setAccount({ ...account, password: e.target.value })
+              }
               required
             />
           </label>
           <button type="submit">Create login</button>
         </form>
+      )}
+      {can("document:read_assigned") && (
+        <PatientDocuments
+          patientId={patient.id}
+          canUpload={can("document:upload_assigned")}
+          retract={can("document:retract_assigned") ? "any" : undefined}
+        />
       )}
     </div>
   );

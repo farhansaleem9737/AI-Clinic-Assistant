@@ -203,6 +203,73 @@ async def test_doctor_updates_only_permitted_own_fields(client, db_session, make
     assert (await client.patch(f"{STAFF}{other.id}", json={"bio": "x"}, headers=headers)).status_code == 403
 
 
+async def test_doctor_edits_languages_experience_and_qualifications_but_not_admin_fields(
+    client, db_session, make_doctor
+):
+    from tests.conftest import login_as
+
+    doctor = await make_doctor(specialization="Cardiologist", license_number="LIC-1", years_of_experience=5)
+    headers = await login_as(client, db_session, doctor.user_id)
+    response = await client.patch(
+        f"{STAFF}me",
+        json={
+            "languages": "  English, Urdu ",
+            "years_of_experience": 11,
+            "qualifications": "MBBS, FCPS",
+            "bio": "   ",
+            # Administration-managed: ignored.
+            "specialization": "Surgeon",
+            "license_number": "FAKE",
+            "is_active": False,
+            "is_verified": False,
+            "department_id": "00000000-0000-0000-0000-000000000000",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["languages"] == "English, Urdu"
+    assert body["years_of_experience"] == 11 and body["qualifications"] == "MBBS, FCPS"
+    assert body["bio"] is None  # blank clears
+    assert body["specialization"] == "Cardiologist" and body["license_number"] == "LIC-1"
+    assert body["is_active"] is True and body["is_verified"] is True
+
+    public = (await client.get(f"/api/v1/public/doctors/{doctor.id}")).json()
+    assert public["languages"] == "English, Urdu" and public["years_of_experience"] == 11
+
+    # Required fields cannot be emptied, and values are range-checked.
+    kept = await client.patch(f"{STAFF}me", json={"years_of_experience": None}, headers=headers)
+    assert kept.json()["years_of_experience"] == 11
+    for bad in ({"years_of_experience": -1}, {"years_of_experience": 81}, {"languages": "x" * 201}):
+        assert (await client.patch(f"{STAFF}me", json=bad, headers=headers)).status_code == 422
+
+
+async def test_me_and_appointments_carry_the_doctors_photo(client, storage, clinic, monkeypatch):
+    from app.api.v1.endpoints import appointments as appointments_endpoints
+    from tests.fakes import image_bytes
+
+    # Appointment responses sign photos through the storage module directly.
+    monkeypatch.setattr(appointments_endpoints, "get_optional_storage", lambda: storage)
+
+    doctor_headers = await clinic.headers_for(clinic.doctor_a.user_id)
+    upload = await client.put(
+        f"{STAFF}me/photo", files={"file": ("me.png", image_bytes(), "image/png")}, headers=doctor_headers
+    )
+    assert upload.status_code == 200
+    me = (await client.get("/api/v1/auth/me", headers=doctor_headers)).json()
+    assert me["photo_url"].startswith("https://fake-r2.test/doctor-photos/")
+
+    alice = await clinic.headers_for(clinic.patient_a.user_id)
+    booked = await client.post(
+        "/api/v1/appointments/",
+        json={"doctor_id": str(clinic.doctor_a.id), "starts_at": clinic.slot().isoformat()},
+        headers=alice,
+    )
+    assert booked.status_code == 201
+    assert booked.json()["doctor"]["photo_url"].startswith("https://fake-r2.test/doctor-photos/")
+    assert (await client.get("/api/v1/auth/me", headers=alice)).json()["photo_url"] is None  # no photo yet
+
+
 async def test_doctor_without_profile_gets_404_on_me(client, auth_headers):
     headers = await auth_headers(RoleCode.doctor)
     response = await client.get(f"{STAFF}me", headers=headers)

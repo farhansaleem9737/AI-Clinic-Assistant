@@ -258,7 +258,7 @@ export default function AppointmentDetail() {
 
       <section className="card appt-summary" aria-label="Appointment summary">
         <div className="appt-summary-doctor">
-          <Avatar name={a.doctor.name} role="doctor" size={112} />
+          <Avatar name={a.doctor.name} role="doctor" size={112} src={a.doctor.photo_url} />
           <div>
             <h2>
               {name}
@@ -417,7 +417,7 @@ export default function AppointmentDetail() {
             <h3 id="doctor-information">Doctor Information</h3>
           </div>
           <div className="doctor-mini">
-            <Avatar name={a.doctor.name} role="doctor" size={80} />
+            <Avatar name={a.doctor.name} role="doctor" size={80} src={a.doctor.photo_url} />
             <div>
               <h4>
                 {name}

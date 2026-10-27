@@ -186,6 +186,19 @@ async def test_calendar_leaves_out_booked_times_and_leave(client, db_session, cl
     # Nothing about the booking itself is returned.
     response = await calendar(client, clinic.doctor_a.id, day3, day3)
     assert "patient" not in response.text and str(clinic.patient_b.id) not in response.text
+    # The taken time is listed as unavailable (greyed out), never as free.
+    [entry] = response.json()["days"]
+    assert [s["starts_at"] for s in entry["unavailable"]] == [iso(clinic.slot(3, "10:00"))]
+
+
+async def test_calendar_greys_out_times_inside_the_booking_notice(client, clinic, freeze_clock):
+    freeze_clock(clinic.slot(0, "12:00"))  # one hour's notice: 13:00 is the first bookable time today
+    response = await calendar(client, clinic.doctor_a.id, clinic.today, clinic.today)
+    [today] = response.json()["days"]
+    assert today["slots"][0]["starts_at"] == iso(clinic.slot(0, "13:00"))
+    unavailable = [s["starts_at"] for s in today["unavailable"]]
+    assert iso(clinic.slot(0, "09:00")) in unavailable and iso(clinic.slot(0, "12:30")) in unavailable
+    assert iso(clinic.slot(0, "13:00")) not in unavailable
 
 
 async def test_calendar_stops_at_the_booking_horizon(client, clinic):
@@ -267,3 +280,73 @@ async def test_times_not_offered_by_the_calendar_cannot_be_booked(client, clinic
         )
         assert response.status_code == 409, when
         assert response.json()["error"]["code"] == "SLOT_UNAVAILABLE"
+
+
+
+# ---- career history management ---------------------------------------------------------
+
+CAREER = {
+    "experience": [
+        {"title": "Resident", "organization": "  Teaching Hospital ", "start_year": 2014, "end_year": 2016},
+        {"title": "Senior Cardiologist", "organization": "City General", "location": "Lahore", "start_year": 2020},
+        {"title": "Consultant", "organization": "Heart Centre", "start_year": 2016, "end_year": 2020, "description": ""},
+    ],
+    "education": [
+        {"qualification": "MBBS", "institution": "King Edward Medical University", "end_year": 2011},
+        {"qualification": "FCPS", "field_of_study": "Cardiology", "institution": "CPSP", "start_year": 2012, "end_year": 2014},
+    ],
+}
+
+
+async def test_doctor_replaces_own_career_and_the_profile_shows_it_newest_first(client, db_session, make_doctor):
+    from tests.conftest import login_as
+
+    doctor = await make_doctor(name="Career Owner")
+    headers = await login_as(client, db_session, doctor.user_id)
+    saved = await client.put("/api/v1/doctors/me/career", json=CAREER, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert [e["title"] for e in saved.json()["experience"]] == ["Senior Cardiologist", "Consultant", "Resident"]
+    assert saved.json()["experience"][2]["organization"] == "Teaching Hospital"  # trimmed
+    assert saved.json()["experience"][1]["description"] is None  # blank -> none
+
+    public = (await client.get(f"{PUBLIC}{doctor.id}")).json()
+    assert [e["qualification"] for e in public["education"]] == ["FCPS", "MBBS"]
+    assert (await client.get("/api/v1/doctors/me/career", headers=headers)).json() == saved.json()
+
+    # Replacing again removes what is no longer listed.
+    cleared = await client.put("/api/v1/doctors/me/career", json={"experience": [], "education": []}, headers=headers)
+    assert cleared.json() == {"experience": [], "education": []}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"experience": [{"title": "X", "organization": "Y", "start_year": 2020, "end_year": 2019}]},
+        {"experience": [{"title": " ", "organization": "Y", "start_year": 2020}]},
+        {"experience": [{"title": "X", "organization": "Y", "start_year": 1900}]},
+        {"education": [{"qualification": "MBBS", "institution": "Z", "start_year": 2011, "end_year": 2006}]},
+    ],
+)
+async def test_invalid_career_entries_are_422(client, db_session, make_doctor, bad):
+    from tests.conftest import login_as
+
+    doctor = await make_doctor(name="Career Invalid")
+    headers = await login_as(client, db_session, doctor.user_id)
+    assert (await client.put("/api/v1/doctors/me/career", json=bad, headers=headers)).status_code == 422
+
+
+async def test_only_the_doctor_or_staff_with_doctor_update_can_edit_a_career(client, auth_headers, make_doctor, db_session):
+    from app.core.permissions import RoleCode
+    from tests.conftest import login_as
+
+    owner = await make_doctor(name="Career Target")
+    other = await make_doctor(name="Career Other")
+    url = f"/api/v1/doctors/{owner.id}/career"
+    other_headers = await login_as(client, db_session, other.user_id)
+    assert (await client.put(url, json=CAREER, headers=other_headers)).status_code == 403
+    assert (await client.put(url, json=CAREER, headers=await auth_headers(RoleCode.patient))).status_code == 403
+    assert (await client.put(url, json=CAREER)).status_code == 401
+    assert (await client.put("/api/v1/doctors/me/career", json=CAREER, headers=await auth_headers(RoleCode.patient))).status_code == 403
+
+    admin = await client.put(url, json=CAREER, headers=await auth_headers(RoleCode.admin))
+    assert admin.status_code == 200 and len(admin.json()["experience"]) == 3

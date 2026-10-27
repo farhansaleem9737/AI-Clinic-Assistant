@@ -10,6 +10,30 @@ export function formatTime(iso, timeZone) {
   return new Intl.DateTimeFormat(undefined, { timeStyle: "short", timeZone }).format(new Date(iso));
 }
 
+// "09:00 AM": a slot button label (two-digit hour, so a grid of times lines up).
+export function formatSlotTime(iso, timeZone) {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", timeZone }).format(new Date(iso));
+}
+
+// "(GMT+05:00) Pakistan Standard Time" for an IANA zone, as it applies at
+// `atIso` (so daylight-saving changes show correctly). Falls back to the
+// zone id when the browser cannot name it.
+export function timeZoneLabel(timeZone, atIso = new Date().toISOString()) {
+  const part = (style) =>
+    new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: style })
+      .formatToParts(new Date(atIso))
+      .find((p) => p.type === "timeZoneName")?.value;
+  try {
+    const offset = part("longOffset");
+    const name = part("long");
+    if (!offset) return timeZone;
+    const gmt = offset === "GMT" ? "GMT+00:00" : offset;
+    return name && name !== offset ? `(${gmt}) ${name}` : `(${gmt}) ${timeZone}`;
+  } catch {
+    return timeZone;
+  }
+}
+
 // "Wednesday, October 7, 2026" for an instant, in the given timezone.
 export function formatLongDate(iso, timeZone) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone }).format(new Date(iso));

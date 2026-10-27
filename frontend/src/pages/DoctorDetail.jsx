@@ -74,7 +74,9 @@ export default function DoctorDetail() {
       />
 
       <section className="card doctor-summary" aria-label="Summary">
-        <Avatar name={doctor.name} role="doctor" size={128} />
+        <div className="doctor-portrait">
+          <Avatar name={doctor.name} role="doctor" size={196} src={doctor.photo_url} alt={`Photo of ${name}`} />
+        </div>
         <div className="doctor-summary-main">
           <h1>
             {name}
@@ -113,12 +115,14 @@ export default function DoctorDetail() {
               </li>
             )}
           </ul>
+          <div className="doctor-summary-badges">
+            <span className={`badge status ${badge.tone}`}>
+              <span className="dot" aria-hidden="true" />
+              {badge.label}
+            </span>
+          </div>
         </div>
         <div className="doctor-summary-side">
-          <span className={`badge status ${badge.tone}`}>
-            <span className="dot" aria-hidden="true" />
-            {badge.label}
-          </span>
           {mayBook && (
             <button type="button" className="large" onClick={() => focusBooking(bookingHeading.current)}>
               <CalendarPlus size={18} aria-hidden="true" /> Book appointment

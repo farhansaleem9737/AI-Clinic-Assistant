@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from app.models.appointment import AppointmentStatus, CancellationReason
 from app.models.patient import SexAtBirth
@@ -14,7 +14,16 @@ class AppointmentCreate(BaseModel):
     starts_at: AwareDatetime
     # Staff must name the patient; patients book for themselves and may omit it.
     patient_id: uuid.UUID | None = None
+    # The patient's own words, optional. At most 500 characters.
     reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def blank_reason_is_none(cls, value: str | None) -> str | None:
+        # Surrounding whitespace is dropped; a reason of only spaces is no reason.
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class AppointmentUpdate(BaseModel):
@@ -62,6 +71,7 @@ class AppointmentDoctor(BaseModel):
     room_number: str | None
     specialization: str
     department_id: uuid.UUID
+    photo_url: str | None = None
     department_name: str
     years_of_experience: int
     is_verified: bool

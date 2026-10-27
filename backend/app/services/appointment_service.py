@@ -35,6 +35,7 @@ from app.models.appointment import (
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.stored_file import StoredFile
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreate, AppointmentUpdate, Reschedule, StatusChange
 from app.services import access, appointment_state, availability_service
@@ -65,6 +66,8 @@ class AppointmentView:
     rescheduled_to_id: uuid.UUID | None
     allowed_transitions: list[str]
     can_reschedule: bool
+    # Object key of the doctor's profile photo, if any (signed by the endpoint).
+    doctor_photo_key: str | None = None
 
 
 class AppointmentScope(StrEnum):
@@ -112,19 +115,21 @@ def _view_query(doctor_user=None) -> Select:
             Patient.last_name,
             Patient.date_of_birth,
             _Successor.id,
+            StoredFile.object_key,
         )
         .join(Doctor, Doctor.id == Appointment.doctor_id)
         .join(doctor_user, doctor_user.id == Doctor.user_id)
         .join(Department, Department.id == Doctor.department_id)
         .join(Patient, Patient.id == Appointment.patient_id)
         .outerjoin(_Successor, _Successor.rescheduled_from_id == Appointment.id)
+        .outerjoin(StoredFile, StoredFile.id == Doctor.photo_file_id)
     )
 
 
 def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
     (
         appt, doctor_name, title, room, specialization, experience, license_number,
-        dept_id, dept_name, tz, mrn, first, last, dob, successor_id,
+        dept_id, dept_name, tz, mrn, first, last, dob, successor_id, photo_key,
     ) = row
     ctx = Context(principal=principal, appointment=appt, now=now, timezone=ZoneInfo(tz))
     allowed, can_reschedule = appointment_state.allowed_actions(ctx)
@@ -146,6 +151,7 @@ def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
         rescheduled_to_id=successor_id,
         allowed_transitions=allowed,
         can_reschedule=can_reschedule,
+        doctor_photo_key=photo_key,
     )
 
 

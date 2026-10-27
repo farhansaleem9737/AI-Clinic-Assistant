@@ -38,7 +38,7 @@ export default function RecentAppointments({ showPatient = false }) {
                   <td>
                     <span className="row" style={{ flexWrap: "nowrap" }}>
                       <span className="hide-sm">
-                        <Avatar name={showPatient ? a.patient.name : a.doctor.name} role={showPatient ? undefined : "doctor"} size={30} />
+                        <Avatar name={showPatient ? a.patient.name : a.doctor.name} role={showPatient ? undefined : "doctor"} size={30} src={showPatient ? undefined : a.doctor.photo_url} />
                       </span>
                       {showPatient ? a.patient.name : doctorName(a.doctor)}
                     </span>

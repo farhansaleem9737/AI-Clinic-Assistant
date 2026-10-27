@@ -43,6 +43,7 @@ export default function AppointmentList({ appointments, perspective = "patient",
               name={showPatient ? a.patient.name : a.doctor.name}
               role={showPatient ? undefined : "doctor"}
               size={52}
+              src={showPatient ? undefined : a.doctor.photo_url}
             />
             <div className="who">
               <strong>{headline}</strong>

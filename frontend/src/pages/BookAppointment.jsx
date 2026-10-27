@@ -1,163 +1,185 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
-import Avatar from "../components/Avatar";
+import BookingStepper from "../components/booking/BookingStepper";
+import BookingSuccess from "../components/booking/BookingSuccess";
+import ConfirmStep from "../components/booking/ConfirmStep";
+import DateTimeStep from "../components/booking/DateTimeStep";
+import DoctorPicker from "../components/booking/DoctorPicker";
 import SlotPicker from "../components/SlotPicker";
 import { useAuth } from "../context/useAuth";
-import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { bookAppointment } from "../services/appointmentService";
 import { getPublicDepartments } from "../services/departmentService";
-import { getPublicAvailability, getPublicDoctor, getPublicDoctors } from "../services/doctorService";
+import { getPublicDoctor, getPublicDoctors } from "../services/doctorService";
 import { getPatient, listPatients } from "../services/patientService";
-import { addDays, formatDateTime, isoDateIn } from "../utils/datetime";
+import { formatDateTime } from "../utils/datetime";
 import { doctorName, formatFee } from "../utils/format";
 
 const BOOKED_NOTICE = { state: { notice: "Your appointment is booked." } };
 
 /**
- * Patients who chose a doctor and time on the doctor's profile land on a
- * confirmation step; everyone else gets the full booking form. Staff
- * (appointment:create) always use the form, because they pick the patient.
+ * Patients book in three steps: Select Doctor → Date & Time → Confirm.
+ * Staff (appointment:create) use the full form, because they pick the patient.
  */
 export default function BookAppointment() {
   const { can } = useAuth();
   const [params] = useSearchParams();
-  const doctorId = params.get("doctor");
-  const startsAt = params.get("slot");
-  if (!can("appointment:create") && doctorId && startsAt) {
-    return <BookingReview key={`${doctorId} ${startsAt}`} doctorId={doctorId} startsAt={startsAt} />;
-  }
-  return <BookingForm />;
+  if (can("appointment:create")) return <BookingForm />;
+  // A new link (e.g. "Book" on another doctor) starts a fresh booking.
+  return <BookingWizard key={params.toString()} />;
 }
 
-// The confirmation step: shows what will be booked. Nothing is booked until
-// "Confirm appointment", and the server re-checks the time then.
-function BookingReview({ doctorId, startsAt }) {
-  const { user } = useAuth();
+/**
+ * The patient booking wizard. `?doctor=<id>` (from the directory or a
+ * profile) starts at step 2 with that doctor, once the API confirms it is
+ * bookable; `&slot=<time>` (chosen on the profile) goes straight to the
+ * confirm step, which re-checks the time. Nothing is booked before
+ * "Confirm Booking".
+ */
+function BookingWizard() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const handoffDoctorId = params.get("doctor");
+  const handoffSlot = params.get("slot");
+
+  const [step, setStep] = useState(1);
+  const [doctor, setDoctor] = useState(null);
+  const [slot, setSlot] = useState(null);
+  // The optional reason typed on step 3; kept while moving between steps.
   const [reason, setReason] = useState("");
-  const [error, setError] = useState("");
-  const [taken, setTaken] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [notice, setNotice] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [booked, setBooked] = useState(null);
+  const [handoffLoading, setHandoffLoading] = useState(Boolean(handoffDoctorId));
+  const [handoffError, setHandoffError] = useState("");
 
-  const valid = !Number.isNaN(Date.parse(startsAt));
-  const day = valid ? isoDateIn(startsAt) : null;
-  const doctorFetch = useFetch(() => getPublicDoctor(doctorId), [doctorId]);
-  // Free times around the chosen instant (the clinic's date can differ from
-  // the browser's): confirms it is still offered and gives its timezone.
-  const check = useFetch(() => getPublicAvailability(doctorId, addDays(day, -1), addDays(day, 1)), [doctorId, day], {
-    enabled: valid,
-  });
+  // Validate a doctor handed over in the URL against the API; never trust the id itself.
+  useEffect(() => {
+    if (!handoffDoctorId) return;
+    let cancelled = false;
+    getPublicDoctor(handoffDoctorId)
+      .then((res) => {
+        if (cancelled) return;
+        setDoctor(res.data);
+        if (handoffSlot && !Number.isNaN(Date.parse(handoffSlot))) {
+          setSlot({ starts_at: handoffSlot });
+          setStep(3);
+        } else {
+          setStep(2);
+          if (handoffSlot) setNotice("That appointment link is not valid. Please choose a time.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHandoffError("That doctor is not available for booking. Please choose another doctor.");
+      })
+      .finally(() => !cancelled && setHandoffLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [handoffDoctorId, handoffSlot]);
 
-  const doctor = doctorFetch.data;
-  const offered = check.data?.days
-    .flatMap((d) => d.slots)
-    .find((s) => Date.parse(s.starts_at) === Date.parse(startsAt));
-  const timezone = check.data?.timezone;
-  const backToProfile = `/doctors/${doctorId}#book`;
-
-  if (!valid || doctorFetch.status === 404 || doctorFetch.status === 422) {
-    return (
-      <div className="card booking-review">
-        <h2>Book an appointment</h2>
-        <Alert>That appointment link is not valid.</Alert>
-        <Link to="/doctors" className="button secondary">
-          Find a doctor
-        </Link>
-      </div>
-    );
-  }
-  if (doctorFetch.error || check.error) {
-    return (
-      <div className="card booking-review">
-        <h2>Book an appointment</h2>
-        <Alert>{doctorFetch.error || check.error}</Alert>
-        <Link to={backToProfile} className="button secondary">
-          Back to the doctor
-        </Link>
-      </div>
-    );
-  }
-  if (!doctor || !check.data) return <div className="card skeleton" style={{ height: 320 }} role="status" aria-label="Loading" />;
-
-  const name = doctorName(doctor);
-  if (!offered || taken) {
-    return (
-      <div className="card booking-review">
-        <h2>Book an appointment</h2>
-        <Alert kind="warn">
-          {taken
-            ? "Sorry, this time was just booked by someone else. Please choose another time."
-            : "This time is no longer available. Please choose another time."}
-        </Alert>
-        <Link to={backToProfile} className="button">
-          Choose another time
-        </Link>
-      </div>
-    );
-  }
-
-  const confirm = async () => {
-    setError("");
-    setSubmitting(true);
-    try {
-      const body = { doctor_id: doctor.id, starts_at: offered.starts_at, reason: reason.trim() || null };
-      const res = await bookAppointment(body, idempotencyKey);
-      navigate(`/appointments/${res.data.id}`, BOOKED_NOTICE);
-    } catch (err) {
-      if (err.response?.status === 409) setTaken(true);
-      else setError(getErrorMessage(err, "Booking failed"));
-    } finally {
-      setSubmitting(false);
+  // Move focus to the new step so keyboard and screen-reader users follow along.
+  const card = useRef(null);
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
     }
+    card.current?.focus();
+  }, [step, booked]);
+
+  // Back from step 1: wherever the user came from, or the dashboard.
+  const leave = () => (location.key === "default" ? navigate("/dashboard") : navigate(-1));
+  const chooseDoctor = useCallback((next) => {
+    setDoctor(next);
+    setSlot(null);
+  }, []);
+  const toStep = (next) => {
+    setNotice("");
+    setStep(next);
+  };
+  // The doctor stopped taking bookings meanwhile: back to choosing a doctor.
+  const doctorGone = (message) => {
+    setDoctor(null);
+    setSlot(null);
+    setHandoffError(message);
+    setStep(1);
+  };
+  // The time was taken or withdrawn: back to step 2 with fresh times.
+  const slotUnavailable = (message) => {
+    setSlot(null);
+    setNotice(message);
+    setRefreshKey((n) => n + 1);
+    setStep(2);
   };
 
+  let content;
+  let plainStep = false;
+  if (handoffLoading) {
+    content = <div className="skeleton" style={{ height: 320 }} role="status" aria-label="Loading" />;
+  } else if (booked) {
+    content = <BookingSuccess appointment={booked} />;
+  } else if (step === 1 || !doctor) {
+    content = (
+      <>
+        <Alert>{handoffError}</Alert>
+        <DoctorPicker selected={doctor} onSelect={chooseDoctor} onBack={leave} onContinue={() => toStep(2)} />
+      </>
+    );
+  } else if (step === 2 || !slot) {
+    plainStep = true;
+    content = (
+      <DateTimeStep
+        doctor={doctor}
+        slot={slot}
+        onSelect={setSlot}
+        notice={notice}
+        refreshKey={refreshKey}
+        onBack={() => toStep(1)}
+        onContinue={() => toStep(3)}
+      />
+    );
+  } else {
+    plainStep = true;
+    content = (
+      <ConfirmStep
+        key={slot.starts_at}
+        doctor={doctor}
+        slot={slot}
+        reason={reason}
+        onReasonChange={setReason}
+        onBack={() => toStep(2)}
+        onUnavailable={slotUnavailable}
+        onDoctorGone={doctorGone}
+        onBooked={(appointment) => {
+          setReason("");
+          setBooked(appointment);
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="card booking-review">
-      <h2>Review your appointment</h2>
-      <p className="muted">Check the details below. The time is not reserved until you confirm.</p>
-      <Alert>{error}</Alert>
-      <div className="booking-review-doctor">
-        <Avatar name={doctor.name} role="doctor" size={64} />
+    <div className="booking-page">
+      <header className="page-head">
         <div>
-          <strong>{name}</strong>
-          <p className="muted">
-            {doctor.specialization} · {doctor.department_name}
-          </p>
+          <h1>Book Appointment</h1>
+          <p className="muted">Find and book an appointment with the right doctor for your needs.</p>
         </div>
-      </div>
-      <dl className="booking-review-facts">
-        <div>
-          <dt>Date and time</dt>
-          <dd>
-            {formatDateTime(offered.starts_at, timezone)} <span className="muted small">({timezone})</span>
-          </dd>
-        </div>
-        {doctor.consultation_fee != null && (
-          <div>
-            <dt>Consultation fee</dt>
-            <dd>{formatFee(doctor.consultation_fee)}</dd>
-          </div>
-        )}
-        <div>
-          <dt>Patient</dt>
-          <dd>{user.name}</dd>
-        </div>
-      </dl>
-      <label>
-        Reason for visit (optional)
-        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
-      </label>
-      <div className="row">
-        <button type="button" disabled={submitting} onClick={confirm}>
-          {submitting ? "Booking…" : "Confirm appointment"}
-        </button>
-        <Link to={backToProfile} className="button secondary">
-          Change time
-        </Link>
-      </div>
+      </header>
+      <BookingStepper current={booked ? 4 : step} />
+      {/* Steps 2 and 3 are sets of separate cards (content, then actions); step 1 and the result sit in one card. */}
+      <section
+        ref={card}
+        tabIndex={-1}
+        className={plainStep ? "booking-step-cards" : "card booking-card"}
+        aria-labelledby="booking-step-title"
+      >
+        {content}
+      </section>
     </div>
   );
 }

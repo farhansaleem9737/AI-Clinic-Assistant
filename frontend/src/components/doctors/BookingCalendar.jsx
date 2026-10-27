@@ -65,9 +65,11 @@ export default function BookingCalendar({ month, today, available, selected, can
               disabled={!count}
               aria-pressed={count ? isSelected : undefined}
               aria-label={label}
+              title={count ? undefined : "No available times"}
               onClick={() => onSelect(date)}
             >
               {day}
+              {count > 0 && <span className="avail-dot" aria-hidden="true" />}
             </button>
           );
         })}

@@ -5,13 +5,14 @@ import Alert from "./Alert";
  * A small modal confirmation. Focus moves into it, Escape cancels, and focus
  * goes back to whatever opened it when it closes.
  */
-export default function ConfirmDialog({ title, children, confirmLabel, cancelLabel = "Cancel", danger, busy, error, onConfirm, onCancel }) {
+export default function ConfirmDialog({ title, children, confirmLabel, cancelLabel = "Cancel", danger, busy, error, onConfirm, onCancel, className = "" }) {
   const titleId = useId();
   const dialog = useRef(null);
 
   useEffect(() => {
     const opener = document.activeElement;
-    dialog.current?.querySelector("textarea, button")?.focus();
+    // First form field if there is one, otherwise the first button.
+    (dialog.current?.querySelector("input, select, textarea") ?? dialog.current?.querySelector("button"))?.focus();
     return () => opener?.focus?.();
   }, []);
 
@@ -37,7 +38,7 @@ export default function ConfirmDialog({ title, children, confirmLabel, cancelLab
 
   return (
     <div className="dialog-backdrop">
-      <div ref={dialog} className="card dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown}>
+      <div ref={dialog} className={`card dialog ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown}>
         <h2 id={titleId}>{title}</h2>
         {children}
         <Alert>{error}</Alert>

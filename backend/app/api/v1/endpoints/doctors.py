@@ -16,6 +16,8 @@ from app.db.session import get_db
 from app.schemas.common import Page
 from app.schemas.doctor import (
     DoctorAvailabilityRead,
+    DoctorCareerRead,
+    DoctorCareerUpdate,
     DoctorCreate,
     DoctorEducationRead,
     DoctorExperienceRead,
@@ -60,11 +62,15 @@ def to_public(row: DoctorRow, storage: Storage | None) -> DoctorPublic:
         department_name=row.department_name,
         qualifications=d.qualifications,
         bio=d.bio,
+        languages=d.languages,
         years_of_experience=d.years_of_experience,
         consultation_fee=d.consultation_fee,
         is_verified=bool(d.license_number),
         availability=DoctorAvailabilityRead(
-            status=row.availability.status, next_available=row.availability.next_available
+            status=row.availability.status,
+            next_available=row.availability.next_available,
+            available_today=row.availability.available_today,
+            limited=row.availability.limited,
         ),
         photo_url=file_service.photo_url(storage, d.photo),
     )
@@ -100,9 +106,12 @@ async def public_list_doctors(
 
 
 @public_router.get("/specializations", response_model=list[str])
-async def public_list_specializations(db: AsyncSession = Depends(get_db)):
-    """Options for the directory specialization filter."""
-    return await doctor_service.list_specializations(db)
+async def public_list_specializations(
+    department_id: uuid.UUID | None = Query(None, description="Only specializations in this department"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Options for the specialization filter, optionally within one department."""
+    return await doctor_service.list_specializations(db, department_id=department_id)
 
 
 @public_router.get("/{doctor_id}", response_model=DoctorProfilePublic)
@@ -134,16 +143,21 @@ async def public_doctor_availability(
     """
     await doctor_service.ensure_publicly_listed(db, doctor_id)
     now = clock.utcnow()
-    bookable, slots = await availability_service.available_slots(
+    bookable, slots, unavailable = await availability_service.slot_board(
         db, doctor_id, date_from, date_to, now=now, min_lead=timedelta(minutes=settings.booking_min_lead_minutes)
     )
     tz = bookable.timezone
+    taken = availability_service.by_local_date(unavailable, tz)
     return PublicAvailabilityRead(
         doctor_id=doctor_id,
         timezone=tz.key,
         bookable_until=availability_service.bookable_until(now, tz),
         days=[
-            AvailableDay(date=day, slots=[SlotRead(starts_at=s.starts_at, ends_at=s.ends_at) for s in day_slots])
+            AvailableDay(
+                date=day,
+                slots=[SlotRead(starts_at=s.starts_at, ends_at=s.ends_at) for s in day_slots],
+                unavailable=[SlotRead(starts_at=s.starts_at, ends_at=s.ends_at) for s in taken.get(day, [])],
+            )
             for day, day_slots in availability_service.by_local_date(slots, tz).items()
         ],
     )
@@ -169,6 +183,31 @@ async def update_my_profile(
     storage: Storage | None = Depends(get_optional_storage),
 ):
     return to_full(await doctor_service.update_own_profile(db, principal, body), storage)
+
+
+def to_career(career: doctor_service.Career) -> DoctorCareerRead:
+    return DoctorCareerRead(
+        experience=[DoctorExperienceRead.model_validate(e) for e in career.experience],
+        education=[DoctorEducationRead.model_validate(e) for e in career.education],
+    )
+
+
+@router.get("/me/career", response_model=DoctorCareerRead)
+async def get_my_career(
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_permission(Perm.doctor_update_own)),
+):
+    return to_career(await doctor_service.get_career(db, doctor_service.own_doctor_id(principal)))
+
+
+@router.put("/me/career", response_model=DoctorCareerRead)
+async def replace_my_career(
+    body: DoctorCareerUpdate,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_permission(Perm.doctor_update_own)),
+):
+    """Replace the experience and education shown on your public profile."""
+    return to_career(await doctor_service.replace_career(db, principal, doctor_service.own_doctor_id(principal), body))
 
 
 @router.put("/me/photo", response_model=DoctorResponse)
@@ -279,3 +318,22 @@ async def remove_doctor_photo(
     storage: Storage = Depends(get_storage),
 ):
     return to_full(await doctor_service.remove_photo(db, storage, principal, doctor_id), storage)
+
+
+@router.get("/{doctor_id}/career", response_model=DoctorCareerRead)
+async def get_doctor_career(
+    doctor_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_permission(Perm.doctor_update)),
+):
+    return to_career(await doctor_service.get_career(db, doctor_id))
+
+
+@router.put("/{doctor_id}/career", response_model=DoctorCareerRead)
+async def replace_doctor_career(
+    doctor_id: uuid.UUID,
+    body: DoctorCareerUpdate,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_permission(Perm.doctor_update)),
+):
+    return to_career(await doctor_service.replace_career(db, principal, doctor_id, body))

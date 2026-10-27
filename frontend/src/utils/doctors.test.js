@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { directoryApiParams, directorySearchParams, EMPTY_FILTERS, pageWindow, readDirectoryState } from "./doctors";
+import { bookingAvailability, directoryApiParams, directorySearchParams, EMPTY_FILTERS, pageWindow, readDirectoryState } from "./doctors";
 
 const read = (query) => readDirectoryState(new URLSearchParams(query));
 
@@ -77,5 +77,16 @@ describe("pageWindow", () => {
     [3, 5, [1, 2, 3, 4, 5]],
   ])("page %i of %i", (current, total, expected) => {
     expect(pageWindow(current, total)).toEqual(expected);
+  });
+});
+
+describe("bookingAvailability", () => {
+  it("only claims what the API reports", () => {
+    expect(bookingAvailability({ status: "available", available_today: true, limited: true }).label).toBe("Available today");
+    expect(bookingAvailability({ status: "available", available_today: false, limited: true }).label).toBe("Limited availability");
+    expect(bookingAvailability({ status: "available" }).label).toBe("Available this week");
+    expect(bookingAvailability({ status: "busy" }).label).toBe("Fully booked this week");
+    expect(bookingAvailability({ status: "unavailable" }).label).toBe("No free slots this week");
+    expect(bookingAvailability(undefined).label).toBe("Availability unknown");
   });
 });

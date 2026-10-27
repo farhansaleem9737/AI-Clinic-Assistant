@@ -90,13 +90,16 @@ class AvailabilityRead(BaseModel):
 class AvailableDay(BaseModel):
     date: date  # local calendar date in `timezone`
     slots: list[SlotRead]
+    # Working-hour slots that cannot be booked (taken, or inside the booking
+    # notice), so a calendar can show them greyed out. No booking details.
+    unavailable: list[SlotRead] = []
 
 
 class PublicAvailabilityRead(BaseModel):
     """Free slots for the public booking calendar, grouped by local date.
 
     Only days with at least one free slot appear. Nothing about existing
-    appointments is exposed beyond the absence of a slot."""
+    appointments is exposed beyond a working-hours slot being unavailable."""
 
     doctor_id: uuid.UUID
     timezone: str

@@ -25,6 +25,8 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Degrees and certifications as shown to patients, e.g. "MBBS, FCPS (Cardiology)".
     qualifications: Mapped[str | None] = mapped_column(String(500))
     bio: Mapped[str | None] = mapped_column(String(1000))
+    # Languages the doctor consults in, as shown to patients, e.g. "English, Urdu".
+    languages: Mapped[str | None] = mapped_column(String(200))
     years_of_experience: Mapped[int] = mapped_column(Integer, default=0)
     consultation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     # Internal contact details: never part of the public directory.

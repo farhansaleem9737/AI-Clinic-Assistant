@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.common import LoginEmail
 from app.services.availability_service import AvailabilityStatus
@@ -32,6 +32,7 @@ class DoctorCreate(BaseModel):
     license_number: str | None = Field(default=None, max_length=50)
     qualifications: str | None = Field(default=None, max_length=500)
     bio: str | None = Field(default=None, max_length=1000)
+    languages: str | None = Field(default=None, max_length=200)
     years_of_experience: int = Field(default=0, ge=0, le=80)
     consultation_fee: Decimal | None = Field(default=None, **FEE_FIELD)
     phone: str | None = Field(default=None, max_length=30)
@@ -53,6 +54,7 @@ class DoctorUpdate(BaseModel):
     license_number: str | None = Field(default=None, max_length=50)
     qualifications: str | None = Field(default=None, max_length=500)
     bio: str | None = Field(default=None, max_length=1000)
+    languages: str | None = Field(default=None, max_length=200)
     years_of_experience: int | None = Field(default=None, ge=0, le=80)
     consultation_fee: Decimal | None = Field(default=None, **FEE_FIELD)
     phone: str | None = Field(default=None, max_length=30)
@@ -60,10 +62,22 @@ class DoctorUpdate(BaseModel):
 
 
 class DoctorSelfUpdate(BaseModel):
-    """What a doctor may change on their own profile."""
+    """What a doctor may change on their own profile. Name, specialization,
+    department, fee, license number, room and status are managed by the
+    clinic administration (DoctorUpdate); anything else sent is ignored."""
 
     bio: str | None = Field(default=None, max_length=1000)
     phone: str | None = Field(default=None, max_length=30)
+    languages: str | None = Field(default=None, max_length=200)
+    qualifications: str | None = Field(default=None, max_length=500)
+    years_of_experience: int | None = Field(default=None, ge=0, le=80)
+
+    @field_validator("bio", "phone", "languages", "qualifications", mode="before")
+    @classmethod
+    def blank_is_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
 
 class DoctorAvailabilityRead(BaseModel):
@@ -73,6 +87,10 @@ class DoctorAvailabilityRead(BaseModel):
     status: AvailabilityStatus
     # Start of the earliest bookable slot, when there is one.
     next_available: datetime | None
+    # A free slot remains today (clinic-local date).
+    available_today: bool = False
+    # Only a few free slots left in the window.
+    limited: bool = False
 
 
 class DoctorPublic(BaseModel):
@@ -86,6 +104,7 @@ class DoctorPublic(BaseModel):
     department_name: str
     qualifications: str | None
     bio: str | None
+    languages: str | None = None
     years_of_experience: int
     consultation_fee: Decimal | None
     # The clinic holds a medical license number for this doctor. The number
@@ -115,6 +134,65 @@ class DoctorEducationRead(BaseModel):
     end_year: int | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---- career history (edited by the doctor or an admin) -------------------------------
+
+# Same bounds as the database check constraints on doctor_experiences/doctor_education.
+YEAR = {"ge": 1940, "le": 2100}
+
+
+def _clean_text(value: object) -> object:
+    """Trim text; an optional field left blank is stored as NULL."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return value
+
+
+class DoctorExperienceWrite(BaseModel):
+    title: str = Field(min_length=1, max_length=150)
+    organization: str = Field(min_length=1, max_length=200)
+    location: str | None = Field(default=None, max_length=150)
+    start_year: int = Field(**YEAR)
+    end_year: int | None = Field(default=None, **YEAR)  # None: current position
+    description: str | None = Field(default=None, max_length=1000)
+
+    _clean = field_validator("title", "organization", "location", "description", mode="before")(_clean_text)
+
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "DoctorExperienceWrite":
+        if self.end_year is not None and self.end_year < self.start_year:
+            raise ValueError("end_year must not be before start_year")
+        return self
+
+
+class DoctorEducationWrite(BaseModel):
+    qualification: str = Field(min_length=1, max_length=150)
+    institution: str = Field(min_length=1, max_length=200)
+    field_of_study: str | None = Field(default=None, max_length=150)
+    start_year: int | None = Field(default=None, **YEAR)
+    end_year: int | None = Field(default=None, **YEAR)  # year of completion
+
+    _clean = field_validator("qualification", "institution", "field_of_study", mode="before")(_clean_text)
+
+    @model_validator(mode="after")
+    def end_not_before_start(self) -> "DoctorEducationWrite":
+        if self.start_year is not None and self.end_year is not None and self.end_year < self.start_year:
+            raise ValueError("end_year must not be before start_year")
+        return self
+
+
+class DoctorCareerUpdate(BaseModel):
+    """The doctor's whole public career history; it replaces what is stored."""
+
+    experience: list[DoctorExperienceWrite] = Field(default_factory=list, max_length=30)
+    education: list[DoctorEducationWrite] = Field(default_factory=list, max_length=30)
+
+
+class DoctorCareerRead(BaseModel):
+    experience: list[DoctorExperienceRead]
+    education: list[DoctorEducationRead]
 
 
 class DoctorProfilePublic(DoctorPublic):

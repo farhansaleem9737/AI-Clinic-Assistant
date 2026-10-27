@@ -75,7 +75,7 @@ function ProfileCard({ hasProfile, active }) {
       ) : (
         <>
           <div className="profile-head">
-            <Avatar name={`${profile.first_name} ${profile.last_name}`} size={92} />
+            <Avatar name={`${profile.first_name} ${profile.last_name}`} size={92} src={profile.photo_url} />
             <div>
               <h3>
                 {profile.first_name} {profile.last_name}

@@ -9,10 +9,13 @@ from app.core.config import settings
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.permissions import Principal
 from app.core.security import generate_csrf_token
+from app.core.storage import Storage, get_optional_storage
 from app.db.session import get_db
 from app.schemas.patient import PatientRegistration
 from app.schemas.user import AccessTokenResponse, MeResponse, UserLogin, UserResponse
-from app.services import auth_service, patient_service, rbac_service
+from app.models.doctor import Doctor
+from app.models.patient import Patient
+from app.services import auth_service, file_service, patient_service, rbac_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -133,8 +136,18 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(principal: Principal = Depends(get_current_principal)):
+async def me(
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+    storage: Storage | None = Depends(get_optional_storage),
+):
     user = principal.user
+    # The caller's own profile photo, for the header avatar.
+    photo = None
+    if principal.doctor_id is not None:
+        photo = (await db.get(Doctor, principal.doctor_id)).photo
+    elif principal.patient_id is not None:
+        photo = (await db.get(Patient, principal.patient_id)).photo
     return MeResponse(
         id=user.id,
         name=user.name,
@@ -145,4 +158,5 @@ async def me(principal: Principal = Depends(get_current_principal)):
         created_at=user.created_at,
         doctor_id=principal.doctor_id,
         patient_id=principal.patient_id,
+        photo_url=file_service.photo_url(storage, photo),
     )

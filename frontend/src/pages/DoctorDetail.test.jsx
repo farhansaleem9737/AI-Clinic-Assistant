@@ -6,7 +6,7 @@ import { useAuth } from "../context/useAuth";
 import { getPublicAvailability, getPublicDoctor } from "../services/doctorService";
 import { anonymous, authAs, PERMISSIONS, publicDoctor } from "../test/fixtures";
 import { addMonths, longDate, monthLabel } from "../utils/calendar";
-import { formatTime, isoDateIn } from "../utils/datetime";
+import { formatSlotTime, isoDateIn } from "../utils/datetime";
 import DoctorDetail from "./DoctorDetail";
 
 vi.mock("../context/useAuth");
@@ -92,18 +92,14 @@ describe("profile", () => {
         experience: [], education: [], availability: { status: "unavailable", next_available: null },
       }),
     });
-    const user = userEvent.setup();
     renderProfile();
     const summary = await screen.findByRole("region", { name: "Summary" });
     expect(summary).not.toHaveTextContent(/experience|Consultation fee|null|undefined|NaN/);
     expect(within(summary).queryByRole("img", { name: /Verified/ })).not.toBeInTheDocument();
     expect(summary).toHaveTextContent("No appointments this week");
-    expect(screen.getByText("Dr. Sarah Khan has not added a biography yet.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "Experience" }));
-    expect(screen.getByText("No work history has been added yet.")).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Education" }));
-    expect(screen.getByText("No education has been added yet.")).toBeInTheDocument();
+    expect(screen.getByText("Professional biography has not been added yet.")).toBeInTheDocument();
+    expect(screen.getByText("Professional experience has not been added yet.")).toBeInTheDocument();
+    expect(screen.getByText("Education details have not been added yet.")).toBeInTheDocument();
   });
 
   it("uses the illustrated doctor avatar when there is no photo", async () => {
@@ -132,42 +128,74 @@ describe("profile", () => {
 });
 
 describe("about, experience and education tabs", () => {
-  it("switches sections with the mouse and the keyboard", async () => {
-    const user = userEvent.setup();
+  it("shows About, Experience and Education together, newest first", async () => {
     renderProfile();
-    const about = await screen.findByRole("tab", { name: "About" });
-    expect(about).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("About Dr. Sarah Khan");
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("Treats heart conditions.");
+    const about = await screen.findByRole("region", { name: "About Dr. Sarah Khan" });
+    expect(about).toHaveTextContent("Treats heart conditions.");
 
-    await user.click(screen.getByRole("tab", { name: "Experience" }));
-    const experience = screen.getByRole("tabpanel");
-    expect(experience).toHaveTextContent("Senior Cardiologist");
-    expect(experience).toHaveTextContent("City General Hospital, Lahore");
-    expect(experience).toHaveTextContent("2020 – Present");
-    expect(experience).toHaveTextContent("2016 – 2020");
-    expect(experience).toHaveTextContent("Leads the heart clinic.");
+    const experience = screen.getByRole("region", { name: "Experience" });
+    const jobs = within(experience).getAllByRole("listitem");
+    expect(jobs.map((li) => within(li).getByRole("heading").textContent)).toEqual([
+      "Senior Cardiologist",
+      "Consultant Cardiologist",
+    ]);
+    expect(jobs[0]).toHaveTextContent("City General Hospital, Lahore");
+    expect(jobs[0]).toHaveTextContent("2020 – Present");
+    expect(jobs[0]).toHaveTextContent("Leads the heart clinic.");
+    expect(jobs[1]).toHaveTextContent("2016 – 2020");
 
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "Education" })).toHaveFocus();
-    const education = screen.getByRole("tabpanel");
-    expect(education).toHaveTextContent("FCPS (Cardiology)");
-    expect(education).toHaveTextContent("2012 – 2014");
-    expect(education).toHaveTextContent("MBBS");
-    expect(education).toHaveTextContent("2011");
+    const education = screen.getByRole("region", { name: "Education" });
+    const degrees = within(education).getAllByRole("listitem");
+    expect(degrees[0]).toHaveTextContent("FCPS (Cardiology)");
+    expect(degrees[0]).toHaveTextContent("2012 – 2014");
+    expect(degrees[1]).toHaveTextContent("MBBS");
+    expect(degrees[1]).toHaveTextContent("2011");
+  });
 
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "About" })).toHaveFocus();
-    await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: "Education" })).toHaveAttribute("aria-selected", "true");
+  it("the section links scroll to their section and leave the others in place", async () => {
+    const user = userEvent.setup();
+    const scrolled = [];
+    Element.prototype.scrollIntoView = vi.fn(function () {
+      scrolled.push(this.id);
+    });
+    renderProfile();
+    const nav = await screen.findByRole("navigation", { name: "Profile sections" });
+    expect(within(nav).getByRole("link", { name: "About" })).toHaveAttribute("aria-current", "true");
+
+    await user.click(within(nav).getByRole("link", { name: "Experience" }));
+    expect(scrolled.at(-1)).toBe("profile-experience");
+    expect(within(nav).getByRole("link", { name: "Experience" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("region", { name: "Experience" })).toHaveFocus();
+    // Nothing is hidden: all three sections are still on the page.
+    for (const name of ["About Dr. Sarah Khan", "Experience", "Education"]) {
+      expect(screen.getByRole("region", { name })).toBeInTheDocument();
+    }
+
+    await user.click(within(nav).getByRole("link", { name: "Education" }));
+    expect(scrolled.at(-1)).toBe("profile-education");
+    delete Element.prototype.scrollIntoView;
+  });
+
+  it("keeps the biography's paragraphs", async () => {
+    getPublicDoctor.mockResolvedValue({ data: publicDoctor({ bio: "First paragraph.\n\nSecond paragraph.", experience: [], education: [] }) });
+    renderProfile();
+    const about = await screen.findByRole("region", { name: "About Dr. Sarah Khan" });
+    expect(within(about).getByText("First paragraph.").tagName).toBe("P");
+    expect(within(about).getByText("Second paragraph.").tagName).toBe("P");
+  });
+
+  it("says what is missing instead of inventing it", async () => {
+    getPublicDoctor.mockResolvedValue({ data: publicDoctor({ bio: null, qualifications: null, experience: [], education: [] }) });
+    renderProfile();
+    expect(await screen.findByText("Professional biography has not been added yet.")).toBeInTheDocument();
+    expect(screen.getByText("Professional experience has not been added yet.")).toBeInTheDocument();
+    expect(screen.getByText("Education details have not been added yet.")).toBeInTheDocument();
   });
 
   it("falls back to the qualifications summary when no education is listed", async () => {
-    const user = userEvent.setup();
     getPublicDoctor.mockResolvedValue({ data: publicDoctor({ experience: [], education: [] }) });
     renderProfile();
-    await user.click(await screen.findByRole("tab", { name: "Education" }));
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("MBBS, FCPS (Cardiology)");
+    expect(await screen.findByRole("region", { name: "Education" })).toHaveTextContent("MBBS, FCPS (Cardiology)");
   });
 });
 
@@ -194,8 +222,8 @@ describe("booking panel", () => {
     expect(await within(booking).findByRole("button", { name: day(10) })).toHaveAttribute("aria-pressed", "true");
     const times = within(booking).getByRole("group", { name: /Available times on/ });
     expect(within(times).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      formatTime(`${THIS_MONTH}-10T04:00:00Z`, TZ),
-      formatTime(`${THIS_MONTH}-10T04:30:00Z`, TZ),
+      formatSlotTime(`${THIS_MONTH}-10T04:00:00Z`, TZ),
+      formatSlotTime(`${THIS_MONTH}-10T04:30:00Z`, TZ),
     ]);
   });
 
@@ -208,7 +236,7 @@ describe("booking panel", () => {
 
     await user.click(await within(booking).findByRole("button", { name: day(20) }));
     expect(within(booking).getByRole("button", { name: day(20) })).toHaveAttribute("aria-pressed", "true");
-    const time = within(booking).getByRole("button", { name: formatTime(`${THIS_MONTH}-20T09:00:00Z`, TZ) });
+    const time = within(booking).getByRole("button", { name: formatSlotTime(`${THIS_MONTH}-20T09:00:00Z`, TZ) });
     expect(time).toHaveAttribute("aria-pressed", "false");
     await user.click(time);
     expect(time).toHaveAttribute("aria-pressed", "true");

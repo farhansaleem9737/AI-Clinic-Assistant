@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
@@ -15,7 +15,7 @@ from app.core.permissions import Principal, RoleCode
 from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.user import User
-from app.schemas.doctor import DoctorCreate, DoctorSelfUpdate, DoctorUpdate
+from app.schemas.doctor import DoctorCareerUpdate, DoctorCreate, DoctorSelfUpdate, DoctorUpdate
 from app.services import appointment_service, auth_service, availability_service, rbac_service, file_service
 from app.services.availability_service import AvailabilityStatus, DoctorAvailability
 from app.services.pagination import PageParams, paginate
@@ -122,13 +122,16 @@ async def list_doctors(
     return await _rows(db, rows), total
 
 
-async def list_specializations(db: AsyncSession) -> list[str]:
-    """Distinct specializations among publicly listed doctors (filter options)."""
+async def list_specializations(db: AsyncSession, *, department_id: uuid.UUID | None = None) -> list[str]:
+    """Distinct specializations among publicly listed doctors (filter options),
+    optionally limited to one department."""
     query = _visible_publicly(
         select(Doctor.specialization)
         .join(User, User.id == Doctor.user_id)
         .join(Department, Department.id == Doctor.department_id)
     )
+    if department_id is not None:
+        query = query.where(Doctor.department_id == department_id)
     return list((await db.scalars(query.distinct().order_by(Doctor.specialization))).all())
 
 
@@ -149,10 +152,15 @@ class PublicProfile:
     education: list[DoctorEducation]
 
 
-async def get_public_profile(db: AsyncSession, doctor_id: uuid.UUID) -> PublicProfile:
-    """A publicly listed doctor with their career history, newest first
-    (current positions and in-progress studies before finished ones)."""
-    row = await get_doctor(db, doctor_id, public=True)
+@dataclass(frozen=True)
+class Career:
+    experience: list[DoctorExperience]
+    education: list[DoctorEducation]
+
+
+async def _career(db: AsyncSession, doctor_id: uuid.UUID) -> Career:
+    """Career history, newest first (current positions and in-progress
+    studies before finished ones). Two queries, whatever the length."""
     experience = await db.scalars(
         select(DoctorExperience)
         .where(DoctorExperience.doctor_id == doctor_id)
@@ -171,7 +179,14 @@ async def get_public_profile(db: AsyncSession, doctor_id: uuid.UUID) -> PublicPr
             DoctorEducation.id,
         )
     )
-    return PublicProfile(row, list(experience.all()), list(education.all()))
+    return Career(list(experience.all()), list(education.all()))
+
+
+async def get_public_profile(db: AsyncSession, doctor_id: uuid.UUID) -> PublicProfile:
+    """A publicly listed doctor with their career history, newest first."""
+    row = await get_doctor(db, doctor_id, public=True)
+    career = await _career(db, doctor_id)
+    return PublicProfile(row, career.experience, career.education)
 
 
 async def ensure_publicly_listed(db: AsyncSession, doctor_id: uuid.UUID) -> None:
@@ -269,7 +284,10 @@ async def update_own_profile(db: AsyncSession, principal: Principal, data: Docto
     if principal.doctor_id is None:
         raise NotFoundError("You do not have a doctor profile", code="NO_DOCTOR_PROFILE")
     doctor = await db.get(Doctor, principal.doctor_id)
-    return await _apply(db, doctor, data.model_dump(exclude_unset=True))
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("years_of_experience", 0) is None:
+        del changes["years_of_experience"]  # required column: "no value" means "leave it"
+    return await _apply(db, doctor, changes)
 
 
 async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> DoctorRow:
@@ -318,3 +336,35 @@ async def remove_photo(db: AsyncSession, storage: Storage, principal: Principal,
     await file_service.remove_photo(db, storage, doctor)
     logger.info("doctor_photo_removed", extra={"doctor_id": str(doctor.id), "by": str(principal.user_id)})
     return await get_doctor(db, doctor.id)
+
+
+# ---- Career history ----------------------------------------------------------------
+
+
+async def get_career(db: AsyncSession, doctor_id: uuid.UUID) -> Career:
+    await _doctor(db, doctor_id)
+    return await _career(db, doctor_id)
+
+
+async def replace_career(
+    db: AsyncSession, principal: Principal, doctor_id: uuid.UUID, data: DoctorCareerUpdate
+) -> Career:
+    """Replace the doctor's experience and education with `data`, in one
+    transaction. Who may do this is decided by the endpoint: the doctor for
+    their own profile (doctor:update_own), or staff with doctor:update."""
+    doctor = await _doctor(db, doctor_id)
+    await db.execute(delete(DoctorExperience).where(DoctorExperience.doctor_id == doctor.id))
+    await db.execute(delete(DoctorEducation).where(DoctorEducation.doctor_id == doctor.id))
+    db.add_all(DoctorExperience(doctor_id=doctor.id, **item.model_dump()) for item in data.experience)
+    db.add_all(DoctorEducation(doctor_id=doctor.id, **item.model_dump()) for item in data.education)
+    await db.commit()
+    logger.info(
+        "doctor_career_updated",
+        extra={
+            "doctor_id": str(doctor.id),
+            "by": str(principal.user_id),
+            "experience": len(data.experience),
+            "education": len(data.education),
+        },
+    )
+    return await _career(db, doctor.id)

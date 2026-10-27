@@ -149,6 +149,11 @@ async def test_specialization_options_come_from_listed_doctors(client, directory
     assert "Dir Retired Specialty" not in options
 
 
+async def test_specialization_options_can_be_limited_to_one_department(client, directory):
+    options = (await client.get(f"{PUBLIC}specializations", params={"department_id": str(directory["neuro"].id)})).json()
+    assert options == ["Neurologist"]
+
+
 # ---- profile --------------------------------------------------------------------------
 
 
@@ -168,7 +173,7 @@ async def test_profile_shows_public_fields_and_never_the_license_number(client, 
     assert body["is_verified"] is True
     assert body["qualifications"] == "MBBS, FCPS (Cardiology)"
     assert body["bio"] == "Interested in preventive cardiology."
-    assert set(body["availability"]) == {"status", "next_available"}
+    assert set(body["availability"]) == {"status", "next_available", "available_today", "limited"}
     for private in ("license_number", "phone", "room_number", "email", "user_id"):
         assert private not in body
     assert "PMC-SECRET-123" not in response.text and "555-0100" not in response.text
@@ -185,6 +190,33 @@ async def test_unknown_or_malformed_doctor_id(client):
 
 
 # ---- availability status --------------------------------------------------------------
+
+
+async def test_available_today_only_while_a_slot_remains_today(client, clinic, freeze_clock):
+    """The clinic works 09:00-17:00 local; patients need an hour's notice."""
+    freeze_clock(clinic.slot(0, "08:00"))
+    morning = await _status(client, clinic.doctor_a.id)
+    assert morning["status"] == "available" and morning["available_today"] is True
+    assert morning["limited"] is False
+
+    freeze_clock(clinic.slot(0, "16:30"))  # the last slot (16:30) is inside the notice period
+    evening = await _status(client, clinic.doctor_a.id)
+    assert evening["status"] == "available" and evening["available_today"] is False
+
+
+async def test_a_doctor_with_few_free_slots_has_limited_availability(client, db_session, clinic, make_doctor):
+    doctor = await make_doctor(name="Dir Few Slots", department=clinic.department)
+    day = clinic.today + timedelta(days=3)
+    db_session.add(
+        ScheduleTemplate(
+            doctor_id=doctor.id, weekday=day.weekday(), start_time=time(10, 0), end_time=time(11, 0),
+            slot_minutes=30, valid_from=clinic.today,
+        )
+    )
+    await db_session.commit()
+    availability = await _status(client, doctor.id)
+    assert availability["status"] == "available"
+    assert availability["limited"] is True and availability["available_today"] is False
 
 
 async def _status(client, doctor_id) -> dict:
@@ -208,7 +240,12 @@ async def test_doctor_with_free_slots_is_available_and_matches_the_slot_list(cli
 
 async def test_doctor_without_a_schedule_is_unavailable_and_cannot_be_booked(client, clinic, make_doctor):
     doctor = await make_doctor(name="Dir No Schedule")
-    assert await _status(client, doctor.id) == {"status": "unavailable", "next_available": None}
+    assert await _status(client, doctor.id) == {
+        "status": "unavailable",
+        "next_available": None,
+        "available_today": False,
+        "limited": False,
+    }
 
     headers = await clinic.headers_for(clinic.patient_a.user_id)
     booking = await client.post(
@@ -253,7 +290,12 @@ async def test_fully_booked_doctor_is_busy(client, db_session, clinic, make_doct
         )
     )
     await db_session.commit()
-    assert await _status(client, doctor.id) == {"status": "busy", "next_available": None}
+    assert await _status(client, doctor.id) == {
+        "status": "busy",
+        "next_available": None,
+        "available_today": False,
+        "limited": False,
+    }
 
 
 async def test_cancelled_appointments_do_not_make_a_doctor_busy(client, db_session, clinic, make_doctor):

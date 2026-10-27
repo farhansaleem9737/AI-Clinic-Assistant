@@ -83,6 +83,20 @@ export const AVAILABILITY = {
   unavailable: { label: "Unavailable", tone: "danger" },
 };
 
+// Badge on the booking screen. Every claim comes from the API's summary of
+// real free slots over the next week (working hours − leave − bookings,
+// with the booking notice applied); "this week" means that 7-day window.
+export function bookingAvailability(availability) {
+  if (!availability) return { label: "Availability unknown", tone: "" };
+  if (availability.status === "available") {
+    if (availability.available_today) return { label: "Available today", tone: "ok" };
+    if (availability.limited) return { label: "Limited availability", tone: "warn" };
+    return { label: "Available this week", tone: "ok" };
+  }
+  if (availability.status === "busy") return { label: "Fully booked this week", tone: "warn" };
+  return { label: "No free slots this week", tone: "danger" };
+}
+
 // Page numbers to show: first, last, and the pages around the current one,
 // with null marking a gap. e.g. (5, 12) -> [1, null, 4, 5, 6, null, 12]
 export function pageWindow(current, total) {

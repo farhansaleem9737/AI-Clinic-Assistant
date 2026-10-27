@@ -39,11 +39,16 @@ def object_key(category: FileCategory, owner_id: uuid.UUID, file_id: uuid.UUID, 
     lets R2 lifecycle and retention rules target one kind of file."""
     return f"{_KEY_PREFIX[category]}/{owner_id}/{file_id}.{extension}"
 
-def photo_url(storage: Storage | None, photo: StoredFile | None) ->str | None:
+def photo_url(storage: Storage | None, photo: StoredFile | None) -> str | None:
     """A short-lived link for an <img> tag; None without a photo or storage."""
-    if storage is None or photo is None:
+    return photo_url_for_key(storage, photo.object_key if photo is not None else None)
+
+
+def photo_url_for_key(storage: Storage | None, object_key: str | None) -> str | None:
+    """The same, when a query selected only the photo's object key."""
+    if storage is None or object_key is None:
         return None
-    return storage.presigned_get_url(photo.object_key, expires_in=settings.photo_url_ttl_seconds)
+    return storage.presigned_get_url(object_key, expires_in=settings.photo_url_ttl_seconds)
 
 
 async def upload(

@@ -148,6 +148,30 @@ async def available_slots(
     min_lead: timedelta,
     exclude_appointment_id: uuid.UUID | None = None,
 ) -> tuple[BookableDoctor, list[Slot]]:
+    """The bookable (free) slots in the range. Booking validation uses this."""
+    bookable, free, _ = await slot_board(
+        db, doctor_id, date_from, date_to, now=now, min_lead=min_lead, exclude_appointment_id=exclude_appointment_id
+    )
+    return bookable, free
+
+
+async def slot_board(
+    db: AsyncSession,
+    doctor_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    *,
+    now: datetime,
+    min_lead: timedelta,
+    exclude_appointment_id: uuid.UUID | None = None,
+) -> tuple[BookableDoctor, list[Slot], list[Slot]]:
+    """``(doctor, free, unavailable)`` for the range.
+
+    ``unavailable`` are slots inside the doctor's working hours (after leave
+    and blocks) that cannot be booked: already taken, or too soon (booking
+    notice, or already past). They let a calendar grey out a time instead of
+    hiding it; they say nothing about who booked it.
+    """
     if date_to < date_from:
         raise BusinessRuleError("date_to must not be before date_from", code="INVALID_RANGE")
     if (date_to - date_from).days + 1 > MAX_RANGE_DAYS:
@@ -183,17 +207,18 @@ async def available_slots(
         if exc.kind is ExceptionKind.extra_availability:
             slots.extend(slice_window(exc.starts_at.astimezone(tz), exc.ends_at.astimezone(tz), settings.default_slot_minutes))
 
-    blocking = [(e.starts_at, e.ends_at) for e in exceptions if e.kind is not ExceptionKind.extra_availability]
-    blocking += await _busy_appointments(db, doctor_id, window_start, window_end, exclude_appointment_id)
+    leave = [(e.starts_at, e.ends_at) for e in exceptions if e.kind is not ExceptionKind.extra_availability]
+    booked = await _busy_appointments(db, doctor_id, window_start, window_end, exclude_appointment_id)
 
     earliest = now + min_lead
     latest = now + timedelta(days=settings.booking_max_advance_days)
-    free = {
-        s
-        for s in remove_busy(slots, blocking)
-        if s.starts_at >= earliest and s.starts_at <= latest and window_start <= s.starts_at < window_end
+    # Working slots in the window and the booking horizon (a set: extra
+    # availability may repeat a template slot).
+    working = {
+        s for s in remove_busy(slots, leave) if s.starts_at <= latest and window_start <= s.starts_at < window_end
     }
-    return bookable, sorted(free)
+    free = {s for s in remove_busy(working, booked) if s.starts_at >= earliest}
+    return bookable, sorted(free), sorted(working - free)
 
 
 # ---- directory status (many doctors at once) ---------------------------------------
@@ -208,10 +233,18 @@ class AvailabilityStatus(StrEnum):
     unavailable = "unavailable"
 
 
+# At or below this many free slots in the window, availability is "limited".
+LIMITED_AVAILABILITY_SLOTS = 3
+
+
 @dataclass(frozen=True)
 class DoctorAvailability:
     status: AvailabilityStatus
     next_available: datetime | None = None
+    # A free slot remains today, in the doctor's department timezone.
+    available_today: bool = False
+    # Few free slots left in the window (LIMITED_AVAILABILITY_SLOTS or fewer).
+    limited: bool = False
 
 
 async def availability_status(
@@ -293,7 +326,13 @@ async def availability_status(
         working = [s for s in remove_busy(slots, blocking) if earliest <= s.starts_at <= horizon]
         free = remove_busy(working, booked[doctor_id])
         if free:
-            result[doctor_id] = DoctorAvailability(AvailabilityStatus.available, min(free).starts_at)
+            first = min(free).starts_at
+            result[doctor_id] = DoctorAvailability(
+                AvailabilityStatus.available,
+                first,
+                available_today=first.astimezone(tz).date() == now.astimezone(tz).date(),
+                limited=len(free) <= LIMITED_AVAILABILITY_SLOTS,
+            )
         elif working:
             result[doctor_id] = DoctorAvailability(AvailabilityStatus.busy)
     return result

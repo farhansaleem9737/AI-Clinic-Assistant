@@ -31,7 +31,7 @@ export default function AppLayout() {
 
   const userCard = user && (
     <>
-      <Avatar name={user.name} role={user.doctor_id ? "doctor" : undefined} size={40} />
+      <Avatar name={user.name} role={user.doctor_id ? "doctor" : undefined} size={40} src={user.photo_url} />
       <span className="who">
         <strong>{user.name}</strong>
         <span>{roleLabel(user.roles)}</span>

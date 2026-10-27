@@ -31,6 +31,10 @@ os.environ["DATABASE_URL"] = _test_url.render_as_string(hide_password=False)
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SQL_ECHO"] = "false"
 os.environ["CLINIC_TIMEZONE"] = "Asia/Karachi"
+# Tests never reach the real bucket: storage stays unconfigured unless a test
+# installs the in-memory fake (`storage` fixture). Empty counts as unset.
+for _name in ("R2_ACCOUNT_ID", "R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"):
+    os.environ[_name]= ""
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402
@@ -111,6 +115,17 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield ac
     app.dependency_overrides.clear()
 
+@pytest.fixture
+def storage(client):
+    """In-memory R2 for this test, installed for both storage dependencies.
+    The `client` fixture clears every override afterwards."""
+    from app.core.storage import get_storage, get_optional_storage
+    from tests.fakes import FakeStorage
+
+    fake= FakeStorage()
+    app.dependency_overrides[get_storage] = lambda: fake
+    app.dependency_overrides[get_optional_storage] = lambda: fake
+    return fake
 
 @pytest.fixture
 def make_user(db_session: AsyncSession):

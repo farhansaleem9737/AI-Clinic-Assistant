@@ -78,6 +78,24 @@ async def test_patient_books_own_appointment(client, clinic, book, as_):
     ]
 
 
+async def test_reason_is_optional_trimmed_and_limited_to_500_characters(client, clinic, book):
+    blank = await book("alice", reason="   ")
+    assert blank.status_code == 201 and blank.json()["reason"] is None
+
+    padded = await book("alice", when=clinic.slot(3, "11:00"), reason="  Follow-up on test results  ")
+    assert padded.json()["reason"] == "Follow-up on test results"
+
+    too_long = await book("alice", when=clinic.slot(3, "12:00"), reason="x" * 501)
+    assert too_long.status_code == 422
+
+
+async def test_the_client_cannot_choose_the_status(client, clinic, as_):
+    body = {"doctor_id": str(clinic.doctor_a.id), "starts_at": iso(clinic.slot()), "status": "completed"}
+    response = await client.post(BASE, json=body, headers=await as_("alice"))
+    assert response.status_code == 201
+    assert response.json()["status"] == "scheduled"
+
+
 async def test_receptionist_books_for_walk_in_patient(client, clinic, book):
     response = await book("reception", patient=clinic.walk_in)
     assert response.status_code == 201

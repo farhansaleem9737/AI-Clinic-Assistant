@@ -19,6 +19,8 @@ class MeResponse(UserResponse):
     permissions: list[str]
     doctor_id: uuid.UUID | None = None
     patient_id: uuid.UUID | None = None
+    # Short-lived link to the user's own profile photo (doctor or patient), if any.
+    photo_url: str | None = None
 
 
 class UserLogin(BaseModel):

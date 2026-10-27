@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.auth import require_any_permission, require_permission
 from app.api.deps.pagination import page_params
 from app.core.permissions import Perm, Principal
+from app.core.storage import get_optional_storage
 from app.db.session import get_db
 from app.models.appointment import AppointmentStatus
 from app.schemas.appointment import (
@@ -25,7 +26,7 @@ from app.schemas.appointment import (
 )
 from app.schemas.common import Page
 from app.schemas.patient import PatientSummary
-from app.services import appointment_service
+from app.services import appointment_service, file_service
 from app.services.appointment_service import AppointmentDetail, AppointmentFilters, AppointmentScope, AppointmentView
 from app.services.pagination import PageParams
 
@@ -55,6 +56,8 @@ def _fields(view: AppointmentView) -> dict:
             department_name=view.department_name,
             years_of_experience=view.years_of_experience,
             is_verified=view.doctor_verified,
+            # Signed per response; no photo or no storage configured -> None.
+            photo_url=file_service.photo_url_for_key(get_optional_storage(), view.doctor_photo_key),
         ),
         patient=PatientSummary(id=a.patient_id, mrn=view.patient_mrn, name=view.patient_name, date_of_birth=view.patient_dob),
         cancellation_reason=a.cancellation_reason,
