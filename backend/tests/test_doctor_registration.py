@@ -348,6 +348,11 @@ async def test_approval_creates_the_doctor_profile_and_swaps_the_role(client, db
     again = await client.post(f"{APPLICATIONS}{application.id}/approve", json={}, headers=admin)
     assert again.status_code == 409
 
+    from app.models import AuditLog  # D90: approvals are audited
+
+    audited = await db_session.scalars(select(AuditLog.action).where(AuditLog.target_id == body["id"]))
+    assert list(audited) == ["doctor_application.approved"]
+
 
 async def test_approval_refuses_a_licence_already_held_by_another_doctor(
     client, db_session, auth_headers, make_department, make_doctor

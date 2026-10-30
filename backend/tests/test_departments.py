@@ -21,7 +21,8 @@ async def test_public_list_shows_only_active_departments_without_internal_fields
     assert response.status_code == 200
     body = response.json()
     assert [d["name"] for d in body["items"]] == ["Cardiology Pub"]
-    assert set(body["items"][0]) == {"id", "name", "description"}
+    # D94: card fields only; never status, timezone or timestamps.
+    assert set(body["items"][0]) == {"id", "name", "description", "icon", "color", "doctor_count", "doctors_preview"}
 
     assert (await client.get(f"{PUBLIC}{active.id}")).status_code == 200
 
@@ -77,18 +78,16 @@ async def test_update(client, admin, make_department):
     assert clash.status_code == 409
 
 
-async def test_cannot_deactivate_department_with_active_doctors(client, admin, make_department, make_doctor):
+async def test_deactivating_keeps_doctors_and_hides_the_department(client, admin, make_department, make_doctor):
+    """D89: doctors stay assigned (no longer refused with DEPARTMENT_HAS_ACTIVE_DOCTORS)."""
     department = await make_department()
     doctor = await make_doctor(department=department)
     department_id, doctor_id = department.id, doctor.id
 
-    blocked = await client.post(f"{ADMIN}{department_id}/deactivate", headers=admin)
-    assert blocked.status_code == 400
-    assert blocked.json()["error"]["code"] == "DEPARTMENT_HAS_ACTIVE_DOCTORS"
-
-    assert (await client.post(f"/api/v1/doctors/{doctor_id}/deactivate", headers=admin)).status_code == 200
     done = await client.post(f"{ADMIN}{department_id}/deactivate", headers=admin)
     assert done.status_code == 200 and done.json()["is_active"] is False
+    profile = await client.get(f"/api/v1/doctors/{doctor_id}", headers=admin)
+    assert profile.json()["department_id"] == str(department_id)
 
     assert (await client.get(f"{PUBLIC}{department_id}")).status_code == 404
     listed = await client.get(ADMIN, params={"include_inactive": True}, headers=admin)

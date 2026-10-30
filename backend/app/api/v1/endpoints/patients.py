@@ -15,7 +15,9 @@ from app.schemas.common import Page
 from app.schemas.patient import (
     LinkAccount,
     PatientAccountCreate,
-    PatientContactUpdate,
+    PatientBulkResult,
+    PatientBulkStatus,
+    PatientSelfUpdate,
     PatientCreate,
     PatientRead,
     PatientStaffRead,
@@ -23,6 +25,8 @@ from app.schemas.patient import (
 )
 from app.services import file_service, patient_service
 from app.services.pagination import PageParams
+from app.models.patient import SexAtBirth
+from app.services.patient_service import PatientSort
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -43,6 +47,10 @@ def to_self(p: Patient, storage: Storage | None) -> PatientRead:
         email=p.email,
         address=p.address,
         preferred_language=p.preferred_language,
+        emergency_contact_name=p.emergency_contact_name,
+        emergency_contact_relationship=p.emergency_contact_relationship,
+        emergency_contact_phone=p.emergency_contact_phone,
+        preferred_contact_method=p.preferred_contact_method,
         has_account=p.user_id is not None,
         photo_url=file_service.photo_url(storage, p.photo),
         created_at=p.created_at,
@@ -82,13 +90,13 @@ async def complete_my_profile(
 
 
 @router.patch("/me", response_model=PatientRead)
-async def update_my_contact_details(
-    body: PatientContactUpdate,
+async def update_my_details(
+    body: PatientSelfUpdate,
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_permission(Perm.patient_update_own)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
-    return to_self(await patient_service.update_own_contact(db, principal, body), storage)
+    return to_self(await patient_service.update_own_profile(db, principal, body), storage)
 
 
 @router.put("/me/photo", response_model=PatientRead)
@@ -119,13 +127,28 @@ async def list_patients(
     q: str | None = Query(None, max_length=100, description="Name, MRN, phone or email"),
     date_of_birth: date | None = None,
     is_active: bool | None = None,
+    doctor_id: uuid.UUID | None = Query(None, description="Patients with an appointment with this doctor"),
+    registered_from: date | None = Query(None, description="Registered on or after (clinic-local date)"),
+    registered_to: date | None = Query(None, description="Registered on or before (clinic-local date)"),
+    sex_at_birth: SexAtBirth | None = Query(None, description="Gender filter: female, male, intersex or unknown"),
+    sort: PatientSort = PatientSort.name,
     params: PageParams = Depends(page_params),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_any_permission(*STAFF_READ)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
     rows, total = await patient_service.list_patients(
-        db, principal, params, q=q, date_of_birth=date_of_birth, is_active=is_active
+        db,
+        principal,
+        params,
+        q=q,
+        date_of_birth=date_of_birth,
+        is_active=is_active,
+        doctor_id=doctor_id,
+        registered_from=registered_from,
+        registered_to=registered_to,
+        sex_at_birth=sex_at_birth,
+        sort=sort,
     )
     return Page(items=[to_staff(p, storage) for p in rows], total=total, page=params.page, page_size=params.page_size)
 
@@ -138,6 +161,18 @@ async def register_patient(
     storage: Storage | None = Depends(get_optional_storage),
 ):
     return to_staff(await patient_service.create_patient(db, principal, body), storage)
+
+
+@router.post("/bulk-status", response_model=list[PatientBulkResult])
+async def bulk_status(
+    body: PatientBulkStatus,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_permission(Perm.patient_deactivate)),
+):
+    """Activate or deactivate up to 100 patients. Each succeeds or fails on
+    its own (e.g. HAS_UPCOMING_APPOINTMENTS); nothing is cancelled or deleted."""
+    outcomes = await patient_service.set_active_bulk(db, principal, body.patient_ids, body.is_active)
+    return [PatientBulkResult(patient_id=o.patient_id, ok=o.ok, code=o.code, message=o.message) for o in outcomes]
 
 
 @router.get("/{patient_id}", response_model=PatientStaffRead | PatientRead)

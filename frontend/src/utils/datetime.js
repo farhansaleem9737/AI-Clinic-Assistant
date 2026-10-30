@@ -81,3 +81,20 @@ export function dayParts(iso, timeZone) {
   const get = (type) => parts.find((p) => p.type === type)?.value;
   return { month: get("month"), day: get("day"), weekday: get("weekday") };
 }
+
+// "08:00 AM" for a wall-clock time ("08:00" or "08:00:00") that has no date
+// or zone of its own, such as a doctor's working hours.
+export function formatWallTime(value) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "UTC" }).format(
+    new Date(Date.UTC(2000, 0, 1, hours, minutes))
+  );
+}
+
+// "April 10, 2026" and "Friday" for a calendar date ("YYYY-MM-DD").
+export function formatMonthDay(isoDate) {
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
+}
+export function weekdayName(isoDate) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
+}

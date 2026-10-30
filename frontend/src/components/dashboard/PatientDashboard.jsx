@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useFetch } from "../../hooks/useFetch";
-import { listAppointments } from "../../services/appointmentService";
 import { getMyPatientProfile } from "../../services/patientService";
 import { formatCalendarDate } from "../../utils/datetime";
 import { SEX_LABELS } from "../../utils/patient";
@@ -26,8 +25,8 @@ import Avatar from "../Avatar";
 import EmptyState from "../EmptyState";
 import SectionCard from "../SectionCard";
 import StatCard from "../StatCard";
-import AppointmentList from "./AppointmentList";
 import QuickActions from "./QuickActions";
+import UpcomingAppointments from "./UpcomingAppointments";
 
 const ACTIONS = [
   { to: "/appointments/book", label: "Book Appointment", hint: "Schedule with a doctor", icon: CalendarPlus },
@@ -60,7 +59,7 @@ function ProfileCard({ hasProfile, active }) {
   const { data: profile, loading, error } = useFetch(getMyPatientProfile, [], { enabled: hasProfile });
 
   return (
-    <SectionCard title="My Profile" icon={UserRound} moreTo="/profile" moreLabel="View profile" loading={loading} error={error}>
+    <SectionCard title="My Profile" icon={UserRound} moreTo="/profile" moreLabel="View profile" loading={loading} error={error} className="profile-card">
       {!profile ? (
         <EmptyState
           icon={UserRound}
@@ -96,7 +95,7 @@ function ProfileCard({ hasProfile, active }) {
             <Fact icon={Cake} label="Date of birth">
               {profile.date_of_birth && formatCalendarDate(profile.date_of_birth)}
             </Fact>
-            <Fact icon={UserRound} label="Sex at birth">
+            <Fact icon={UserRound} label="Gender">
               {SEX_LABELS[profile.sex_at_birth] ?? profile.sex_at_birth}
             </Fact>
             <Fact icon={Phone} label="Phone">
@@ -140,14 +139,12 @@ function HelpCard() {
 /**
  * The patient's home page. Counts come from the dashboard summary; the
  * upcoming list uses the appointment list's `upcoming` filter, which is the
- * same definition the count uses, so the two always agree.
+ * same definition the count uses, so the two always agree. `onChanged`
+ * reloads the summary after a change made here (a cancellation).
  */
-export default function PatientDashboard({ summary }) {
+export default function PatientDashboard({ summary, onChanged }) {
   const figures = summary.patient;
   const status = accountStatus(summary);
-  const upcoming = useFetch(() => listAppointments({ scope: "upcoming", page_size: 3 }), [], {
-    enabled: figures.has_profile,
-  });
 
   return (
     <>
@@ -159,23 +156,7 @@ export default function PatientDashboard({ summary }) {
       </div>
 
       <div className="patient-grid">
-        <SectionCard
-          title="Upcoming Appointments"
-          icon={CalendarDays}
-          moreTo="/appointments"
-          loading={upcoming.loading}
-          error={upcoming.error}
-        >
-          <AppointmentList
-            appointments={upcoming.data?.items ?? []}
-            emptyText="No upcoming appointments."
-            emptyAction={
-              <Link to="/doctors" className="button">
-                <Search size={16} aria-hidden="true" /> Find a doctor
-              </Link>
-            }
-          />
-        </SectionCard>
+        <UpcomingAppointments enabled={figures.has_profile} onChanged={onChanged} />
         <ProfileCard hasProfile={figures.has_profile} active={summary.account.is_active && figures.profile_active} />
         <QuickActions actions={ACTIONS} />
         <HelpCard />

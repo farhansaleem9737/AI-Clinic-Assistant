@@ -40,3 +40,9 @@ typing_extensions==4.16.0
 tzdata==2026.4
 urllib3==2.8.0
 uvicorn==0.52.4
+
+# AI assistant (D96): provider HTTP calls and PDF text extraction
+httpx==0.28.1
+pypdf==6.1.1
+anthropic==2.3.0
+google-genai==2.34.0

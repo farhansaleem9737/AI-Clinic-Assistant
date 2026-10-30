@@ -1,13 +1,23 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProtectedRoute from "../components/ProtectedRoute";
 import { useAuth } from "../context/useAuth";
+import { getUnreadCount, globalSearch, listNotifications, markNotificationRead } from "../services/workspaceService";
 import { authAs, PERMISSIONS } from "../test/fixtures";
+import { ADMIN_PERMISSIONS } from "../routes/navigation";
 import AppLayout from "./AppLayout";
 
 vi.mock("../context/useAuth");
+vi.mock("../services/workspaceService");
+
+const ADMIN = [...PERMISSIONS.admin, "settings:manage"];
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  getUnreadCount.mockResolvedValue({ data: { unread: 0 } });
+});
 
 function Where() {
   const location = useLocation();
@@ -20,6 +30,14 @@ function renderShell(auth, initial = "/dashboard") {
     <MemoryRouter initialEntries={[initial]}>
       <Routes>
         <Route element={<AppLayout />}>
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute allOf={ADMIN_PERMISSIONS}>
+                <p>Admin dashboard</p>
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/admin/users"
             element={
@@ -51,14 +69,16 @@ describe("sidebar navigation is role-aware", () => {
   it("receptionist", () => {
     renderShell(authAs("Rita", ["receptionist"], PERMISSIONS.receptionist));
     expect(menu()).toEqual([
-      "Dashboard", "Appointments", "Book appointment", "Schedule", "Doctors", "Departments", "Patients", "Manage doctors",
+      "Dashboard", "Appointments", "Book appointment", "Doctors / Schedules", "Departments", "Patients", "Manage doctors",
     ]);
   });
 
-  it("admin", () => {
-    renderShell(authAs("Ada", ["admin"], PERMISSIONS.admin));
-    expect(menu()).toContain("Users");
-    expect(menu()).toContain("Manage departments");
+  it("admin: the administrator's own sidebar, with Settings and Logout at the bottom", () => {
+    renderShell(authAs("Ada", ["admin"], ADMIN));
+    expect(menu()).toEqual(["Dashboard", "Users", "Departments", "Doctors", "Patients", "Appointments", "Profile"]);
+    expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/admin");
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/admin/settings");
+    expect(screen.getByRole("button", { name: "Logout" })).toBeInTheDocument();
   });
 
   it("anonymous visitors see only the public pages and the sign-in actions", () => {
@@ -71,12 +91,22 @@ describe("sidebar navigation is role-aware", () => {
 });
 
 describe("shell behaviour", () => {
-  it("shows the signed-in user and their role in the top bar", () => {
+  it("shows the signed-in user and their role, opening the account menu", async () => {
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
-    const me = screen.getByRole("link", { name: /John Doe, Patient/ });
-    expect(me).toHaveAttribute("href", "/profile");
+    const me = screen.getByRole("button", { name: /John Doe, Patient: account menu/ });
     expect(me).toHaveTextContent("John Doe");
     expect(me).toHaveTextContent("Patient");
+    await userEvent.click(me);
+    const menu = screen.getByRole("menu", { name: "Account" });
+    expect(within(menu).getByRole("menuitem", { name: "View Profile" })).toHaveAttribute("href", "/profile");
+    expect(within(menu).queryByRole("menuitem", { name: "Settings" })).not.toBeInTheDocument();
+  });
+
+  it("administrators' account menu has their profile and Settings", async () => {
+    renderShell(authAs("Ada", ["admin"], ADMIN));
+    await userEvent.click(screen.getByRole("button", { name: /Ada, Administrator: account menu/ }));
+    expect(screen.getByRole("menuitem", { name: "View Profile" })).toHaveAttribute("href", "/account");
+    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute("href", "/admin/settings");
   });
 
   it("shows a doctor with the illustrated doctor avatar", () => {
@@ -89,13 +119,58 @@ describe("shell behaviour", () => {
     expect(screen.getByRole("link", { name: "Help & Support" })).toHaveAttribute("href", "/help");
   });
 
-  it("does not show a notification bell (there are no notifications yet)", () => {
+  it("the bell shows the real unread count and opens the notifications", async () => {
+    getUnreadCount.mockResolvedValue({ data: { unread: 2 } });
+    const note = { id: "n-1", type: "appointment_booked", title: "New appointment", message: "An appointment was booked.", link: "/appointments/a-1", read_at: null, created_at: "2027-04-23T05:00:00Z" };
+    listNotifications.mockResolvedValue({ data: { items: [note], unread: 2 } });
+    markNotificationRead.mockResolvedValue({ data: { ...note, read_at: "2027-04-23T06:00:00Z" } });
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
-    expect(screen.queryByRole("button", { name: /notification/i })).not.toBeInTheDocument();
+    const bell = await screen.findByRole("button", { name: "Notifications, 2 unread" });
+    await userEvent.click(bell);
+    const panel = screen.getByRole("dialog", { name: "Notifications" });
+    await userEvent.click(await within(panel).findByRole("button", { name: /New appointment/ }));
+    expect(markNotificationRead).toHaveBeenCalledWith("n-1");
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/appointments/a-1"));
   });
 
-  it("searching from the top bar opens the doctor directory with the query", async () => {
+  it("the bell says when there is nothing", async () => {
+    listNotifications.mockResolvedValue({ data: { items: [], unread: 0 } });
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(await screen.findByText("You have no notifications.")).toBeInTheDocument();
+  });
+
+  it("signed-in search looks across records and opens the chosen one", async () => {
+    globalSearch.mockResolvedValue({
+      data: {
+        query: "khan",
+        patients: [{ id: "p-1", name: "Ali Khan", mrn: "MRN00000001" }],
+        doctors: [{ id: "d-1", name: "Dr. Sarah Khan", specialization: "Cardiologist" }],
+        appointments: [],
+        users: null,
+      },
+    });
+    renderShell(authAs("Rita", ["receptionist"], PERMISSIONS.receptionist));
+    const box = screen.getByRole("combobox", { name: /Search patients, doctors/ });
+    await userEvent.type(box, "khan");
+    const results = await screen.findByRole("listbox", { name: "Search results" });
+    expect((await within(results).findAllByRole("option")).map((o) => o.getAttribute("aria-label"))).toEqual([
+      "Patients: Ali Khan, MRN00000001",
+      "Doctors: Dr. Sarah Khan, Cardiologist",
+    ]);
+    expect(globalSearch).toHaveBeenCalledTimes(1);
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect(screen.getByTestId("where")).toHaveTextContent("/doctors/d-1");
+  });
+
+  it("one letter does not search", async () => {
+    renderShell(authAs("Rita", ["receptionist"], PERMISSIONS.receptionist));
+    await userEvent.type(screen.getByRole("combobox", { name: /Search patients, doctors/ }), "k");
+    expect(globalSearch).not.toHaveBeenCalled();
+  });
+
+  it("visitors still search the doctor directory", async () => {
+    renderShell({ user: null, initializing: false, can: () => false, logout: async () => {} }, "/doctors");
     await userEvent.type(screen.getByRole("searchbox", { name: "Search doctors" }), "cardio{Enter}");
     expect(screen.getByTestId("where")).toHaveTextContent("/doctors?q=cardio");
   });
@@ -125,6 +200,20 @@ describe("unauthorized access", () => {
   it("the permitted user sees the page", () => {
     renderShell(authAs("Ada", ["admin"], PERMISSIONS.admin), "/admin/users");
     expect(screen.getByText("Users page")).toBeInTheDocument();
+  });
+
+  it("/admin: visitors go to sign in, other roles to their dashboard, administrators get in", () => {
+    const { unmount } = renderShell({ user: null, initializing: false, can: () => false, logout: async () => {} }, "/admin");
+    expect(screen.getByTestId("where")).toHaveTextContent("/login");
+    unmount();
+    for (const role of ["patient", "doctor", "receptionist"]) {
+      const view = renderShell(authAs("Someone", [role], PERMISSIONS[role]), "/admin");
+      expect(screen.queryByText("Admin dashboard")).not.toBeInTheDocument();
+      expect(screen.getByTestId("where")).toHaveTextContent("/dashboard");
+      view.unmount();
+    }
+    renderShell(authAs("Ada", ["admin"], ADMIN), "/admin");
+    expect(screen.getByText("Admin dashboard")).toBeInTheDocument();
   });
 });
 

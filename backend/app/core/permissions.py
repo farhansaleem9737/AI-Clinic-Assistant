@@ -31,9 +31,15 @@ class Perm(StrEnum):
     user_deactivate = "user:deactivate"
     user_assign_role = "user:assign_role"
     role_read = "role:read"
+    # Invite administrators and manage pending invitations (D87). The only
+    # way the admin role is granted after the first administrator.
+    admin_invitation_manage = "admin_invitation:manage"
 
     # Departments
     department_manage = "department:manage"
+
+    # The clinic's own details (name, contact), D86
+    settings_manage = "settings:manage"
 
     # Doctors
     doctor_read = "doctor:read"

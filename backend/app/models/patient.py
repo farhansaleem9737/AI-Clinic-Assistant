@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, ForeignKey, Index, String, Uuid, text
+from sqlalchemy import Boolean, CheckConstraint, Date, Enum, ForeignKey, Index, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -31,7 +31,13 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "patients"
-    __table_args__ = (Index("ix_patients_last_name_first_name", "last_name", "first_name"),)
+    __table_args__ = (
+        Index("ix_patients_last_name_first_name", "last_name", "first_name"),
+        CheckConstraint(
+            "preferred_contact_method IS NULL OR preferred_contact_method IN ('phone', 'sms', 'email')",
+            name="contact_method_known",
+        ),
+    )
     # Fetch the server-generated MRN (and other defaults) with RETURNING on insert.
     __mapper_args__ = {"eager_defaults": True}
 
@@ -53,6 +59,12 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     email: Mapped[str | None] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(String(500))
     preferred_language: Mapped[str | None] = mapped_column(String(35))
+    # Who to call in an emergency, and how the clinic should reach the patient
+    # (D81). Operational contact data, not clinical.
+    emergency_contact_name: Mapped[str | None] = mapped_column(String(100))
+    emergency_contact_relationship: Mapped[str | None] = mapped_column(String(50))
+    emergency_contact_phone: Mapped[str | None] = mapped_column(String(30))
+    preferred_contact_method: Mapped[str | None] = mapped_column(String(10))
 
     registered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL")

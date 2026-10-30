@@ -1,4 +1,4 @@
-import { SEX_OPTIONS } from "../utils/patient";
+import { SEX_LABELS, SEX_OPTIONS } from "../utils/patient";
 
 // Demographic + contact fields shared by registration, walk-in and edit forms.
 export default function PatientFields({ values, onChange, identity = true, contact = true }) {
@@ -20,14 +20,14 @@ export default function PatientFields({ values, onChange, identity = true, conta
           <div className="row">
             <label>
               Date of birth
-              <input type="date" {...field("date_of_birth")} required />
+              <input type="date" {...field("date_of_birth")} max={new Date().toISOString().slice(0, 10)} required />
             </label>
             <label>
-              Sex at birth
+              Gender
               <select {...field("sex_at_birth")}>
                 {SEX_OPTIONS.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {SEX_LABELS[s]}
                   </option>
                 ))}
               </select>

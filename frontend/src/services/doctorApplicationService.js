@@ -42,3 +42,11 @@ export const APPLICATION_STATUS = {
   approved: { label: "Approved", tone: "ok" },
   rejected: { label: "Not approved", tone: "danger" },
 };
+
+// Reviewers (doctor_application:review).
+export const listApplications = (params) => api.get("/doctor-applications/", { params });
+export const getApplication = (id) => api.get(`/doctor-applications/${id}`);
+export const getApplicationDocumentLink = (id, documentId) =>
+  api.get(`/doctor-applications/${id}/documents/${documentId}/download`);
+export const approveApplication = (id, notes) => api.post(`/doctor-applications/${id}/approve`, { notes: notes || null });
+export const rejectApplication = (id, notes) => api.post(`/doctor-applications/${id}/reject`, { notes });

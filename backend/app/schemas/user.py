@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.schemas.common import LoginEmail
 
@@ -13,6 +13,30 @@ class UserResponse(BaseModel):
     is_active: bool
     roles: list[str]
     created_at: datetime
+
+
+class AdminUserRead(UserResponse):
+    """A user as listed in Admin > Users. Phone and photo come from the
+    linked doctor or patient profile, when there is one."""
+
+    phone: str | None = None
+    photo_url: str | None = None
+    doctor_id: uuid.UUID | None = None
+    patient_id: uuid.UUID | None = None
+
+
+class BulkStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    is_active: bool
+
+
+class BulkStatusResult(BaseModel):
+    user_id: uuid.UUID
+    ok: bool
+    code: str | None = None
+    message: str | None = None
 
 
 class MeResponse(UserResponse):
@@ -50,6 +74,9 @@ class AccountCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    # Only these fields; anything else ("roles", "is_active", ...) is a 422.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=100)
     email: LoginEmail | None = None
 

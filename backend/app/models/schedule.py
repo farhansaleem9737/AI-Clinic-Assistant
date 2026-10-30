@@ -56,6 +56,13 @@ class ExceptionKind(enum.StrEnum):
     block = "block"
     # Adds bookable time outside the weekly templates.
     extra_availability = "extra_availability"
+    # Replaces the weekly hours of one local date: that day's bookable time
+    # is exactly [starts_at, ends_at) (D78).
+    custom_hours = "custom_hours"
+
+    @property
+    def is_unavailable(self) -> bool:
+        return self in (ExceptionKind.leave, ExceptionKind.holiday, ExceptionKind.block)
 
 
 class ScheduleException(UUIDPrimaryKeyMixin, Base):

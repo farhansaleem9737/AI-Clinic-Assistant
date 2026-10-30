@@ -106,6 +106,12 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     patient_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("patients.id", ondelete="RESTRICT"))
     doctor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("doctors.id", ondelete="RESTRICT"))
+    # The doctor's department when this was booked (D92), so moving a doctor
+    # does not rewrite history. NULL only for rows written outside the
+    # booking service; readers fall back to the doctor's current department.
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("departments.id", ondelete="RESTRICT"), index=True
+    )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[AppointmentStatus] = mapped_column(_enum(AppointmentStatus, "appointment_status"))

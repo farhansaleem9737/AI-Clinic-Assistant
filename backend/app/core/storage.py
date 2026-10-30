@@ -54,6 +54,8 @@ class Storage(Protocol):
 
     async def head(self, key:str) -> ObjectInfo | None: ...
 
+    async def get(self, key: str) -> bytes: ...
+
     async def delete(self, key: str) -> None: ...
 
     def presigned_get_url(
@@ -96,6 +98,11 @@ class R2Storage:
                 return None
             raise
         return ObjectInfo(size=response["ContentLength"], content_type=response.get("ContentType"))
+
+    async def get(self, key: str) -> bytes:
+        """The object's bytes, read on the server (e.g. to pass an image to the AI provider, D96)."""
+        response = await self._call("get_object", Bucket=self.bucket, Key=key)
+        return await run_in_threadpool(response["Body"].read)
 
     async def delete(self, key: str)-> None:
         # Deleting a key that does not exist succeeds, so retrying is safe.

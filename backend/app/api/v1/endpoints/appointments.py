@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.appointment import AppointmentStatus
 from app.schemas.appointment import (
     AppointmentCounts,
+    AppointmentDayCounts,
     AppointmentCreate,
     AppointmentDetailRead,
     AppointmentDoctor,
@@ -27,7 +28,13 @@ from app.schemas.appointment import (
 from app.schemas.common import Page
 from app.schemas.patient import PatientSummary
 from app.services import appointment_service, file_service
-from app.services.appointment_service import AppointmentDetail, AppointmentFilters, AppointmentScope, AppointmentView
+from app.services.appointment_service import (
+    AppointmentDetail,
+    AppointmentFilters,
+    AppointmentScope,
+    AppointmentSort,
+    AppointmentView,
+)
 from app.services.pagination import PageParams
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
@@ -59,7 +66,14 @@ def _fields(view: AppointmentView) -> dict:
             # Signed per response; no photo or no storage configured -> None.
             photo_url=file_service.photo_url_for_key(get_optional_storage(), view.doctor_photo_key),
         ),
-        patient=PatientSummary(id=a.patient_id, mrn=view.patient_mrn, name=view.patient_name, date_of_birth=view.patient_dob),
+        patient=PatientSummary(
+            id=a.patient_id,
+            mrn=view.patient_mrn,
+            name=view.patient_name,
+            date_of_birth=view.patient_dob,
+            sex_at_birth=view.patient_sex,
+            photo_url=file_service.photo_url_for_key(get_optional_storage(), view.patient_photo_key),
+        ),
         cancellation_reason=a.cancellation_reason,
         cancellation_note=a.cancellation_note,
         cancelled_at=a.cancelled_at,
@@ -104,6 +118,7 @@ def appointment_filters(
     q: str | None = Query(None, max_length=100, description="Search doctor name, specialization or department"),
     scope: AppointmentScope = Query(AppointmentScope.all, description="upcoming, past or all"),
     newest_first: bool = False,
+    sort: AppointmentSort | None = Query(None, description="Column and direction, e.g. patient_asc"),
 ) -> AppointmentFilters:
     return AppointmentFilters(
         patient_id=patient_id,
@@ -115,6 +130,7 @@ def appointment_filters(
         q=q,
         scope=scope,
         newest_first=newest_first,
+        sort=sort,
     )
 
 
@@ -131,16 +147,33 @@ async def list_appointments(
     )
 
 
-@router.get("/counts", response_model=AppointmentCounts)
+@router.get("/counts", response_model=AppointmentCounts, response_model_exclude_none=True)
 async def count_appointments(
+    include_today: bool = Query(False, description="Also count appointments starting today"),
     filters: AppointmentFilters = Depends(appointment_filters),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_any_permission(*READ)),
 ):
     """Upcoming / past / all totals for the list's tabs, under the same
     filters (the `scope` parameter itself is ignored)."""
-    counts = await appointment_service.count_by_scope(db, principal, filters)
-    return AppointmentCounts(upcoming=counts.upcoming, past=counts.past, all=counts.all)
+    counts = await appointment_service.count_by_scope(db, principal, filters, include_today=include_today)
+    return AppointmentCounts(
+        upcoming=counts.upcoming, past=counts.past, all=counts.all, today=counts.today, today_date=counts.today_date
+    )
+
+
+@router.get("/day-counts", response_model=AppointmentDayCounts)
+async def count_appointments_by_day(
+    day: date | None = Query(None, description="Local calendar date; defaults to today"),
+    filters: AppointmentFilters = Depends(appointment_filters),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_any_permission(*READ)),
+):
+    """Today / Upcoming / Past totals for a doctor's calendar view: on `day`,
+    after today and before today, in the doctor's timezone. Status and search
+    filters apply; date_from/date_to and scope are ignored."""
+    counts = await appointment_service.count_by_day(db, principal, filters, day)
+    return AppointmentDayCounts(**counts.__dict__)
 
 
 @router.post("/", response_model=ResponseModel, status_code=status.HTTP_201_CREATED)

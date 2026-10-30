@@ -6,6 +6,7 @@ import { useAuth } from "../context/useAuth";
 import { bookAppointment } from "../services/appointmentService";
 import { getPublicDepartments } from "../services/departmentService";
 import { getPublicAvailability, getPublicDoctor, getPublicDoctors, getPublicSpecializations } from "../services/doctorService";
+import { getPatient, listPatients } from "../services/patientService";
 import { getAvailability } from "../services/scheduleService";
 import { appointment, authAs, PERMISSIONS, publicDoctor } from "../test/fixtures";
 import { longDate } from "../utils/calendar";
@@ -466,12 +467,121 @@ describe("arriving from the directory or a doctor's profile", () => {
   });
 });
 
-describe("staff", () => {
-  it("get the full form, where they pick the patient", async () => {
-    renderBooking(authAs("Rita Front", ["receptionist"], PERMISSIONS.receptionist), `doctor=doc-1&slot=${encodeURIComponent(SLOT)}`);
-    expect(await screen.findByRole("heading", { name: "Book an appointment" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "1. Patient" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Book Appointment" })).not.toBeInTheDocument();
+describe("staff booking on behalf of a patient", () => {
+  const JOHN = {
+    id: "p-1",
+    mrn: "MRN00000001",
+    first_name: "John",
+    last_name: "Doe",
+    date_of_birth: "1994-04-15",
+    sex_at_birth: "male",
+    phone: "+1 555 123 4567",
+    email: "john.doe@example.com",
+    is_active: true,
+    photo_url: null,
+  };
+  const ALI = { ...JOHN, id: "p-2", mrn: "MRN00000002", first_name: "Ali", last_name: "Raza", phone: null, email: null };
+  const reception = () => authAs("Ayesha Malik", ["receptionist"], PERMISSIONS.receptionist);
+  const TODAY_HOURS = [{ start_time: "09:00:00", end_time: "17:00:00" }];
+
+  beforeEach(() => {
+    getPatient.mockImplementation((id) => (id === "p-1" ? Promise.resolve({ data: JOHN }) : Promise.reject({ response: { status: 404 } })));
+    listPatients.mockResolvedValue({ data: { items: [ALI], total: 1, page: 1, page_size: 8 } });
+    getPublicDoctors.mockResolvedValue(
+      doctorsPage([
+        { ...SARAH, availability: { status: "available", next_available: `${OTHER_DAY}T05:00:00Z`, available_today: false, limited: false, today_hours: [] } },
+        { ...JAMES, availability: { ...JAMES.availability, today_hours: TODAY_HOURS } },
+      ])
+    );
+  });
+
+  it("shows who the booking is for, from the patient record", async () => {
+    renderBooking(reception(), "patient=p-1");
+    expect(screen.getByRole("heading", { level: 1, name: "Book Appointment" })).toBeInTheDocument();
+    expect(screen.getByText("Schedule an appointment for a patient.")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Booking on behalf of a patient" })).toBeInTheDocument();
+    const card = await screen.findByRole("region", { name: "Patient: John Doe" });
+    for (const text of ["MRN: MRN00000001", "Active", "Male", "+1 555 123 4567", "john.doe@example.com"]) {
+      expect(card).toHaveTextContent(text);
+    }
+    expect(card).toHaveTextContent(/\d+ years/);
+    expect(getPatient).toHaveBeenCalledWith("p-1");
+    expect(screen.getByText("Choose a doctor for this appointment.")).toBeInTheDocument();
+  });
+
+  it("doctor cards show today's hours or the next free day", async () => {
+    renderBooking(reception(), "patient=p-1");
+    const james = (await screen.findByRole("radio", { name: /James Lee/ })).closest("label");
+    expect(james).toHaveTextContent("Available today");
+    expect(james).toHaveTextContent("09:00 AM – 05:00 PM");
+    const sarah = screen.getByRole("radio", { name: /Sarah Khan/ }).closest("label");
+    expect(sarah).toHaveTextContent(/Next: /);
+    // Not free today, but selectable: step 2 shows the later dates.
+    await userEvent.click(screen.getByRole("radio", { name: /Sarah Khan/ }));
+    expect(screen.getByRole("radio", { name: /Sarah Khan/ })).toBeChecked();
+  });
+
+  it("asks for a patient before continuing when none is chosen", async () => {
+    renderBooking(reception());
+    expect(await screen.findByRole("heading", { name: "No patient selected" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("radio", { name: /James Lee/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    expect(screen.getByText("Select the patient this appointment is for before continuing.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select a doctor" })).toBeInTheDocument();
+  });
+
+  it("explains a patient who cannot be loaded", async () => {
+    renderBooking(reception(), "patient=p-9");
+    expect(await screen.findByText(/not found, or you do not have access/)).toBeInTheDocument();
+  });
+
+  it("changes the patient through a server-side search, warning that the draft is cleared", async () => {
+    const user = userEvent.setup();
+    renderBooking(reception(), "patient=p-1");
+    await user.click(await screen.findByRole("radio", { name: /James Lee/ }));
+    getPatient.mockImplementation((id) => Promise.resolve({ data: id === "p-2" ? ALI : JOHN }));
+    await user.click(screen.getByRole("button", { name: /Change Patient/ }));
+    const dialog = screen.getByRole("dialog", { name: "Change patient" });
+    expect(dialog).toHaveTextContent("Changing the patient clears the doctor and time chosen so far.");
+    await user.type(within(dialog).getByLabelText(/Search patients/), "ali");
+    await user.click(await within(dialog).findByRole("radio", { name: /Ali Raza/ }));
+    expect(listPatients).toHaveBeenLastCalledWith({ q: "ali", is_active: true, page_size: 8 });
+    await user.click(within(dialog).getByRole("button", { name: "Use this patient" }));
+    expect(await screen.findByRole("region", { name: "Patient: Ali Raza" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { checked: true })).not.toBeInTheDocument(); // the doctor choice was cleared
+  });
+
+  it("arriving from Doctor Schedules with a time but no patient asks for the patient, then confirms", async () => {
+    const user = userEvent.setup();
+    getPatient.mockResolvedValue({ data: ALI });
+    renderBooking(reception(), `doctor=doc-1&slot=${encodeURIComponent(SLOT)}`);
+    const dialog = await screen.findByRole("dialog", { name: "Select patient" });
+    await user.type(within(dialog).getByLabelText(/Search patients/), "ali");
+    await user.click(await within(dialog).findByRole("radio", { name: /Ali Raza/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Use this patient" }));
+    // The doctor and time from the schedule are kept: straight to Confirm.
+    expect(await screen.findByRole("heading", { name: "Confirm the appointment" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Patient: Ali Raza" })).toBeInTheDocument();
+  });
+
+  it("books through the same three steps for the chosen patient", async () => {
+    const user = userEvent.setup();
+    bookAppointment.mockResolvedValue({ data: appointment({ patient: { id: "p-1", name: "John Doe", mrn: "MRN00000001" } }) });
+    renderBooking(reception(), "patient=p-1");
+    await screen.findByRole("region", { name: "Patient: John Doe" });
+    await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await user.click(await screen.findByRole("button", { name: formatSlotTime(SLOT, TZ) }));
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+
+    expect(await screen.findByText(/Booking on behalf of/, { selector: ".on-behalf-note" })).toHaveTextContent("John Doe (MRN MRN00000001)");
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(bookAppointment).toHaveBeenCalledWith(
+      { doctor_id: "doc-1", starts_at: SLOT, reason: null, patient_id: "p-1" },
+      expect.any(String)
+    );
+    expect(await screen.findByRole("heading", { name: "Appointment booked for John Doe" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Patient Record" })).toHaveAttribute("href", "/patients/p-1");
   });
 });
 

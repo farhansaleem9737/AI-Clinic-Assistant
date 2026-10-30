@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Select, delete, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
@@ -16,6 +16,7 @@ from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.user import User
 from app.schemas.doctor import DoctorCareerUpdate, DoctorCreate, DoctorSelfUpdate, DoctorUpdate
+from app.services.audit_service import AuditAction, record
 from app.services import appointment_service, auth_service, availability_service, rbac_service, file_service
 from app.services.availability_service import AvailabilityStatus, DoctorAvailability
 from app.services.pagination import PageParams, paginate
@@ -43,6 +44,13 @@ class DoctorSort(StrEnum):
     experience_desc = "experience_desc"
     fee_asc = "fee_asc"
     fee_desc = "fee_desc"
+    # Admin > Doctors columns (D90)
+    department_asc = "department_asc"
+    department_desc = "department_desc"
+    specialization_asc = "specialization_asc"
+    specialization_desc = "specialization_desc"
+    status_asc = "status_asc"  # active first
+    status_desc = "status_desc"
 
 
 # Doctors without a listed fee sort last either way; name and id break ties so
@@ -54,6 +62,12 @@ _ORDER_BY = {
     DoctorSort.experience_desc: (Doctor.years_of_experience.desc(), User.name.asc()),
     DoctorSort.fee_asc: (Doctor.consultation_fee.asc().nulls_last(), User.name.asc()),
     DoctorSort.fee_desc: (Doctor.consultation_fee.desc().nulls_last(), User.name.asc()),
+    DoctorSort.department_asc: (Department.name.asc(), User.name.asc()),
+    DoctorSort.department_desc: (Department.name.desc(), User.name.asc()),
+    DoctorSort.specialization_asc: (func.lower(Doctor.specialization).asc(), User.name.asc()),
+    DoctorSort.specialization_desc: (func.lower(Doctor.specialization).desc(), User.name.asc()),
+    DoctorSort.status_asc: (Doctor.is_active.desc(), User.name.asc()),
+    DoctorSort.status_desc: (Doctor.is_active.asc(), User.name.asc()),
 }
 
 
@@ -109,9 +123,11 @@ async def list_doctors(
         query = query.where(Doctor.specialization.ilike(f"%{filters.specialization.strip()}%"))
     if filters.q and filters.q.strip():
         pattern = f"%{filters.q.strip()}%"
-        query = query.where(
-            or_(User.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern))
-        )
+        matches = [User.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern)]
+        if not public:
+            # Staff may also find a doctor by contact details; the directory never exposes them.
+            matches += [User.email.ilike(pattern), Doctor.phone.ilike(pattern)]
+        query = query.where(or_(*matches))
     if filters.min_experience is not None:
         query = query.where(Doctor.years_of_experience >= filters.min_experience)
     if filters.fee_min is not None:
@@ -133,6 +149,11 @@ async def list_specializations(db: AsyncSession, *, department_id: uuid.UUID | N
     if department_id is not None:
         query = query.where(Doctor.department_id == department_id)
     return list((await db.scalars(query.distinct().order_by(Doctor.specialization))).all())
+
+
+async def all_specializations(db: AsyncSession) -> list[str]:
+    """Distinct specializations of every doctor profile, active or not (staff filter options)."""
+    return list((await db.scalars(select(Doctor.specialization).distinct().order_by(Doctor.specialization))).all())
 
 
 async def get_doctor(db: AsyncSession, doctor_id: uuid.UUID, *, public: bool = False) -> DoctorRow:
@@ -251,6 +272,9 @@ async def create_doctor(db: AsyncSession, principal: Principal, data: DoctorCrea
 
     doctor = Doctor(user_id=user.id, **data.model_dump(exclude={"user_id", "account"}))
     db.add(doctor)
+    await db.flush()
+    record(db, AuditAction.doctor_created, actor_id=principal.user_id, target_type="doctor", target_id=doctor.id,
+           details={"new_account": data.account is not None, "department_id": str(data.department_id)})
     await db.commit()
     logger.info("doctor_created", extra={"doctor_id": str(doctor.id), "by": str(principal.user_id)})
     return await get_doctor(db, doctor.id)
@@ -265,13 +289,19 @@ async def _apply(db: AsyncSession, doctor: Doctor, changes: dict) -> DoctorRow:
     return await get_doctor(db, doctor.id)
 
 
-async def update_doctor(db: AsyncSession, doctor_id: uuid.UUID, data: DoctorUpdate) -> DoctorRow:
+async def update_doctor(
+    db: AsyncSession, doctor_id: uuid.UUID, data: DoctorUpdate, principal: Principal | None = None
+) -> DoctorRow:
     doctor = await db.get(Doctor, doctor_id)
     if doctor is None:
         raise NotFoundError("Doctor not found")
     changes = data.model_dump(exclude_unset=True)
     if changes.get("department_id") is not None:
         await ensure_active_department(db, changes["department_id"])
+        if changes["department_id"] != doctor.department_id:
+            record(db, AuditAction.doctor_department_changed, actor_id=principal.user_id if principal else None,
+                   target_type="doctor", target_id=doctor.id,
+                   details={"from": str(doctor.department_id), "to": str(changes["department_id"])})
     if "license_number" in changes:
         await ensure_license_free(db, changes["license_number"], exclude_id=doctor.id)
     for required in ("department_id", "specialization", "years_of_experience"):
@@ -290,7 +320,9 @@ async def update_own_profile(db: AsyncSession, principal: Principal, data: Docto
     return await _apply(db, doctor, changes)
 
 
-async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> DoctorRow:
+async def set_active(
+    db: AsyncSession, doctor_id: uuid.UUID, active: bool, principal: Principal | None = None
+) -> DoctorRow:
     doctor = await db.get(Doctor, doctor_id)
     if doctor is None:
         raise NotFoundError("Doctor not found")
@@ -303,6 +335,8 @@ async def set_active(db: AsyncSession, doctor_id: uuid.UUID, active: bool) -> Do
             details={"appointments": upcoming},
         )
     doctor.is_active = active
+    record(db, AuditAction.doctor_activated if active else AuditAction.doctor_deactivated,
+           actor_id=principal.user_id if principal else None, target_type="doctor", target_id=doctor.id)
     await db.commit()
     logger.info("doctor_activated" if active else "doctor_deactivated", extra={"doctor_id": str(doctor.id)})
     return await get_doctor(db, doctor.id)

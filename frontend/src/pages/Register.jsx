@@ -1,5 +1,5 @@
 import { CalendarDays, CheckCircle2, Mail, Phone, UserRound, UsersRound } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import Alert from "../components/Alert";
 import CredentialPicker from "../components/doctor-application/CredentialPicker";
@@ -81,6 +81,8 @@ const FIELD_OF = {
   phone: "phone",
   password: "password",
 };
+const PATIENT_ONLY = ["first_name", "last_name", "date_of_birth"];
+const DOCTOR_ONLY = ["name"];
 const SERVER_MESSAGES = {
   fullName: "Enter your first and last name.",
   dateOfBirth: "Enter a valid date of birth.",
@@ -94,7 +96,7 @@ const SERVER_MESSAGES = {
  * Never shows server text (it could carry internals), and never blames the
  * user's input when the real problem is the connection or the server.
  */
-function registrationErrors(err) {
+function registrationErrors(err, isDoctor) {
   const unavailable = { fields: {}, professional: {}, form: "We couldn't create your account right now. Please try again." };
   if (!err.response) return unavailable;
   const { status, data } = err.response;
@@ -104,7 +106,11 @@ function registrationErrors(err) {
   if (status === 422 || data?.error?.code === "DEPARTMENT_UNAVAILABLE") {
     const fields = {};
     for (const item of data?.error?.details?.errors ?? []) {
-      const field = FIELD_OF[item.loc?.at(-1)];
+      const name = item.loc?.at(-1);
+      // Only fields of the request that was sent: a doctor request has no
+      // first_name or date_of_birth, so such errors mean something else.
+      if ((isDoctor ? PATIENT_ONLY : DOCTOR_ONLY).includes(name)) continue;
+      const field = FIELD_OF[name];
       if (field) fields[field] = SERVER_MESSAGES[field];
     }
     if (Object.keys(fields).length + Object.keys(professional).length > 0) return { fields, professional, form: "" };
@@ -165,7 +171,20 @@ export default function Register() {
   const [uploads, setUploads] = useState([]);
   const [departments, setDepartments] = useState(null);
   const [departmentsError, setDepartmentsError] = useState("");
+  // Bumped after a failed submit: move to the first problem, which on the
+  // long doctor form may be far above the button.
+  const [showProblem, setShowProblem] = useState(0);
+  const formRef = useRef(null);
   const isDoctor = form.accountType === "doctor";
+
+  useEffect(() => {
+    if (!showProblem || !formRef.current) return;
+    const target =
+      formRef.current.querySelector('[aria-invalid="true"]') ?? formRef.current.querySelector(".register-form-alert");
+    if (!target) return;
+    target.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+  }, [showProblem]);
 
   // Departments are needed only once someone chooses Doctor.
   useEffect(() => {
@@ -217,7 +236,10 @@ export default function Register() {
     setErrors(found.errors);
     setProfessionalErrors(found.professional);
     setFormError("");
-    if (Object.keys(found.errors).length + Object.keys(found.professional).length > 0) return;
+    if (Object.keys(found.errors).length + Object.keys(found.professional).length > 0) {
+      setShowProblem((n) => n + 1);
+      return;
+    }
 
     setStage("submitting");
     try {
@@ -231,11 +253,12 @@ export default function Register() {
         navigate("/login", { replace: true, state: { notice } });
         return;
       }
-      const mapped = registrationErrors(err);
+      const mapped = registrationErrors(err, isDoctor);
       setErrors(mapped.fields);
       setProfessionalErrors(mapped.professional);
       setFormError(mapped.form);
       setStage("form");
+      setShowProblem((n) => n + 1);
       return;
     }
 
@@ -256,8 +279,10 @@ export default function Register() {
       <h2 className="auth-title">Create your account</h2>
       <p className="auth-subtitle">Get started with Clinic AI Assistant.</p>
 
-      <form className="auth-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
-        <div role="alert">{formError && <Alert>{formError}</Alert>}</div>
+      <form ref={formRef} className="auth-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
+        <div role="alert" className="register-form-alert" tabIndex={-1}>
+          {formError && <Alert>{formError}</Alert>}
+        </div>
 
         <FormField id="register-account-type" label="Account Type" error={errors.accountType}>
           <div className={`input-icon${errors.accountType ? " invalid" : ""}`}>

@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, BriefcaseMedical, CircleDollarSign, RotateCcw, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, BriefcaseMedical, CircleDollarSign, Clock, RotateCcw, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useFetch } from "../../hooks/useFetch";
 import { getErrorMessage } from "../../services/api";
 import { getPublicDepartments } from "../../services/departmentService";
 import { getPublicDoctors, getPublicSpecializations } from "../../services/doctorService";
+import { formatWallTime } from "../../utils/datetime";
 import { bookingAvailability } from "../../utils/doctors";
 import { CURRENCY, doctorName } from "../../utils/format";
 import Alert from "../Alert";
@@ -11,6 +12,17 @@ import Avatar from "../Avatar";
 
 const PAGE_SIZE = 9;
 const SEARCH_DELAY_MS = 300;
+
+// "09:00 AM – 04:00 PM" (every range today), or the next free day, or nothing.
+function todayLine(availability) {
+  if (!availability) return null;
+  const hours = availability.today_hours ?? [];
+  if (availability.available_today && hours.length)
+    return hours.map((h) => `${formatWallTime(h.start_time)} – ${formatWallTime(h.end_time)}`).join(", ");
+  if (availability.next_available)
+    return `Next: ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(availability.next_available))}`;
+  return null;
+}
 
 function fee(doctor) {
   if (doctor.consultation_fee == null) return "Fee not available";
@@ -43,9 +55,16 @@ function DoctorOption({ doctor, checked, onChoose }) {
           {doctor.consultation_fee != null && <span className="sr-only"> consultation fee</span>}
         </span>
       </span>
-      <span className={`badge status ${badge.tone}`}>
-        <span className="dot" aria-hidden="true" />
-        {badge.label}
+      <span className="doctor-option-availability">
+        <span className={`badge status ${badge.tone}`}>
+          <span className="dot" aria-hidden="true" />
+          {badge.label}
+        </span>
+        {todayLine(doctor.availability) && (
+          <span className="muted small">
+            <Clock size={14} aria-hidden="true" /> {todayLine(doctor.availability)}
+          </span>
+        )}
       </span>
     </label>
   );
@@ -65,7 +84,16 @@ function LoadingCards() {
  * Step 1: search and filter real doctors (all filtering happens in the API)
  * and choose one. `selected` is the chosen doctor or null.
  */
-export default function DoctorPicker({ selected, onSelect, onBack, onContinue }) {
+export default function DoctorPicker({
+  selected,
+  onSelect,
+  onBack,
+  onContinue,
+  subtitle = "Search and choose a doctor to book an appointment.",
+  // Optional: returns a message when something else must be chosen first.
+  blockedReason,
+}) {
+  const [blocked, setBlocked] = useState("");
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [departmentId, setDepartmentId] = useState("");
@@ -151,7 +179,7 @@ export default function DoctorPicker({ selected, onSelect, onBack, onContinue })
         <Search className="icon" size={24} aria-hidden="true" />
         <div>
           <h2 id="booking-step-title">Select a doctor</h2>
-          <p className="muted">Search and choose a doctor to book an appointment.</p>
+          <p className="muted">{subtitle}</p>
         </div>
       </div>
 
@@ -231,11 +259,20 @@ export default function DoctorPicker({ selected, onSelect, onBack, onContinue })
         </>
       )}
 
+      <div role="alert">{blocked && <Alert>{blocked}</Alert>}</div>
       <div className="booking-actions">
         <button type="button" className="secondary" onClick={onBack}>
           <ArrowLeft size={17} aria-hidden="true" /> Back
         </button>
-        <button type="button" disabled={!selected} onClick={onContinue}>
+        <button
+          type="button"
+          disabled={!selected}
+          onClick={() => {
+            const reason = blockedReason?.();
+            setBlocked(reason || "");
+            if (!reason) onContinue();
+          }}
+        >
           Continue <ArrowRight size={17} aria-hidden="true" />
         </button>
       </div>

@@ -12,6 +12,7 @@ import SectionCard from "../SectionCard";
 import StatCard from "../StatCard";
 import AppointmentCalendar from "./AppointmentCalendar";
 import AppointmentList from "./AppointmentList";
+import PreviewNote from "./PreviewNote";
 import QuickActions from "./QuickActions";
 
 const ACTIONS = [
@@ -107,6 +108,7 @@ function Workload({ figures }) {
               perspective="doctor"
               emptyText="No appointments today."
             />
+            <PreviewNote shown={todays.data?.items.length ?? 0} total={todays.data?.total} noun="appointments today" to={`/appointments?date=${today.date}`} />
           </SectionCard>
           <QuickActions actions={ACTIONS} />
           <SectionCard
@@ -121,6 +123,7 @@ function Workload({ figures }) {
               perspective="doctor"
               emptyText="Nothing booked after today."
             />
+            <PreviewNote shown={upcoming.data?.items.length ?? 0} total={upcoming.data?.total} noun="upcoming appointments" to="/appointments" />
           </SectionCard>
         </div>
         <div className="dash-col">

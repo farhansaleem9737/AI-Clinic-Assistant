@@ -22,8 +22,17 @@ export const NAV_ITEMS = [
   { to: "/appointments", label: "Appointments", icon: CalendarDays, anyOf: APPOINTMENT_READ, end: true },
   // Staff book on a patient's behalf; patients start from a doctor (directory, profile, dashboard).
   { to: "/appointments/book", label: "Book appointment", icon: CalendarPlus, permission: "appointment:create" },
-  { to: "/schedule", label: "Schedule", icon: CalendarClock, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
-  { to: "/doctors", label: "Doctors", icon: Stethoscope, public: true },
+  // Front desk (books for patients, no schedule of its own) reaches hours
+  // management from Doctors / Schedules instead (D83).
+  {
+    to: "/schedule",
+    label: "Schedule",
+    icon: CalendarClock,
+    anyOf: ["schedule:manage_own", "schedule:manage_any"],
+    when: (user, can) => can("schedule:manage_own") || !can("appointment:create"),
+  },
+  { to: "/doctor-schedules", label: "Doctors / Schedules", icon: Stethoscope, permission: "appointment:create" },
+  { to: "/doctors", label: "Doctors", icon: Stethoscope, public: true, when: (user, can) => !user || !can("appointment:create") },
   { to: "/departments", label: "Departments", icon: Building2, public: true },
   { to: "/patients", label: "Patients", icon: Users, permission: "patient:read_any" },
   { to: "/profile", label: "My Profile", icon: UserRound, permission: "patient:read_own" },
@@ -36,11 +45,29 @@ export const NAV_ITEMS = [
   { to: "/admin/users", label: "Users", icon: ShieldCheck, permission: "user:read" },
 ];
 
+// What makes someone an administrator here: the permissions behind the admin
+// dashboard (users, every patient, every appointment). Roles are data; this
+// asks what the account may do, not what its role is called.
+export const ADMIN_PERMISSIONS = ["user:read", "patient:read_any", "appointment:read_any"];
+export const isAdmin = (can) => ADMIN_PERMISSIONS.every((p) => can(p));
+
+// The administrator's sidebar (D86), each item still behind its permission.
+export const ADMIN_NAV = [
+  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/admin/users", label: "Users", icon: ShieldCheck, permission: "user:read" },
+  { to: "/admin/departments", label: "Departments", icon: Building2, permission: "department:manage" },
+  { to: "/admin/doctors", label: "Doctors", icon: Stethoscope, permission: "doctor:read" },
+  { to: "/patients", label: "Patients", icon: Users, permission: "patient:read_any", end: true },
+  { to: "/appointments", label: "Appointments", icon: CalendarDays, anyOf: APPOINTMENT_READ, end: true },
+  { to: "/account", label: "Profile", icon: UserRound },
+];
+
 export function visibleNavItems(user, can) {
+  if (user && isAdmin(can)) return ADMIN_NAV.filter((item) => (item.permission ? can(item.permission) : item.anyOf ? item.anyOf.some(can) : true));
   return NAV_ITEMS.filter((item) => {
-    if (item.public) return true;
+    if (item.public) return !item.when || item.when(user, can);
     if (!user) return false;
-    if (item.when && !item.when(user)) return false;
+    if (item.when && !item.when(user, can)) return false;
     if (item.permission) return can(item.permission);
     if (item.anyOf) return item.anyOf.some(can);
     return true;
@@ -48,7 +75,8 @@ export function visibleNavItems(user, can) {
 }
 
 // Every role lands on the same dashboard route; the page itself shows each
-// role its own view from what the API returns.
+// role its own view from what the API returns (administrators are sent on
+// to /admin).
 export const HOME_PATH = "/dashboard";
 
 // A path to return to after signing in, only if it is inside this app.
@@ -73,10 +101,11 @@ export function roleLabel(roles = []) {
   return roles.map((r) => ROLE_LABELS[r] ?? r.charAt(0).toUpperCase() + r.slice(1).replace(/_/g, " ")).join(", ");
 }
 
-// Where "my profile" lives for this user, if anywhere.
+// Where "my profile" lives for this user.
 export function profilePath(user, can) {
   if (can("patient:read_own")) return "/profile";
   if (can("doctor:update_own") && user.doctor_id) return "/doctor/profile";
   if (can("doctor_application:manage_own")) return "/doctor/application";
-  return null;
+  // Everyone else (administrators, front desk): the account page.
+  return "/account";
 }

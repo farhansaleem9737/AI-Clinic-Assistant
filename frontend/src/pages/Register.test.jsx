@@ -507,6 +507,34 @@ describe("registering as a doctor", () => {
     expect(api.post.mock.calls.map(([url]) => url)).toEqual(["/auth/register", "/auth/login"]);
   });
 
+  it("moves to the first problem when the form is submitted with a mistake", async () => {
+    renderRegister();
+    await fill({ ...DOCTOR, email: "not-an-email" }, { type: "doctor" });
+    await userEvent.click(submit());
+    expect(field.email()).toHaveAttribute("aria-invalid", "true");
+    expect(field.email()).toHaveFocus();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("shows a visible message when the server rejects a doctor request with patient-only errors", async () => {
+    // What a server without doctor sign-up answers: it expects a patient.
+    api.post.mockRejectedValueOnce(
+      httpError(422, "VALIDATION_ERROR", {
+        errors: [
+          { loc: ["body", "first_name"], msg: "Field required" },
+          { loc: ["body", "date_of_birth"], msg: "Field required" },
+        ],
+      })
+    );
+    renderRegister();
+    await fill(DOCTOR, { type: "doctor" });
+    await userEvent.click(submit());
+    const alert = await screen.findByText("Please check your details and try again.");
+    expect(alert.closest(".register-form-alert")).toHaveFocus();
+    expect(screen.queryByText("Enter your first and last name.")).not.toBeInTheDocument();
+    expect(submit()).toBeEnabled();
+  });
+
   it("puts a server department error under the department field", async () => {
     api.post.mockRejectedValueOnce(httpError(400, "DEPARTMENT_UNAVAILABLE", { field: "department_id" }));
     renderRegister();

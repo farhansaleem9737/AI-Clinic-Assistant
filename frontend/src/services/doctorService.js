@@ -43,3 +43,5 @@ export const removeMyDoctorPhoto = () => api.delete("/doctors/me/photo");
 export const uploadDoctorPhoto = (id, file) =>
   api.put(`/doctors/${id}/photo`, fileForm(file));
 export const removeDoctorPhoto = (id) => api.delete(`/doctors/${id}/photo`);
+// Every specialization in use, inactive doctors included (staff filter options).
+export const listAllSpecializations = () => api.get("/doctors/specializations");

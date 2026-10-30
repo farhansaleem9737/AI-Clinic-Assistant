@@ -1,11 +1,13 @@
 import { CalendarDays, ClipboardCheck, ShieldQuestion } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, Navigate } from "react-router-dom";
 import Alert from "../components/Alert";
 import EmptyState from "../components/EmptyState";
 import DoctorDashboard from "../components/dashboard/DoctorDashboard";
 import FrontDeskDashboard from "../components/dashboard/FrontDeskDashboard";
 import PatientDashboard from "../components/dashboard/PatientDashboard";
 import { useAuth } from "../context/useAuth";
+import { isAdmin } from "../routes/navigation";
 import { useFetch } from "../hooks/useFetch";
 import { getDashboardSummary } from "../services/dashboardService";
 
@@ -27,15 +29,24 @@ function greeting(hour) {
  * page cannot show a role's data the server did not send.
  */
 export default function Dashboard() {
+  const { can } = useAuth();
+  // Administrators (who can read users, patients and every appointment) get
+  // the clinic operations overview (D85); everyone else their role's view.
+  if (isAdmin(can)) return <Navigate to="/admin" replace />;
+  return <RoleDashboard />;
+}
+
+function RoleDashboard() {
   const { user, can } = useAuth();
   const applicant = can("doctor_application:manage_own");
-  const { data: summary, loading, error } = useFetch(getDashboardSummary, []);
+  const [version, setVersion] = useState(0);
+  const { data: summary, loading, error } = useFetch(getDashboardSummary, [version]);
   const now = new Date();
   const firstName = user.name.replace(/^(Dr\.?|Prof\.?)\s+/i, "").split(" ")[0];
 
   const sections = summary
     ? [
-        summary.patient && { key: "patient", element: <PatientDashboard summary={summary} /> },
+        summary.patient && { key: "patient", element: <PatientDashboard summary={summary} onChanged={() => setVersion((n) => n + 1)} /> },
         summary.doctor && { key: "doctor", element: <DoctorDashboard summary={summary} /> },
         summary.front_desk && { key: "front_desk", element: <FrontDeskDashboard summary={summary} /> },
       ].filter(Boolean)
@@ -58,7 +69,7 @@ export default function Dashboard() {
 
       <Alert>{error}</Alert>
 
-      {loading && (
+      {loading && !summary && (
         <div className="stat-grid" role="status" aria-label="Loading dashboard">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="card skeleton" style={{ height: 96, margin: 0 }} />

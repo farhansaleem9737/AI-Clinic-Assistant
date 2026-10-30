@@ -21,6 +21,7 @@ import { ACTIVE_STATUSES } from "../../utils/appointments";
 import SectionCard from "../SectionCard";
 import StatCard from "../StatCard";
 import AppointmentList from "./AppointmentList";
+import PreviewNote from "./PreviewNote";
 import QuickActions from "./QuickActions";
 import RecentAppointments from "./RecentAppointments";
 
@@ -82,6 +83,7 @@ export default function FrontDeskDashboard({ summary }) {
               perspective="front_desk"
               emptyText="No patients waiting or expected for the rest of today."
             />
+            <PreviewNote shown={worklist.data?.items.length ?? 0} total={worklist.data?.total} noun="appointments on the worklist" to={`/appointments?date=${today.date}`} />
           </SectionCard>
           {actions.length > 0 && <QuickActions actions={actions} />}
         </div>

@@ -5,11 +5,13 @@ import { doctorName } from "../../utils/format";
 import StatusBadge from "../StatusBadge";
 
 /** Shown only after the API has saved the appointment, from its response. */
-export default function BookingSuccess({ appointment }) {
+export default function BookingSuccess({ appointment, onBehalf = false }) {
   return (
     <div className="booking-success" role="status">
       <CheckCircle2 className="success-icon" size={48} aria-hidden="true" />
-      <h2 id="booking-step-title">Your appointment is booked</h2>
+      <h2 id="booking-step-title">
+        {onBehalf ? `Appointment booked for ${appointment.patient.name}` : "Your appointment is booked"}
+      </h2>
       <p>
         <strong>{doctorName(appointment.doctor)}</strong> · {appointment.doctor.specialization}
       </p>
@@ -25,9 +27,15 @@ export default function BookingSuccess({ appointment }) {
         <Link to={`/appointments/${appointment.id}`} className="button">
           View Appointment Details
         </Link>
-        <Link to="/appointments" className="button secondary">
-          My Appointments
-        </Link>
+        {onBehalf ? (
+          <Link to={`/patients/${appointment.patient.id}`} className="button secondary">
+            Patient Record
+          </Link>
+        ) : (
+          <Link to="/appointments" className="button secondary">
+            My Appointments
+          </Link>
+        )}
       </div>
     </div>
   );

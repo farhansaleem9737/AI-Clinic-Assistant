@@ -13,8 +13,8 @@ export const EMPTY_PATIENT = {
   preferred_language: "",
 };
 
-// What a patient may change about themselves (PATCH /patients/me). Name, date
-// of birth and sex are corrected at reception (architecture §6).
+// The two halves of the patient's own edit (PATCH /patients/me, D99).
+export const IDENTITY_FIELDS = ["first_name", "last_name", "date_of_birth", "sex_at_birth"];
 export const CONTACT_FIELDS = ["phone", "email", "address", "preferred_language"];
 
 // Blank optional fields are sent as null rather than "".
@@ -37,3 +37,23 @@ export function ageFromDateOfBirth(isoDate, today = new Date()) {
   const age = today.getFullYear() - year - (hadBirthdayThisYear ? 0 : 1);
   return age >= 0 ? age : null;
 }
+
+// How the clinic should reach the patient (D81); the API accepts these values.
+export const CONTACT_METHODS = { phone: "Phone call", sms: "SMS", email: "Email" };
+
+// What staff may edit on a patient record (PATCH /patients/{id}). MRN,
+// registration date, login and clinical data are not among them.
+export const EDITABLE_PATIENT_FIELDS = [
+  "first_name",
+  "last_name",
+  "date_of_birth",
+  "sex_at_birth",
+  "phone",
+  "email",
+  "address",
+  "preferred_language",
+  "emergency_contact_name",
+  "emergency_contact_relationship",
+  "emergency_contact_phone",
+  "preferred_contact_method",
+];

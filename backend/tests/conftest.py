@@ -87,6 +87,26 @@ def test_database() -> None:
     command.upgrade(alembic_config(), "head")
 
 
+@pytest.fixture(autouse=True)
+def isolated_side_channels(tmp_path, monkeypatch):
+    """Per test: a fresh rate-limit window, the AI assistant off (D100), and
+    development email written to a temporary outbox instead of backend/var/outbox."""
+    from app.core.config import EmailBackend, settings
+    from app.core.rate_limit import limiter
+
+    limiter.reset()
+    # The assistant starts off and at its code defaults in every test, whatever
+    # backend/.env says: tests use mocked providers and never spend real quota.
+    # (tests/test_ai_live.py opts back in to the real provider.)
+    for name, field in type(settings).model_fields.items():
+        if name.startswith(("ai_", "gemini_", "anthropic_")):
+            monkeypatch.setattr(settings, name, field.default)
+    monkeypatch.setattr(settings, "email_backend", EmailBackend.outbox)
+    monkeypatch.setattr(settings, "email_outbox_dir", tmp_path / "outbox")
+    yield tmp_path / "outbox"
+    limiter.reset()
+
+
 @pytest.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)

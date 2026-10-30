@@ -85,15 +85,55 @@ async def test_unauthenticated_is_401(client, make_patient):
 # ---- own profile ---------------------------------------------------------------
 
 
-async def test_patient_edits_contact_details_but_not_identity(client, db_session, make_patient):
+async def test_patient_edits_contact_and_personal_details_but_not_the_mrn(client, db_session, make_patient):
     patient = await make_patient(with_account=True, first_name="Original")
     headers = await login_as(client, db_session, patient.user_id)
+    before = (await client.get(f"{BASE}me", headers=headers)).json()
     response = await client.patch(
-        f"{BASE}me", json={"phone": "555-0199", "address": "1 Clinic Road", "first_name": "Hacked"}, headers=headers
+        f"{BASE}me",
+        json={"phone": "555-0199", "address": "1 Clinic Road", "first_name": " Corrected ", "mrn": "MRN99999999", "is_active": False},
+        headers=headers,
     )
     assert response.status_code == 200
-    assert response.json()["phone"] == "555-0199"
-    assert response.json()["first_name"] == "Original"
+    body = response.json()
+    assert body["phone"] == "555-0199" and body["first_name"] == "Corrected"
+    assert body["mrn"] == before["mrn"]
+    # The account stays active: patients cannot change their own status.
+    assert (await client.get(f"{BASE}me", headers=headers)).status_code == 200
+
+
+async def test_patient_identity_change_is_audited_with_the_previous_values(client, db_session, make_patient):
+    from sqlalchemy import select
+
+    from app.models.admin import AuditLog
+
+    patient = await make_patient(with_account=True, first_name="Original")
+    headers = await login_as(client, db_session, patient.user_id)
+    before = (await client.get(f"{BASE}me", headers=headers)).json()
+    response = await client.patch(
+        f"{BASE}me", json={"first_name": "New", "date_of_birth": "1985-05-05", "phone": "555-0100"}, headers=headers
+    )
+    assert response.status_code == 200 and response.json()["date_of_birth"] == "1985-05-05"
+    entries = (await db_session.scalars(select(AuditLog).where(AuditLog.target_id == str(patient.id)))).all()
+    changed = [e for e in entries if e.action == "patient.identity_changed"]
+    assert len(changed) == 1
+    assert changed[0].actor_user_id == patient.user_id
+    assert changed[0].details == {
+        "fields": ["date_of_birth", "first_name"],
+        "previous": {"date_of_birth": before["date_of_birth"], "first_name": "Original"},
+    }
+
+    # A contact-only edit (or resending the same name) is not an identity change.
+    assert (await client.patch(f"{BASE}me", json={"phone": "555-0101", "first_name": "New"}, headers=headers)).status_code == 200
+    entries = (await db_session.scalars(select(AuditLog).where(AuditLog.target_id == str(patient.id)))).all()
+    assert len([e for e in entries if e.action == "patient.identity_changed"]) == 1
+
+
+async def test_patient_personal_details_are_validated(client, db_session, make_patient):
+    patient = await make_patient(with_account=True)
+    headers = await login_as(client, db_session, patient.user_id)
+    for bad in ({"first_name": ""}, {"first_name": "   "}, {"date_of_birth": "2999-01-01"}, {"sex_at_birth": "robot"}):
+        assert (await client.patch(f"{BASE}me", json=bad, headers=headers)).status_code == 422, bad
 
 
 async def test_patient_login_without_profile_can_complete_it_once(client, make_user):

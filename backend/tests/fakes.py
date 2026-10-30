@@ -36,6 +36,12 @@ class FakeStorage:
         data, content_type= self.objects[key]
         return ObjectInfo(size=len(data), content_type=content_type)
 
+    async def get(self, key):
+        self._maybe_fail("get")
+        if key not in self.objects:
+            raise StorageError("get_object", "NoSuchKey")
+        return self.objects[key][0]
+
     async def delete(self, key):
         self._maybe_fail("delete")
         self.objects.pop(key, None)

@@ -1,8 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
-import { listAppointments } from "../services/appointmentService";
+import { changeAppointmentStatus, listAppointments } from "../services/appointmentService";
 import { getDashboardSummary } from "../services/dashboardService";
 import { getMyDoctorProfile } from "../services/doctorService";
 import { getMyPatientProfile } from "../services/patientService";
@@ -153,6 +154,145 @@ describe("patient dashboard", () => {
   });
 });
 
+// Mocked appointments only: `n` upcoming visits a day apart, in time order.
+const upcomingList = (n, extra = {}) =>
+  Array.from({ length: n }, (_, i) =>
+    appointment({
+      id: `appt-${i + 1}`,
+      starts_at: `2026-10-${String(5 + i).padStart(2, "0")}T05:00:00Z`,
+      doctor: { ...appointment().doctor, id: `doc-${i + 1}`, name: `Doctor ${i + 1}` },
+      ...extra,
+    })
+  );
+
+describe("patient dashboard: upcoming appointments adapt to how many there are", () => {
+  beforeEach(() => getDashboardSummary.mockResolvedValue({ data: summaries.patient }));
+  const section = () => screen.findByRole("region", { name: "Upcoming Appointments" });
+
+  it("0: a centred empty state that invites booking, with no change panels", async () => {
+    listAppointments.mockResolvedValue(page([]));
+    renderDashboard("patient");
+    const card = await section();
+    expect(await within(card).findByRole("heading", { name: "No upcoming appointments." })).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: /Find a doctor/ })).toHaveAttribute("href", "/doctors");
+    expect(within(card).queryByRole("article")).toBeNull();
+    expect(within(card).queryByText("Need to make changes?")).toBeNull();
+    expect(card).toHaveClass("upcoming-card", "count-0");
+  });
+
+  it("1: the appointment plus the changes and next-visit panels fill the card", async () => {
+    listAppointments.mockResolvedValue(page(upcomingList(1)));
+    renderDashboard("patient");
+    const card = await section();
+    expect(await within(card).findAllByRole("article")).toHaveLength(1);
+    expect(card).toHaveTextContent("Need to make changes?");
+    expect(card).toHaveTextContent("You can reschedule or cancel your appointment anytime, subject to clinic policy.");
+    expect(within(card).getByRole("link", { name: "Manage Appointments" })).toHaveAttribute("href", "/appointments");
+    expect(card).toHaveTextContent("Planning another visit?");
+    expect(within(card).getByRole("link", { name: "Find a Doctor" })).toHaveAttribute("href", "/doctors");
+    expect(card.querySelector(".appt-list.comfortable")).not.toBeNull();
+    expect(card).not.toHaveTextContent(/Showing the next/);
+  });
+
+  it.each([2, 3])("%i: stacked cards with the changes panel only", async (n) => {
+    listAppointments.mockResolvedValue(page(upcomingList(n)));
+    renderDashboard("patient");
+    const card = await section();
+    expect(await within(card).findAllByRole("article")).toHaveLength(n);
+    expect(card).toHaveTextContent("Need to make changes?");
+    expect(card).not.toHaveTextContent("Planning another visit?");
+    expect(card.querySelector(n === 3 ? ".appt-list.compact" : ".appt-list.comfortable")).not.toBeNull();
+    expect(card).not.toHaveTextContent(/Showing the next/);
+  });
+
+  it("4+: previews the nearest three in time order and says how many there are", async () => {
+    // The API returns the first page of 3 (out of order here) and the real total.
+    const [a, b, c] = upcomingList(3);
+    listAppointments.mockResolvedValue({ data: { items: [c, a, b], total: 7, page: 1, page_size: 3 } });
+    renderDashboard("patient");
+    const card = await section();
+    const rows = await within(card).findAllByRole("article");
+    expect(rows.map((r) => r.getAttribute("aria-label").split(",")[0])).toEqual(["Dr. Doctor 1", "Dr. Doctor 2", "Dr. Doctor 3"]);
+    expect(card).toHaveTextContent("Showing the next 3 of 7 upcoming appointments.");
+    expect(within(card).getAllByRole("link", { name: "View all" }).every((l) => l.getAttribute("href") === "/appointments")).toBe(true);
+    expect(listAppointments).toHaveBeenCalledWith({ scope: "upcoming", page_size: 3 });
+  });
+
+  it("every card shows the doctor, specialty, department, status and a details link", async () => {
+    listAppointments.mockResolvedValue(page(upcomingList(2, { status: "requested" })));
+    renderDashboard("patient");
+    const card = await section();
+    const [row] = await within(card).findAllByRole("article");
+    expect(row).toHaveTextContent("Dr. Doctor 1");
+    expect(row).toHaveTextContent("Cardiologist · Cardiology");
+    expect(row).toHaveTextContent("Oct5Mon");
+    expect(row).toHaveTextContent("Requested");
+    expect(row.querySelector('[data-avatar="doctor"]')).not.toBeNull();
+    expect(within(row).getByRole("link", { name: /View details/ })).toHaveAttribute("href", "/appointments/appt-1");
+  });
+
+  it("the card menu offers only the actions the API allows", async () => {
+    const user = userEvent.setup();
+    listAppointments.mockResolvedValue(
+      page([
+        appointment({ id: "appt-1", can_reschedule: true, allowed_transitions: ["cancelled"] }),
+        appointment({ id: "appt-2", starts_at: "2026-10-06T05:00:00Z", can_reschedule: false, allowed_transitions: [] }),
+      ])
+    );
+    renderDashboard("patient");
+    const card = await section();
+    const menus = await within(card).findAllByRole("button", { name: /Actions for the appointment/ });
+
+    await user.click(menus[0]);
+    let items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["View details", "Reschedule", "Cancel appointment"]);
+    expect(items[1]).toHaveAttribute("href", "/appointments/appt-1?reschedule=1");
+    await user.keyboard("{Escape}");
+
+    await user.click(menus[1]);
+    items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["View details"]);
+  });
+
+  it("cancelling from the menu asks first, then reloads the list and the counts", async () => {
+    const user = userEvent.setup();
+    changeAppointmentStatus.mockResolvedValue({ data: {} });
+    listAppointments.mockResolvedValue(page([appointment({ allowed_transitions: ["cancelled"] })]));
+    renderDashboard("patient");
+    const card = await section();
+    await user.click(await within(card).findByRole("button", { name: /Actions for the appointment/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Cancel appointment" }));
+    const dialog = screen.getByRole("dialog");
+    expect(changeAppointmentStatus).not.toHaveBeenCalled();
+
+    listAppointments.mockResolvedValue(page([]));
+    await user.click(within(dialog).getByRole("button", { name: "Cancel appointment" }));
+    expect(changeAppointmentStatus).toHaveBeenCalledWith("appt-1", { status: "cancelled", cancellation_reason: "patient_request", note: null });
+    expect(await screen.findByRole("heading", { name: "No upcoming appointments." })).toBeInTheDocument();
+    expect(getDashboardSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("loading: a skeleton, not the empty state", async () => {
+    listAppointments.mockReturnValue(new Promise(() => {}));
+    renderDashboard("patient");
+    expect(await screen.findByRole("status", { name: "Loading Upcoming Appointments" })).toBeInTheDocument();
+    expect(screen.queryByText("No upcoming appointments.")).toBeNull();
+  });
+
+  it("error: says so with a retry, distinct from having no appointments", async () => {
+    const user = userEvent.setup();
+    listAppointments.mockRejectedValueOnce(apiError("Appointments are unavailable"));
+    listAppointments.mockResolvedValue(page(upcomingList(2)));
+    renderDashboard("patient");
+    const card = await section();
+    expect(await within(card).findByText("Appointments are unavailable")).toBeInTheDocument();
+    expect(within(card).queryByText("No upcoming appointments.")).toBeNull();
+    await user.click(within(card).getByRole("button", { name: /Try again/ }));
+    expect(await within(card).findAllByRole("article")).toHaveLength(2);
+    expect(listAppointments).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("other roles", () => {
   it("doctor: today's workload and patients, no clinic-wide figures", async () => {
     getDashboardSummary.mockResolvedValue({ data: summaries.doctor });
@@ -164,6 +304,23 @@ describe("other roles", () => {
     expect(screen.getByText("My Patients").closest(".stat-card")).toHaveTextContent("14");
     expect(screen.queryByText("Clinic Overview")).not.toBeInTheDocument();
     expect(screen.queryByText("Today's Worklist")).not.toBeInTheDocument();
+  });
+
+  it("doctor: a capped list says how many there are instead of dropping the rest", async () => {
+    getDashboardSummary.mockResolvedValue({ data: summaries.doctor });
+    listAppointments.mockResolvedValue({ data: { items: [appointment()], total: 24, page: 1, page_size: 20 } });
+    renderDashboard("doctor", "Dr. Sarah Khan");
+    const todays = await screen.findByRole("region", { name: "Today's Appointments" });
+    expect(await within(todays).findByText(/Showing 1 of 24 appointments today\./)).toBeInTheDocument();
+    const upcoming = screen.getByRole("region", { name: "Upcoming Appointments" });
+    expect(within(upcoming).getByText(/Showing 1 of 24 upcoming appointments\./)).toBeInTheDocument();
+  });
+
+  it("doctor: a list that fits shows no preview note", async () => {
+    getDashboardSummary.mockResolvedValue({ data: summaries.doctor });
+    renderDashboard("doctor", "Dr. Sarah Khan");
+    await screen.findAllByRole("article");
+    expect(screen.queryByText(/Showing \d+ of/)).toBeNull();
   });
 
   it("doctor login without a profile gets an explanation instead of a broken page", async () => {
@@ -187,14 +344,18 @@ describe("other roles", () => {
     expect(within(overview).queryByText("Departments")).not.toBeInTheDocument();
   });
 
-  it("admin: the full clinic overview with links to the admin pages", async () => {
-    getDashboardSummary.mockResolvedValue({ data: summaries.admin });
-    renderDashboard("admin");
-    const overview = await screen.findByRole("region", { name: "Clinic Overview" });
-    const users = within(overview).getByText("Active users").closest(".stat-card");
-    expect(users).toHaveTextContent("24");
-    expect(within(users).getByRole("link")).toHaveAttribute("href", "/admin/users");
-    expect(within(overview).getByText("Departments").closest(".stat-card")).toHaveTextContent("5");
+  it("admin: sent on to /admin, the Admin Dashboard", async () => {
+    useAuth.mockReturnValue(authAs("Ada", ["admin"], PERMISSIONS.admin));
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <Routes>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/admin" element={<p>Admin dashboard route</p>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Admin dashboard route")).toBeInTheDocument();
+    expect(getDashboardSummary).not.toHaveBeenCalled();
   });
 });
 

@@ -5,6 +5,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.common import LoginEmail
+from app.schemas.schedule import WorkingInterval
 from app.services.availability_service import AvailabilityStatus
 
 # Money is Decimal end to end (Numeric(10, 2) in PostgreSQL), serialised as a
@@ -46,7 +47,10 @@ class DoctorCreate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
-    """Admin edit. Omitted fields are left unchanged."""
+    """Admin edit. Omitted fields are left unchanged. Status and the login
+    are changed elsewhere; unknown fields are refused."""
+
+    model_config = ConfigDict(extra="forbid")
 
     department_id: uuid.UUID | None = None
     title: str | None = Field(default=None, max_length=20)
@@ -91,6 +95,8 @@ class DoctorAvailabilityRead(BaseModel):
     available_today: bool = False
     # Only a few free slots left in the window.
     limited: bool = False
+    # Today's working hours in the doctor's timezone; empty when not working today.
+    today_hours: list[WorkingInterval] = []
 
 
 class DoctorPublic(BaseModel):
@@ -213,3 +219,5 @@ class DoctorResponse(DoctorPublic):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Only on GET /doctors/{id}: upcoming appointments (D90).
+    upcoming_appointments: int | None = None

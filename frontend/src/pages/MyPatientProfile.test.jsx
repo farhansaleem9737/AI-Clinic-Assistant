@@ -8,7 +8,7 @@ import { listDocuments } from "../services/documentService";
 import {
   completeMyPatientProfile,
   getMyPatientProfile,
-  updateMyContactDetails,
+  updateMyDetails,
   uploadMyPatientPhoto,
 } from "../services/patientService";
 import { authAs, patientProfile, PERMISSIONS, summaries } from "../test/fixtures";
@@ -108,9 +108,9 @@ describe("My Profile", () => {
 
   it("edits only the contact details and shows the saved values", async () => {
     const user = userEvent.setup();
-    updateMyContactDetails.mockResolvedValue({ data: { ...patientProfile, phone: "555-0199", photo_url: null } });
+    updateMyDetails.mockResolvedValue({ data: { ...patientProfile, phone: "555-0199", photo_url: null } });
     renderPage();
-    await user.click(await screen.findByRole("button", { name: "Edit Profile" }));
+    await user.click(await screen.findByRole("button", { name: "Edit contact details" }));
 
     const dialog = screen.getByRole("dialog", { name: "Edit contact details" });
     expect(within(dialog).queryByLabelText("First name")).not.toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("My Profile", () => {
     await user.type(phone, "555-0199");
     await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
-    expect(updateMyContactDetails).toHaveBeenCalledWith({
+    expect(updateMyDetails).toHaveBeenCalledWith({
       phone: "555-0199",
       email: "john@example.com",
       address: "123 Main St",
@@ -132,12 +132,61 @@ describe("My Profile", () => {
 
   it("keeps the dialog open and shows the error when saving fails", async () => {
     const user = userEvent.setup();
-    updateMyContactDetails.mockRejectedValue(apiError("Phone number is too long"));
+    updateMyDetails.mockRejectedValue(apiError("Phone number is too long"));
     renderPage();
     await user.click(await screen.findByRole("button", { name: "Edit Profile" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
     expect(await within(dialog).findByText("Phone number is too long")).toBeInTheDocument();
+  });
+
+  it("edits the personal details from the Personal Information card", async () => {
+    const user = userEvent.setup();
+    updateMyDetails.mockResolvedValue({
+      data: { ...patientProfile, first_name: "Jonathan", sex_at_birth: "male", photo_url: null },
+    });
+    renderPage();
+    const personal = await screen.findByRole("region", { name: "Personal Information" });
+    await user.click(within(personal).getByRole("button", { name: "Edit personal details" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit personal details" });
+    expect(within(dialog).queryByLabelText("Phone")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/MRN|record number/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Male" })).toBeInTheDocument();
+    const first = within(dialog).getByLabelText("First name");
+    await user.clear(first);
+    await user.type(first, "Jonathan");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    expect(updateMyDetails).toHaveBeenCalledWith({
+      first_name: "Jonathan",
+      last_name: "Doe",
+      date_of_birth: "1990-01-01",
+      sex_at_birth: "male",
+    });
+    expect(await screen.findByText("Your personal details were saved")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Personal Information" })).toHaveTextContent("Jonathan Doe");
+  });
+
+  it("does not send personal details with a blank name", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const personal = await screen.findByRole("region", { name: "Personal Information" });
+    await user.click(within(personal).getByRole("button", { name: "Edit personal details" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit personal details" });
+    await user.clear(within(dialog).getByLabelText("Last name"));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(await within(dialog).findByText("First name, last name and date of birth are required.")).toBeInTheDocument();
+    expect(updateMyDetails).not.toHaveBeenCalled();
+  });
+
+  it("Edit Profile opens personal and contact details together", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Edit Profile" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByLabelText("First name")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Phone")).toBeInTheDocument();
   });
 
   it("explains a loading failure and can try again", async () => {

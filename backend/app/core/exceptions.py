@@ -55,6 +55,12 @@ class PermissionDeniedError(DomainError):
 
     code = "PERMISSION_DENIED"
 
+class RateLimitedError(DomainError):
+    """Too many attempts from one client in a short time."""
+
+    code = "RATE_LIMITED"
+
+
 class StorageUnavailableError(DomainError):
     """file storage is not configured, or R2 did not answer. Retrying later may work. """
 

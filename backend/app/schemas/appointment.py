@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
@@ -139,9 +139,24 @@ class StatusHistoryRead(BaseModel):
     changed_at: datetime
 
 
+class AppointmentDayCounts(BaseModel):
+    """Totals for a calendar view: on `day`, after today, before today (D79)."""
+
+    timezone: str
+    # Today and the requested day, as local dates in `timezone`.
+    today: date
+    day: date
+    on_day: int
+    upcoming: int
+    past: int
+
+
 class AppointmentCounts(BaseModel):
     """Totals per tab of the appointment list."""
 
     upcoming: int
     past: int
     all: int
+    # With include_today=true only (D84): starting today, and today's date in the list's timezone.
+    today: int | None = None
+    today_date: date | None = None

@@ -5,7 +5,7 @@ import { fileForm } from "./files";
 export const getMyPatientProfile = () => api.get("/patients/me");
 export const completeMyPatientProfile = (data) =>
   api.post("/patients/me", data);
-export const updateMyContactDetails = (data) => api.patch("/patients/me", data);
+export const updateMyDetails = (data) => api.patch("/patients/me", data);
 
 // Staff.
 export const listPatients = (params) => api.get("/patients/", { params });
@@ -24,3 +24,6 @@ export const removeMyPatientPhoto = () => api.delete("/patients/me/photo");
 export const uploadPatientPhoto = (id, file) =>
   api.put(`/patients/${id}/photo`, fileForm(file));
 export const removePatientPhoto = (id) => api.delete(`/patients/${id}/photo`);
+// Up to 100 at once; the result lists each patient's outcome (D91).
+export const bulkSetPatientStatus = (patientIds, isActive) =>
+  api.post("/patients/bulk-status", { patient_ids: patientIds, is_active: isActive });

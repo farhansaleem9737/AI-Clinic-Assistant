@@ -173,7 +173,7 @@ async def test_profile_shows_public_fields_and_never_the_license_number(client, 
     assert body["is_verified"] is True
     assert body["qualifications"] == "MBBS, FCPS (Cardiology)"
     assert body["bio"] == "Interested in preventive cardiology."
-    assert set(body["availability"]) == {"status", "next_available", "available_today", "limited"}
+    assert set(body["availability"]) == {"status", "next_available", "available_today", "limited", "today_hours"}
     for private in ("license_number", "phone", "room_number", "email", "user_id"):
         assert private not in body
     assert "PMC-SECRET-123" not in response.text and "555-0100" not in response.text
@@ -245,6 +245,7 @@ async def test_doctor_without_a_schedule_is_unavailable_and_cannot_be_booked(cli
         "next_available": None,
         "available_today": False,
         "limited": False,
+        "today_hours": [],
     }
 
     headers = await clinic.headers_for(clinic.patient_a.user_id)
@@ -295,6 +296,7 @@ async def test_fully_booked_doctor_is_busy(client, db_session, clinic, make_doct
         "next_available": None,
         "available_today": False,
         "limited": False,
+        "today_hours": [],
     }
 
 

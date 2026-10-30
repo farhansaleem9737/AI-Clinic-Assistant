@@ -1,13 +1,17 @@
+import re
 import uuid
 from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.core.config import settings
 from app.models.patient import SexAtBirth
 from app.schemas.common import LoginEmail, clean_name
+
+
+_PHONE = re.compile(r"\+?[0-9(][0-9 ()\-.]{3,28}")
 
 
 def _validate_dob(value: date | None) -> date | None:
@@ -21,11 +25,37 @@ def _validate_dob(value: date | None) -> date | None:
     return value
 
 
+ContactMethod = Literal["phone", "sms", "email"]
+
+
 class _Contact(BaseModel):
     phone: str | None = Field(default=None, max_length=30)
     email: EmailStr | None = None
     address: str | None = Field(default=None, max_length=500)
     preferred_language: str | None = Field(default=None, max_length=35)
+    emergency_contact_name: str | None = Field(default=None, max_length=100)
+    emergency_contact_relationship: str | None = Field(default=None, max_length=50)
+    emergency_contact_phone: str | None = Field(default=None, max_length=30)
+    preferred_contact_method: ContactMethod | None = None
+
+    @field_validator(
+        "phone", "address", "preferred_language", "emergency_contact_name",
+        "emergency_contact_relationship", "emergency_contact_phone", mode="before",
+    )
+    @classmethod
+    def blank_is_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("phone", "emergency_contact_phone")
+    @classmethod
+    def phone_characters(cls, value: str | None) -> str | None:
+        # Digits with the usual separators and an optional leading +; any
+        # country's format, but not free text.
+        if value is not None and not _PHONE.fullmatch(value):
+            raise ValueError("Use digits, spaces, dashes, dots or brackets, with an optional leading +")
+        return value
 
 
 class PatientCreate(_Contact):
@@ -50,9 +80,23 @@ class PatientUpdate(_Contact):
     _dob = field_validator("date_of_birth")(_validate_dob)
 
 
-class PatientContactUpdate(_Contact):
-    """What patients may change themselves (architecture §6: contact only).
-    Legal name and date of birth are corrected at the front desk."""
+class PatientSelfUpdate(_Contact):
+    """What patients may change themselves (D99): contact details and their
+    personal details (name, date of birth, gender). The MRN, status and
+    everything clinical stay with the clinic. Omitted fields are unchanged;
+    identity changes are written to the audit log with the previous values."""
+
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    date_of_birth: date | None = None
+    sex_at_birth: SexAtBirth | None = None
+
+    _dob = field_validator("date_of_birth")(_validate_dob)
+
+    @field_validator("first_name", "last_name", mode="before")
+    @classmethod
+    def trimmed(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class PatientRegistration(BaseModel):
@@ -110,6 +154,10 @@ class PatientRead(BaseModel):
     email: str | None
     address: str | None
     preferred_language: str | None
+    emergency_contact_name: str | None = None
+    emergency_contact_relationship: str | None = None
+    emergency_contact_phone: str | None = None
+    preferred_contact_method: str | None = None
     has_account: bool
     photo_url: str | None = None
     created_at: datetime
@@ -132,3 +180,22 @@ class PatientSummary(BaseModel):
     mrn: str
     name: str
     date_of_birth: date
+    sex_at_birth: SexAtBirth | None = None
+    # Short-lived link to the patient's photo, when the response carries one.
+    photo_url: str | None = None
+
+
+class PatientBulkStatus(BaseModel):
+    """Admin > Patients bulk activation (D91)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    patient_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    is_active: bool
+
+
+class PatientBulkResult(BaseModel):
+    patient_id: uuid.UUID
+    ok: bool
+    code: str | None = None
+    message: str | None = None

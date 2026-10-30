@@ -44,3 +44,6 @@ backup/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Development email outbox (invitation links are credentials)
+backend/var/

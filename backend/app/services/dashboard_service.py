@@ -22,9 +22,13 @@ from app.models.appointment import ACTIVE_STATUSES, Appointment, AppointmentStat
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.rbac import Role, UserRole
 from app.models.user import User
 from app.schemas.dashboard import (
     AccountSummary,
+    AdminDashboard,
+    AdminKpi,
+    AdminRecentUser,
     DashboardSummary,
     DoctorSummary,
     FrontDeskSummary,
@@ -178,3 +182,74 @@ async def get_summary(db: AsyncSession, principal: Principal) -> DashboardSummar
         summary.front_desk = await _front_desk_section(db, principal, now)
     summary.overview = await _overview_section(db, principal)
     return summary
+
+
+# ---- administrator dashboard (D85) -------------------------------------------------------
+
+RECENT_USERS = 5
+_KPI_TABLES = (
+    ("users", User),
+    # Doctor profiles exist only for approved doctors; applicants have none (D77).
+    ("doctors", Doctor),
+    ("patients", Patient),
+    ("appointments", Appointment),
+    ("departments", Department),
+)
+
+
+def growth(total: int, previous: int) -> tuple[float | None, str]:
+    """Percent change and trend; 'new' when there was nothing to compare with."""
+    if previous == 0:
+        return (None, "new") if total > 0 else (0.0, "flat")
+    percent = round((total - previous) / previous * 100, 1)
+    return percent, "up" if percent > 0 else "down" if percent < 0 else "flat"
+
+
+async def admin_dashboard(db: AsyncSession, day=None) -> AdminDashboard:
+    """Clinic totals as of `day` (default today, in the clinic's timezone)
+    against the end of the previous month, and the newest accounts.
+
+    Totals are cumulative: every record created up to the end of `day`,
+    whatever its current status (a deactivated department or a cancelled
+    appointment still existed). One COUNT query per table; nothing loaded."""
+    tz = ZoneInfo(settings.clinic_timezone)
+    day = day or clock.utcnow().astimezone(tz).date()
+    cutoff = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
+    month_start = datetime.combine(day.replace(day=1), time.min, tzinfo=tz)
+
+    kpis = []
+    for key, model in _KPI_TABLES:
+        total, previous = (
+            await db.execute(
+                select(_count(model.created_at < cutoff), _count(model.created_at < month_start)).select_from(model)
+            )
+        ).one()
+        percent, trend = growth(total, previous)
+        kpis.append(AdminKpi(key=key, total=total, previous=previous, change_percent=percent, trend=trend))
+
+    users = (
+        await db.scalars(
+            select(User).where(User.created_at < cutoff).order_by(User.created_at.desc(), User.id.desc()).limit(RECENT_USERS)
+        )
+    ).all()
+    roles: dict = {u.id: [] for u in users}
+    if users:
+        for user_id, code in await db.execute(
+            select(UserRole.user_id, Role.code)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id.in_(roles))
+            .order_by(Role.code)
+        ):
+            roles[user_id].append(code)
+    return AdminDashboard(
+        date=day,
+        timezone=tz.key,
+        compared_to=day.replace(day=1) - timedelta(days=1),
+        kpis=kpis,
+        recent_users=[
+            AdminRecentUser(
+                id=u.id, name=u.name, email=u.email, roles=roles[u.id], is_active=u.is_active, created_at=u.created_at
+            )
+            for u in users
+        ],
+    )

@@ -23,6 +23,10 @@ export function setAccessToken(token) {
   accessToken = token;
 }
 
+// For the few calls that cannot go through axios (streamed responses read with fetch).
+export const getAccessToken = () => accessToken;
+export const apiUrl = (path) => `${API_BASE_URL}${path}`;
+
 export function setSessionExpiredHandler(handler) {
   onSessionExpired = handler;
 }

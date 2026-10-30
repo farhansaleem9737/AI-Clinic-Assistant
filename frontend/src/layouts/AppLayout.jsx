@@ -1,21 +1,26 @@
-import { LifeBuoy, LogOut, Menu, Search } from "lucide-react";
+import { LifeBuoy, LogOut, Menu, Search, Settings } from "lucide-react";
 import { useState } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import Avatar from "../components/Avatar";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import BrandMark from "../components/BrandMark";
+import ErrorBoundary from "../components/ErrorBoundary";
+import ClinicAssistant from "../components/assistant/ClinicAssistant";
+import AccountMenu from "../components/layout/AccountMenu";
+import GlobalSearch from "../components/layout/GlobalSearch";
+import NotificationBell from "../components/layout/NotificationBell";
 import { useAuth } from "../context/useAuth";
-import { profilePath, roleLabel, visibleNavItems } from "../routes/navigation";
+import { isAdmin, visibleNavItems } from "../routes/navigation";
 
 // The application shell: sidebar navigation, top bar, page content.
 export default function AppLayout() {
   const { user, can, logout } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   // Menu visibility is cosmetic; the API enforces every permission.
   const items = visibleNavItems(user, can);
-  const myProfile = user ? profilePath(user, can) : null;
+  const admin = Boolean(user) && isAdmin(can);
 
   // Ends the server session (revokes the refresh token) before leaving.
   const handleLogout = async () => {
@@ -23,26 +28,16 @@ export default function AppLayout() {
     navigate("/login");
   };
 
-  // The directory search matches doctor names, specialties and departments.
+  // Visitors search the doctor directory (names, specialties, departments).
   const handleSearch = (e) => {
     e.preventDefault();
     navigate(`/doctors${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`);
   };
 
-  const userCard = user && (
-    <>
-      <Avatar name={user.name} role={user.doctor_id ? "doctor" : undefined} size={40} src={user.photo_url} />
-      <span className="who">
-        <strong>{user.name}</strong>
-        <span>{roleLabel(user.roles)}</span>
-      </span>
-    </>
-  );
-
   return (
     <div className={`shell${navOpen ? " nav-open" : ""}`}>
       <aside className="sidebar" aria-label="Main navigation">
-        <Link to={user ? "/dashboard" : "/doctors"} className="brand">
+        <Link to={user ? (admin ? "/admin" : "/dashboard") : "/doctors"} className="brand">
           <BrandMark />
           Clinic AI Assistant
         </Link>
@@ -57,10 +52,17 @@ export default function AppLayout() {
         </nav>
         {user && (
           <div className="sidebar-foot" onClick={() => setNavOpen(false)}>
-            <NavLink to="/help">
-              <LifeBuoy size={19} aria-hidden="true" />
-              Help &amp; Support
-            </NavLink>
+            {admin && can("settings:manage") ? (
+              <NavLink to="/admin/settings">
+                <Settings size={19} aria-hidden="true" />
+                Settings
+              </NavLink>
+            ) : (
+              <NavLink to="/help">
+                <LifeBuoy size={19} aria-hidden="true" />
+                Help &amp; Support
+              </NavLink>
+            )}
             <button type="button" className="sidebar-logout" onClick={handleLogout}>
               <LogOut size={19} aria-hidden="true" />
               Logout
@@ -75,25 +77,26 @@ export default function AppLayout() {
           <button type="button" className="secondary menu-button" aria-label="Open menu" onClick={() => setNavOpen(true)}>
             <Menu size={18} />
           </button>
-          <form className="search" role="search" onSubmit={handleSearch}>
-            <Search size={18} aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="Search doctors"
-              placeholder="Search doctors, specialties, departments…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </form>
+          {user ? (
+            <GlobalSearch />
+          ) : (
+            <form className="search" role="search" onSubmit={handleSearch}>
+              <Search size={18} aria-hidden="true" />
+              <input
+                type="search"
+                aria-label="Search doctors"
+                placeholder="Search doctors, specialties, departments…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </form>
+          )}
           <span className="spacer" />
           {user ? (
-            myProfile ? (
-              <Link to={myProfile} className="topbar-user" aria-label={`${user.name}, ${roleLabel(user.roles)}: my profile`}>
-                {userCard}
-              </Link>
-            ) : (
-              <span className="topbar-user">{userCard}</span>
-            )
+            <>
+              <NotificationBell />
+              <AccountMenu onLogout={handleLogout} />
+            </>
           ) : (
             <div className="row">
               <Link to="/login" className="button secondary">
@@ -106,9 +109,14 @@ export default function AppLayout() {
           )}
         </header>
         <main className="page">
-          <Outlet />
+          {/* A page that fails to render never blanks the shell; a new route clears it. */}
+          <ErrorBoundary resetKey={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
+      {/* One assistant for the whole signed-in app (D96); outside the page boundary so a page error never removes it. */}
+      {user && <ClinicAssistant />}
     </div>
   );
 }

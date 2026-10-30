@@ -35,7 +35,18 @@ function DetailRow({ icon: Icon, label, children }) {
  *
  * `reason` lives in the wizard, so it survives going back to step 2.
  */
-export default function ConfirmStep({ doctor, slot, reason, onReasonChange, onBack, onUnavailable, onDoctorGone, onBooked }) {
+export default function ConfirmStep({
+  doctor,
+  slot,
+  reason,
+  onReasonChange,
+  onBack,
+  onUnavailable,
+  onDoctorGone,
+  onBooked,
+  // Staff booking on behalf of this patient (D82); omitted when patients book for themselves.
+  patient,
+}) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -55,6 +66,7 @@ export default function ConfirmStep({ doctor, slot, reason, onReasonChange, onBa
     setSubmitting(true);
     try {
       const body = { doctor_id: doctor.id, starts_at: offered.starts_at, reason: reason.trim() || null };
+      if (patient) body.patient_id = patient.id;
       const res = await bookAppointment(body, idempotencyKey);
       onBooked(res.data);
     } catch (err) {
@@ -130,7 +142,7 @@ export default function ConfirmStep({ doctor, slot, reason, onReasonChange, onBa
               <div>
                 <h3 id="confirm-reason-title">Reason for Appointment</h3>
                 <p className="muted small" id="confirm-reason-help">
-                  Let the doctor know the reason for your visit (optional).
+                  {patient ? "Let the doctor know the reason for the visit (optional)." : "Let the doctor know the reason for your visit (optional)."}
                 </p>
               </div>
             </div>
@@ -162,8 +174,17 @@ export default function ConfirmStep({ doctor, slot, reason, onReasonChange, onBa
   return (
     <>
       <section className="card confirm-card" aria-labelledby="booking-step-title">
-        <h2 id="booking-step-title">Confirm your appointment</h2>
-        <p className="muted confirm-lead">Please review the details below before confirming your appointment.</p>
+        <h2 id="booking-step-title">{patient ? "Confirm the appointment" : "Confirm your appointment"}</h2>
+        <p className="muted confirm-lead">Please review the details below before confirming the appointment.</p>
+        {patient && (
+          <p className="alert info on-behalf-note">
+            Booking on behalf of{" "}
+            <strong>
+              {patient.first_name} {patient.last_name}
+            </strong>{" "}
+            (MRN {patient.mrn}). The appointment is recorded for this patient; you are recorded as the person who booked it.
+          </p>
+        )}
         {body}
         <Alert>{error}</Alert>
       </section>

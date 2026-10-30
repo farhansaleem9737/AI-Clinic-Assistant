@@ -5,6 +5,9 @@ export const listAppointments = (params) =>
   api.get("/appointments/", { params, paramsSerializer: { indexes: null } });
 // Upcoming / past / all totals under the same filters as the list.
 export const countAppointments = (params) => api.get("/appointments/counts", { params, paramsSerializer: { indexes: null } });
+// The doctor's calendar view (D79): on `day`, after today, before today.
+export const countAppointmentsByDay = (params) =>
+  api.get("/appointments/day-counts", { params, paramsSerializer: { indexes: null } });
 export const getAppointment = (id) => api.get(`/appointments/${id}`);
 export const getAppointmentHistory = (id) => api.get(`/appointments/${id}/history`);
 export const updateAppointment = (id, data) => api.patch(`/appointments/${id}`, data);

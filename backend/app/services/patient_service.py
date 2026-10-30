@@ -1,27 +1,67 @@
 import logging
 import uuid
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from enum import StrEnum
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
+from app.core.config import settings
+from app.core.exceptions import BusinessRuleError, ConflictError, DomainError, NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.core.storage import Storage
 from app.models.stored_file import FileCategory
 from app.services.file_validation import CheckedFile
-from app.models.patient import Patient
+from app.models.appointment import Appointment
+from app.models.patient import Patient, SexAtBirth
 from app.models.user import User
 from app.schemas.patient import (
-    PatientContactUpdate,
+    PatientSelfUpdate,
     PatientCreate,
     PatientRegistration,
     PatientUpdate,
 )
 from app.services import access, appointment_service, auth_service, rbac_service, file_service
+from app.services.audit_service import AuditAction, record
 from app.services.pagination import PageParams, paginate
 
 logger = logging.getLogger(__name__)
+
+
+class PatientSort(StrEnum):
+    name = "name"
+    registered_newest = "registered_newest"
+    registered_oldest = "registered_oldest"
+    # Admin > Patients columns (D91); "-" = descending.
+    name_desc = "-name"
+    mrn = "mrn"
+    mrn_desc = "-mrn"
+    email = "email"
+    email_desc = "-email"
+    phone = "phone"
+    phone_desc = "-phone"
+    status = "status"  # active first
+    status_desc = "-status"
+
+
+# The id breaks ties, so pages never repeat or skip a patient.
+_SORTS = {
+    PatientSort.name: (Patient.last_name, Patient.first_name),
+    PatientSort.registered_newest: (Patient.created_at.desc(),),
+    PatientSort.registered_oldest: (Patient.created_at.asc(),),
+    PatientSort.name_desc: (Patient.last_name.desc(), Patient.first_name.desc()),
+    PatientSort.mrn: (Patient.mrn.asc(),),
+    PatientSort.mrn_desc: (Patient.mrn.desc(),),
+    # Walk-ins without an email or phone sort last either way.
+    PatientSort.email: (func.lower(Patient.email).asc().nulls_last(), Patient.last_name, Patient.first_name),
+    PatientSort.email_desc: (func.lower(Patient.email).desc().nulls_last(), Patient.last_name, Patient.first_name),
+    PatientSort.phone: (Patient.phone.asc().nulls_last(), Patient.last_name, Patient.first_name),
+    PatientSort.phone_desc: (Patient.phone.desc().nulls_last(), Patient.last_name, Patient.first_name),
+    PatientSort.status: (Patient.is_active.desc(), Patient.last_name, Patient.first_name),
+    PatientSort.status_desc: (Patient.is_active.asc(), Patient.last_name, Patient.first_name),
+}
 
 
 async def _commit_and_reload(db: AsyncSession, patient: Patient) -> Patient:
@@ -93,12 +133,22 @@ async def list_patients(
     q: str | None = None,
     date_of_birth: date | None = None,
     is_active: bool | None = None,
+    doctor_id: uuid.UUID | None = None,
+    registered_from: date | None = None,
+    registered_to: date | None = None,
+    sex_at_birth: SexAtBirth | None = None,
+    sort: PatientSort = PatientSort.name,
 ) -> tuple[list[Patient], int]:
-    query = (
-        select(Patient)
-        .where(access.patient_visibility(principal))
-        .order_by(Patient.last_name, Patient.first_name, Patient.id)
-    )
+    """Patients the caller may see, filtered in SQL and paged.
+
+    `doctor_id`: patients who have (or had) an appointment with that doctor —
+    the only doctor-patient relationship the data model has. An EXISTS test,
+    so several appointments never repeat a patient. `registered_from/_to`:
+    inclusive calendar dates of the record's creation, in the clinic's
+    timezone."""
+    if registered_from and registered_to and registered_from > registered_to:
+        raise BusinessRuleError("The start date must not be after the end date", code="INVALID_RANGE")
+    query = select(Patient).where(access.patient_visibility(principal)).order_by(*_SORTS[sort], Patient.id)
     if q:
         term = q.strip()
         pattern = f"%{term}%"
@@ -114,6 +164,19 @@ async def list_patients(
         query = query.where(Patient.date_of_birth == date_of_birth)
     if is_active is not None:
         query = query.where(Patient.is_active.is_(is_active))
+    if sex_at_birth is not None:
+        query = query.where(Patient.sex_at_birth == sex_at_birth)
+    if doctor_id is not None:
+        query = query.where(
+            exists().where(Appointment.patient_id == Patient.id, Appointment.doctor_id == doctor_id)
+        )
+    tz = ZoneInfo(settings.clinic_timezone)
+    if registered_from is not None:
+        query = query.where(Patient.created_at >= datetime.combine(registered_from, time.min, tzinfo=tz))
+    if registered_to is not None:
+        query = query.where(
+            Patient.created_at < datetime.combine(registered_to + timedelta(days=1), time.min, tzinfo=tz)
+        )
     return await paginate(db, query, params)
 
 
@@ -140,13 +203,30 @@ async def update_patient(db: AsyncSession, principal: Principal, patient_id: uui
     return patient
 
 
-async def update_own_contact(db: AsyncSession, principal: Principal, data: PatientContactUpdate) -> Patient:
+IDENTITY_FIELDS = ("first_name", "last_name", "date_of_birth", "sex_at_birth")
+
+
+async def update_own_profile(db: AsyncSession, principal: Principal, data: PatientSelfUpdate) -> Patient:
+    """A patient edits their own contact and personal details (D99). A
+    change to the name, date of birth or gender is audited with the values
+    it replaced, so the clinic can see and, if needed, reverse it."""
     patient = await get_own(db, principal)
     changes = data.model_dump(exclude_unset=True)
+    for required in IDENTITY_FIELDS:
+        if required in changes and changes[required] is None:
+            del changes[required]
+    previous = {
+        field: str(getattr(patient, field))
+        for field in IDENTITY_FIELDS
+        if field in changes and changes[field] != getattr(patient, field)
+    }
     for field, value in changes.items():
         setattr(patient, field, value)
+    if previous:
+        record(db, AuditAction.patient_identity_changed, actor_id=principal.user_id, target_type="patient",
+               target_id=patient.id, details={"fields": sorted(previous), "previous": previous})
     await _commit_and_reload(db, patient)
-    logger.info("patient_contact_updated", extra={"patient_id": str(patient.id), "fields": sorted(changes)})
+    logger.info("patient_self_updated", extra={"patient_id": str(patient.id), "fields": sorted(changes)})
     return patient
 
 
@@ -159,12 +239,40 @@ async def set_active(db: AsyncSession, principal: Principal, patient_id: uuid.UU
             details={"appointments": upcoming},
         )
     patient.is_active = active
+    record(db, AuditAction.patient_activated if active else AuditAction.patient_deactivated,
+           actor_id=principal.user_id, target_type="patient", target_id=patient.id)
     await _commit_and_reload(db, patient)
     logger.info(
         "patient_activated" if active else "patient_deactivated",
         extra={"patient_id": str(patient.id), "by": str(principal.user_id)},
     )
     return patient
+
+
+@dataclass(frozen=True)
+class BulkOutcome:
+    patient_id: uuid.UUID
+    ok: bool
+    code: str | None = None
+    message: str | None = None
+
+
+async def set_active_bulk(
+    db: AsyncSession, principal: Principal, patient_ids: list[uuid.UUID], active: bool
+) -> list[BulkOutcome]:
+    """Each patient in its own transaction through ``set_active``: the same
+    visibility, upcoming-appointment rule and audit apply, and one refusal
+    does not undo the others."""
+    outcomes = []
+    for patient_id in dict.fromkeys(patient_ids):
+        try:
+            await set_active(db, principal, patient_id, active)
+            outcomes.append(BulkOutcome(patient_id, True))
+        except DomainError as exc:
+            await db.rollback()
+            await db.refresh(principal.user)  # the rollback expired it
+            outcomes.append(BulkOutcome(patient_id, False, exc.code, exc.message))
+    return outcomes
 
 
 async def _ensure_unlinked(db: AsyncSession, patient: Patient) -> None:

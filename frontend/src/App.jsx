@@ -4,6 +4,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import AppLayout from "./layouts/AppLayout";
 import AuthLayout from "./layouts/AuthLayout";
 import DirectoryLayout from "./layouts/DirectoryLayout";
+import AcceptAdminInvite from "./pages/AcceptAdminInvite";
 import ForgotPassword from "./pages/ForgotPassword";
 import Help from "./pages/Help";
 import LegalDocument from "./pages/LegalDocument";
@@ -19,13 +20,18 @@ import MyPatientProfile from "./pages/MyPatientProfile";
 import NotFound from "./pages/NotFound";
 import Patients from "./pages/Patients";
 import PatientDetail from "./pages/PatientDetail";
+import AdminDashboard from "./components/dashboard/AdminDashboard";
+import { ADMIN_PERMISSIONS } from "./routes/navigation";
+import AccountProfile from "./pages/AccountProfile";
 import AdminDepartments from "./pages/AdminDepartments";
+import AdminSettings from "./pages/AdminSettings";
 import AdminDoctors from "./pages/AdminDoctors";
 import AdminUsers from "./pages/AdminUsers";
 import Appointments from "./pages/Appointments";
 import AppointmentDetail from "./pages/AppointmentDetail";
 import BookAppointment from "./pages/BookAppointment";
 import DoctorSchedule from "./pages/DoctorSchedule";
+import DoctorSchedules from "./pages/DoctorSchedules";
 
 // `permission` on a route only hides pages the user cannot use; the API
 // enforces the same permission on every request.
@@ -38,11 +44,16 @@ const PROTECTED_ROUTES = [
   { path: "/appointments/book", element: <BookAppointment />, anyOf: ["appointment:create", "appointment:create_own"] },
   { path: "/appointments/:id", element: <AppointmentDetail />, anyOf: APPOINTMENT_READ },
   { path: "/schedule", element: <DoctorSchedule />, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
+  { path: "/doctor-schedules", element: <DoctorSchedules />, permission: "schedule:read" },
   { path: "/doctor/profile", element: <MyDoctorProfile />, permission: "doctor:update_own" },
   { path: "/doctor/application", element: <DoctorApplication />, permission: "doctor_application:manage_own" },
   { path: "/profile", element: <MyPatientProfile />, permission: "patient:read_own" },
   { path: "/patients", element: <Patients />, permission: "patient:read_any" },
   { path: "/patients/:id", element: <PatientDetail />, anyOf: ["patient:read_any", "patient:read_assigned"] },
+  // The administrator's dashboard (D85/D86); the backend checks the same permissions.
+  { path: "/admin", element: <AdminDashboard />, allOf: ADMIN_PERMISSIONS },
+  { path: "/admin/settings", element: <AdminSettings />, permission: "settings:manage" },
+  { path: "/account", element: <AccountProfile /> },
   { path: "/admin/users", element: <AdminUsers />, permission: "user:read" },
   { path: "/admin/departments", element: <AdminDepartments />, permission: "department:manage" },
   { path: "/admin/doctors", element: <AdminDoctors />, permission: "doctor:read" },
@@ -57,6 +68,8 @@ function App() {
           <Route element={<AuthLayout variant="login" />}>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
+            {/* Public: reached from an emailed invitation link (D87). */}
+            <Route path="/accept-admin-invite" element={<AcceptAdminInvite />} />
           </Route>
           <Route element={<AuthLayout variant="register" />}>
             <Route path="/register" element={<Register />} />
@@ -71,12 +84,12 @@ function App() {
             <Route path="/departments" element={<Departments />} />
           </Route>
           <Route element={<AppLayout />}>
-            {PROTECTED_ROUTES.map(({ path, element, permission, anyOf }) => (
+            {PROTECTED_ROUTES.map(({ path, element, permission, anyOf, allOf }) => (
               <Route
                 key={path}
                 path={path}
                 element={
-                  <ProtectedRoute permission={permission} anyOf={anyOf}>
+                  <ProtectedRoute permission={permission} anyOf={anyOf} allOf={allOf}>
                     {element}
                   </ProtectedRoute>
                 }

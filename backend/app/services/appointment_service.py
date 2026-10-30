@@ -38,7 +38,7 @@ from app.models.patient import Patient
 from app.models.stored_file import StoredFile
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreate, AppointmentUpdate, Reschedule, StatusChange
-from app.services import access, appointment_state, availability_service
+from app.services import access, appointment_state, availability_service, notification_service
 from app.services.appointment_state import Context
 from app.services.pagination import PageParams, paginate
 
@@ -68,6 +68,9 @@ class AppointmentView:
     can_reschedule: bool
     # Object key of the doctor's profile photo, if any (signed by the endpoint).
     doctor_photo_key: str | None = None
+    # The same for the patient's photo.
+    patient_photo_key: str | None = None
+    patient_sex: str | None = None
 
 
 class AppointmentScope(StrEnum):
@@ -77,6 +80,22 @@ class AppointmentScope(StrEnum):
     upcoming = "upcoming"
     past = "past"
     all = "all"
+
+
+class AppointmentSort(StrEnum):
+    """Columns the appointment table may sort by (D84). Never a raw column name."""
+
+    time_asc = "time_asc"
+    time_desc = "time_desc"
+    patient_asc = "patient_asc"
+    patient_desc = "patient_desc"
+    doctor_asc = "doctor_asc"
+    doctor_desc = "doctor_desc"
+    department_asc = "department_asc"
+    department_desc = "department_desc"
+    # Lifecycle order (requested, scheduled, confirmed, ...), as the enum is declared.
+    status_asc = "status_asc"
+    status_desc = "status_desc"
 
 
 @dataclass(frozen=True)
@@ -91,9 +110,18 @@ class AppointmentFilters:
     q: str | None = None
     scope: AppointmentScope = AppointmentScope.all
     newest_first: bool = False
+    # When set, overrides newest_first; time and id always break ties.
+    sort: AppointmentSort | None = None
 
 
 _Successor = aliased(Appointment)
+_PatientPhoto = aliased(StoredFile)
+
+
+def appointment_department():
+    """The department an appointment belongs to: the one recorded at booking
+    (D92), else, for older rows, the doctor's current one. Needs Doctor joined."""
+    return func.coalesce(Appointment.department_id, Doctor.department_id)
 
 
 def _view_query(doctor_user=None) -> Select:
@@ -114,22 +142,25 @@ def _view_query(doctor_user=None) -> Select:
             Patient.first_name,
             Patient.last_name,
             Patient.date_of_birth,
+            Patient.sex_at_birth,
             _Successor.id,
             StoredFile.object_key,
+            _PatientPhoto.object_key,
         )
         .join(Doctor, Doctor.id == Appointment.doctor_id)
         .join(doctor_user, doctor_user.id == Doctor.user_id)
-        .join(Department, Department.id == Doctor.department_id)
+        .join(Department, Department.id == appointment_department())
         .join(Patient, Patient.id == Appointment.patient_id)
         .outerjoin(_Successor, _Successor.rescheduled_from_id == Appointment.id)
         .outerjoin(StoredFile, StoredFile.id == Doctor.photo_file_id)
+        .outerjoin(_PatientPhoto, _PatientPhoto.id == Patient.photo_file_id)
     )
 
 
 def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
     (
         appt, doctor_name, title, room, specialization, experience, license_number,
-        dept_id, dept_name, tz, mrn, first, last, dob, successor_id, photo_key,
+        dept_id, dept_name, tz, mrn, first, last, dob, sex, successor_id, photo_key, patient_photo_key,
     ) = row
     ctx = Context(principal=principal, appointment=appt, now=now, timezone=ZoneInfo(tz))
     allowed, can_reschedule = appointment_state.allowed_actions(ctx)
@@ -152,6 +183,8 @@ def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
         allowed_transitions=allowed,
         can_reschedule=can_reschedule,
         doctor_photo_key=photo_key,
+        patient_photo_key=patient_photo_key,
+        patient_sex=sex.value if sex is not None else None,
     )
 
 
@@ -187,8 +220,23 @@ async def get_detail(db: AsyncSession, principal: Principal, appointment_id: uui
     return AppointmentDetail(view=view, patient=patient)
 
 
-def _local_day_start(day: date) -> datetime:
-    return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.clinic_timezone))
+def _local_day_start(day: date, tz: ZoneInfo | None = None) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=tz or ZoneInfo(settings.clinic_timezone))
+
+
+async def filter_timezone(db: AsyncSession, principal: Principal, filters: AppointmentFilters) -> ZoneInfo:
+    """Which calendar the list's dates mean: the chosen doctor's department,
+    else a doctor's own department, else the clinic's timezone."""
+    doctor_id = filters.doctor_id
+    if doctor_id is None and principal.doctor_id is not None and not principal.has(Perm.appointment_read_any):
+        doctor_id = principal.doctor_id
+    if doctor_id is not None:
+        tz = await db.scalar(
+            select(Department.timezone).join(Doctor, Doctor.department_id == Department.id).where(Doctor.id == doctor_id)
+        )
+        if tz:
+            return ZoneInfo(tz)
+    return ZoneInfo(settings.clinic_timezone)
 
 
 def _scope_condition(scope: AppointmentScope, now: datetime) -> ColumnElement[bool] | None:
@@ -199,8 +247,17 @@ def _scope_condition(scope: AppointmentScope, now: datetime) -> ColumnElement[bo
     return None
 
 
-def _filtered(query: Select, filters: AppointmentFilters, doctor_user) -> Select:
-    """Every list filter except the scope, shared by the list and its counts."""
+def _filtered(
+    query: Select,
+    filters: AppointmentFilters,
+    doctor_user,
+    principal: Principal,
+    tz: ZoneInfo,
+    *,
+    with_dates: bool = True,
+) -> Select:
+    """Every list filter except the scope, shared by the list and its counts.
+    The query must already join Doctor, the doctor's User, Department and Patient."""
     if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
         raise BusinessRuleError("date_from must not be after date_to", code="INVALID_RANGE")
     if filters.patient_id:
@@ -208,33 +265,58 @@ def _filtered(query: Select, filters: AppointmentFilters, doctor_user) -> Select
     if filters.doctor_id:
         query = query.where(Appointment.doctor_id == filters.doctor_id)
     if filters.department_id:
-        query = query.where(Doctor.department_id == filters.department_id)
+        query = query.where(appointment_department() == filters.department_id)
     if filters.statuses:
         query = query.where(Appointment.status.in_(filters.statuses))
-    # Calendar dates are interpreted in the clinic's timezone.
-    if filters.date_from:
-        query = query.where(Appointment.starts_at >= _local_day_start(filters.date_from))
-    if filters.date_to:
-        query = query.where(Appointment.starts_at < _local_day_start(filters.date_to + timedelta(days=1)))
+    # Calendar dates are interpreted in `tz` (see filter_timezone).
+    if with_dates and filters.date_from:
+        query = query.where(Appointment.starts_at >= _local_day_start(filters.date_from, tz))
+    if with_dates and filters.date_to:
+        query = query.where(Appointment.starts_at < _local_day_start(filters.date_to + timedelta(days=1), tz))
     if filters.q and filters.q.strip():
         pattern = f"%{filters.q.strip()}%"
-        query = query.where(
-            or_(doctor_user.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern))
-        )
+        fields = [doctor_user.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern)]
+        if principal.has_any(Perm.appointment_read_any, Perm.appointment_read_assigned):
+            # Doctors and staff look for patients: name, MRN or the reason
+            # for the visit. Only within appointments they can already see.
+            fields += [
+                (Patient.first_name + " " + Patient.last_name).ilike(pattern),
+                Patient.mrn.ilike(pattern),
+                Appointment.reason.ilike(pattern),
+            ]
+        query = query.where(or_(*fields))
     return query
+
+
+def _order(filters: AppointmentFilters, doctor_user) -> tuple:
+    if filters.sort is None:
+        time_order = Appointment.starts_at.desc() if filters.newest_first else Appointment.starts_at.asc()
+        return time_order, Appointment.id
+    column, direction = filters.sort.value.rsplit("_", 1)
+    keys = {
+        "time": (Appointment.starts_at,),
+        "patient": (Patient.last_name, Patient.first_name),
+        "doctor": (doctor_user.name,),
+        "department": (Department.name,),
+        "status": (Appointment.status,),
+    }[column]
+    ordered = tuple(k.desc() if direction == "desc" else k.asc() for k in keys)
+    return (*ordered, Appointment.starts_at, Appointment.id)
 
 
 async def list_appointments(
     db: AsyncSession, principal: Principal, params: PageParams, filters: AppointmentFilters
 ) -> tuple[list[AppointmentView], int]:
     doctor_user = aliased(User)
-    query = _filtered(_view_query(doctor_user).where(access.appointment_visibility(principal)), filters, doctor_user)
+    tz = await filter_timezone(db, principal, filters)
+    query = _filtered(
+        _view_query(doctor_user).where(access.appointment_visibility(principal)), filters, doctor_user, principal, tz
+    )
     now = clock.utcnow()
     scope = _scope_condition(filters.scope, now)
     if scope is not None:
         query = query.where(scope)
-    order = Appointment.starts_at.desc() if filters.newest_first else Appointment.starts_at.asc()
-    query = query.order_by(order, Appointment.id)
+    query = query.order_by(*_order(filters, doctor_user))
 
     rows, total = await paginate(db, query, params)
     return [_to_view(r, principal, now) for r in rows], total
@@ -245,24 +327,84 @@ class ScopeCounts:
     upcoming: int
     past: int
     all: int
+    # Only when asked for (include_today): appointments starting today in the
+    # list's timezone, and that date.
+    today: int | None = None
+    today_date: date | None = None
 
 
-async def count_by_scope(db: AsyncSession, principal: Principal, filters: AppointmentFilters) -> ScopeCounts:
+async def count_by_scope(
+    db: AsyncSession, principal: Principal, filters: AppointmentFilters, *, include_today: bool = False
+) -> ScopeCounts:
     """How many visible appointments fall in each tab, under the same filters
     as the list (one aggregate query; no rows are loaded)."""
     doctor_user = aliased(User)
     now = clock.utcnow()
     upcoming = upcoming_condition(now)
-    query = (
-        select(func.count().filter(upcoming), func.count().filter(~upcoming), func.count())
-        .select_from(Appointment)
+    tz = await filter_timezone(db, principal, filters)
+    today = now.astimezone(tz).date()
+    on_today = (Appointment.starts_at >= _local_day_start(today, tz)) & (
+        Appointment.starts_at < _local_day_start(today + timedelta(days=1), tz)
+    )
+    query = _counting(
+        select(func.count().filter(upcoming), func.count().filter(~upcoming), func.count(), func.count().filter(on_today)),
+        doctor_user,
+        principal,
+    )
+    up, past, total, today_count = (await db.execute(_filtered(query, filters, doctor_user, principal, tz))).one()
+    if not include_today:
+        return ScopeCounts(upcoming=up, past=past, all=total)
+    return ScopeCounts(upcoming=up, past=past, all=total, today=today_count, today_date=today)
+
+
+def _counting(query: Select, doctor_user, principal: Principal) -> Select:
+    return (
+        query.select_from(Appointment)
         .join(Doctor, Doctor.id == Appointment.doctor_id)
         .join(doctor_user, doctor_user.id == Doctor.user_id)
-        .join(Department, Department.id == Doctor.department_id)
+        .join(Department, Department.id == appointment_department())
+        .join(Patient, Patient.id == Appointment.patient_id)
         .where(access.appointment_visibility(principal))
     )
-    up, past, total = (await db.execute(_filtered(query, filters, doctor_user))).one()
-    return ScopeCounts(upcoming=up, past=past, all=total)
+
+
+@dataclass(frozen=True)
+class DayCounts:
+    timezone: str
+    today: date
+    day: date
+    on_day: int
+    upcoming: int
+    past: int
+
+
+async def count_by_day(
+    db: AsyncSession, principal: Principal, filters: AppointmentFilters, day: date | None
+) -> DayCounts:
+    """Counts for a calendar view (the doctor's My Appointments, D79):
+    appointments on `day`, after today and before today, in the doctor's
+    timezone. Status and search filters apply; date filters do not (the
+    three ranges are the dates). Statuses are counted as stored: a cancelled
+    appointment tomorrow is still in "upcoming"."""
+    doctor_user = aliased(User)
+    tz = await filter_timezone(db, principal, filters)
+    today = clock.utcnow().astimezone(tz).date()
+    day = day or today
+    day_start, day_end = _local_day_start(day, tz), _local_day_start(day + timedelta(days=1), tz)
+    today_start, tomorrow_start = _local_day_start(today, tz), _local_day_start(today + timedelta(days=1), tz)
+    query = _counting(
+        select(
+            func.count().filter(Appointment.starts_at >= day_start, Appointment.starts_at < day_end),
+            func.count().filter(Appointment.starts_at >= tomorrow_start),
+            func.count().filter(Appointment.starts_at < today_start),
+        ),
+        doctor_user,
+        principal,
+    )
+    on_day, upcoming, past = (
+        await db.execute(_filtered(query, filters, doctor_user, principal, tz, with_dates=False))
+    ).one()
+    return DayCounts(timezone=tz.key, today=today, day=day, on_day=on_day, upcoming=upcoming, past=past)
 
 
 async def history(db: AsyncSession, principal: Principal, appointment_id: uuid.UUID) -> list[AppointmentStatusHistory]:
@@ -321,7 +463,11 @@ async def _resolve_patient(db: AsyncSession, principal: Principal, requested: uu
     if principal.has(Perm.appointment_create):
         if requested is None:
             raise BusinessRuleError("patient_id is required", code="PATIENT_REQUIRED")
-        patient = await db.get(Patient, requested)
+        # Booking permission is not patient access: the patient must also be
+        # one the caller may see (reception: any), or it is "not found".
+        patient = await db.scalar(
+            select(Patient).where(Patient.id == requested, access.patient_visibility(principal))
+        )
     else:
         if principal.patient_id is None:
             raise BusinessRuleError("Complete your patient profile before booking", code="NO_PATIENT_PROFILE")
@@ -421,6 +567,8 @@ def _new_appointment(
         booked_by_user_id=principal.user_id,
         idempotency_key=idempotency_key,
         rescheduled_from_id=rescheduled_from_id,
+        # Evaluated in the INSERT itself: the department at the moment of booking.
+        department_id=select(Doctor.department_id).where(Doctor.id == doctor_id).scalar_subquery(),
     )
     db.add(appt)
     return appt
@@ -468,12 +616,57 @@ async def book(
     )
     await _flush_or_conflict(db)
     _record_booking(db, appt, principal)
+    await _notify_doctor_of_booking(db, appt, principal)
     await db.commit()
     logger.info(
         "appointment_booked",
         extra={"appointment_id": str(appt.id), "doctor_id": str(appt.doctor_id), "by": str(principal.user_id)},
     )
     return await get_view(db, principal, appt.id), False
+
+
+# ---- notifications (D86): dates and times only, never who or why ----------------------
+
+
+async def _doctor_user_and_tz(db: AsyncSession, doctor_id: uuid.UUID) -> tuple[uuid.UUID, ZoneInfo]:
+    user_id, tz = (
+        await db.execute(
+            select(Doctor.user_id, Department.timezone)
+            .join(Department, Department.id == Doctor.department_id)
+            .where(Doctor.id == doctor_id)
+        )
+    ).one()
+    return user_id, ZoneInfo(tz)
+
+
+async def _notify_doctor_of_booking(db: AsyncSession, appt: Appointment, principal: Principal) -> None:
+    doctor_user, tz = await _doctor_user_and_tz(db, appt.doctor_id)
+    if doctor_user == principal.user_id:
+        return
+    notification_service.notify(
+        db,
+        [doctor_user],
+        type="appointment_booked",
+        title="New appointment",
+        message=f"An appointment was booked for {notification_service.when(appt.starts_at, tz)}.",
+        link=f"/appointments/{appt.id}",
+    )
+
+
+async def _notify_cancellation(db: AsyncSession, ctx: Context) -> None:
+    """The doctor and the patient (if they have a login) hear about it,
+    except whoever cancelled."""
+    appt = ctx.appointment
+    doctor_user, _ = await _doctor_user_and_tz(db, appt.doctor_id)
+    patient_user = await db.scalar(select(Patient.user_id).where(Patient.id == appt.patient_id))
+    notification_service.notify(
+        db,
+        [u for u in (doctor_user, patient_user) if u is not None and u != ctx.principal.user_id],
+        type="appointment_cancelled",
+        title="Appointment cancelled",
+        message=f"The appointment on {notification_service.when(appt.starts_at, ctx.timezone)} was cancelled.",
+        link=f"/appointments/{appt.id}",
+    )
 
 
 # ---- changes ------------------------------------------------------------------------
@@ -513,6 +706,7 @@ async def change_status(
     previous = appt.status
     if change.status is S.cancelled:
         _cancel(ctx, change.cancellation_reason, change.note)
+        await _notify_cancellation(db, ctx)
     else:
         appt.status = change.status
     _record(db, appt, previous, change.status, principal.user_id, change.note)

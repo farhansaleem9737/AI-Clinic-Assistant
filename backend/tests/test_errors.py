@@ -101,7 +101,8 @@ async def test_validation_error_shape_does_not_echo_password(client):
     assert response.status_code == 422
     error = assert_error_shape(response.json())
     assert error["code"] == "VALIDATION_ERROR"
-    assert error["details"]["errors"][0]["loc"] == ["body", "email"]
+    # "patient": registration is a patient/doctor tagged union (D77).
+    assert error["details"]["errors"][0]["loc"] == ["body", "patient", "email"]
     assert "Sup3rSecretValue" not in response.text
 
 

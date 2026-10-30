@@ -32,7 +32,7 @@ from app.core.exceptions import (
     PermissionDeniedError,
     StorageUnavailableError,
 )
-from app.core.permissions import Principal, RoleCode
+from app.core.permissions import Perm, Principal, RoleCode
 from app.core.storage import Storage, StorageError
 from app.models.department import Department
 from app.models.doctor import Doctor
@@ -46,7 +46,8 @@ from app.models.rbac import Role, UserRole
 from app.models.stored_file import FileCategory, FileStatus
 from app.models.user import User
 from app.schemas.doctor_application import DoctorApplicationUpdate, DoctorRegistration, ProfessionalDetails
-from app.services import auth_service, doctor_service, file_service, rbac_service
+from app.services.audit_service import AuditAction, record
+from app.services import auth_service, doctor_service, file_service, notification_service, rbac_service
 from app.services.file_validation import CheckedFile
 from app.services.pagination import PageParams, paginate
 
@@ -119,6 +120,14 @@ async def register(db: AsyncSession, data: DoctorRegistration) -> User:
             submitted_at=clock.utcnow(),
             **data.model_dump(include=set(_DETAIL_FIELDS)),
         )
+    )
+    # Reviewers learn about it; nothing about the applicant beyond the name.
+    notification_service.notify(
+        db,
+        await notification_service.holders_of(db, Perm.doctor_application_review),
+        type="doctor_application",
+        title="New doctor application",
+        message=f"{data.name} registered as a doctor and is waiting for credential review.",
     )
     await db.commit()
     logger.info("doctor_applicant_registered", extra={"user_id": str(user.id)})
@@ -374,6 +383,8 @@ async def approve(
         await db.delete(applicant_link)
     _mark_reviewed(application, principal, ApplicationStatus.approved, notes)
     application.doctor_id = doctor.id
+    record(db, AuditAction.doctor_application_approved, actor_id=principal.user_id, target_type="doctor_application",
+           target_id=application.id, details={"doctor_id": str(doctor.id)})
     await db.commit()
     logger.info(
         "doctor_application_approved",
@@ -387,6 +398,9 @@ async def reject(db: AsyncSession, principal: Principal, application_id: uuid.UU
     read the reason; the application can no longer be changed."""
     application = await _pending_for_review(db, principal, application_id)
     _mark_reviewed(application, principal, ApplicationStatus.rejected, notes)
+    # The reason itself is stored on the application, not copied here.
+    record(db, AuditAction.doctor_application_rejected, actor_id=principal.user_id, target_type="doctor_application",
+           target_id=application.id)
     await db.commit()
     logger.info(
         "doctor_application_rejected", extra={"application_id": str(application.id), "by": str(principal.user_id)}

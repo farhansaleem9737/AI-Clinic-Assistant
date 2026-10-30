@@ -27,8 +27,8 @@ from app.schemas.doctor import (
     DoctorSelfUpdate,
     DoctorUpdate,
 )
-from app.schemas.schedule import AvailableDay, PublicAvailabilityRead, SlotRead
-from app.services import availability_service, doctor_service, file_service
+from app.schemas.schedule import AvailableDay, PublicAvailabilityRead, SlotRead, WorkingInterval
+from app.services import appointment_service, availability_service, doctor_service, file_service
 from app.services.doctor_service import DoctorFilters, DoctorRow, DoctorSort
 from app.services.pagination import PageParams
 
@@ -71,6 +71,7 @@ def to_public(row: DoctorRow, storage: Storage | None) -> DoctorPublic:
             next_available=row.availability.next_available,
             available_today=row.availability.available_today,
             limited=row.availability.limited,
+            today_hours=[WorkingInterval(start_time=s, end_time=e) for s, e in row.availability.today_hours],
         ),
         photo_url=file_service.photo_url(storage, d.photo),
     )
@@ -247,6 +248,15 @@ async def list_doctors(
     return Page(items=[to_full(r, storage) for r in rows], total=total, page=params.page, page_size=params.page_size)
 
 
+@router.get("/specializations", response_model=list[str])
+async def list_all_specializations(
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_permission(Perm.doctor_read)),
+):
+    """Every specialization in use, including inactive doctors' (filter options)."""
+    return await doctor_service.all_specializations(db)
+
+
 @router.post("/", response_model=DoctorResponse, status_code=status.HTTP_201_CREATED)
 async def create_doctor(
     body: DoctorCreate,
@@ -264,7 +274,11 @@ async def get_doctor(
     principal: Principal = Depends(require_permission(Perm.doctor_read)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
-    return to_full(await doctor_service.get_doctor(db, doctor_id), storage)
+    """Adds `upcoming_appointments`, shown before deactivating (which is refused while any exist)."""
+    row = await doctor_service.get_doctor(db, doctor_id)
+    full = to_full(row, storage)
+    full.upcoming_appointments = await appointment_service.count_upcoming(db, doctor_id=doctor_id)
+    return full
 
 
 @router.patch("/{doctor_id}", response_model=DoctorResponse)
@@ -275,7 +289,7 @@ async def update_doctor(
     principal: Principal = Depends(require_permission(Perm.doctor_update)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
-    return to_full(await doctor_service.update_doctor(db, doctor_id, body), storage)
+    return to_full(await doctor_service.update_doctor(db, doctor_id, body, principal), storage)
 
 
 @router.post("/{doctor_id}/deactivate", response_model=DoctorResponse)
@@ -285,7 +299,7 @@ async def deactivate_doctor(
     principal: Principal = Depends(require_permission(Perm.doctor_deactivate)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
-    return to_full(await doctor_service.set_active(db, doctor_id, active=False), storage)
+    return to_full(await doctor_service.set_active(db, doctor_id, active=False, principal=principal), storage)
 
 
 @router.post("/{doctor_id}/activate", response_model=DoctorResponse)
@@ -295,7 +309,7 @@ async def activate_doctor(
     principal: Principal = Depends(require_permission(Perm.doctor_deactivate)),
     storage: Storage | None = Depends(get_optional_storage),
 ):
-    return to_full(await doctor_service.set_active(db, doctor_id, active=True), storage)
+    return to_full(await doctor_service.set_active(db, doctor_id, active=True, principal=principal), storage)
 
 
 @router.put("/{doctor_id}/photo", response_model=DoctorResponse)

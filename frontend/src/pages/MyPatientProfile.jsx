@@ -2,7 +2,7 @@ import { Camera, HeartPulse, Info, Pencil, Phone, UserRound } from "lucide-react
 import { useEffect, useState } from "react";
 import Alert from "../components/Alert";
 import PatientDocuments from "../components/documents/PatientDocuments";
-import EditContactDialog from "../components/patient-profile/EditContactDialog";
+import EditDetailsDialog from "../components/patient-profile/EditDetailsDialog";
 import InfoCard from "../components/patient-profile/InfoCard";
 import ProfileSummary from "../components/patient-profile/ProfileSummary";
 import PatientFields from "../components/PatientFields";
@@ -44,7 +44,21 @@ function PageHead() {
   );
 }
 
-function PersonalCard({ profile }) {
+const SAVED = {
+  personal: "Your personal details were saved",
+  contact: "Your contact details were saved",
+  all: "Your profile was saved",
+};
+
+function EditButton({ label, onClick }) {
+  return (
+    <button type="button" className="secondary small-button" onClick={onClick} aria-label={label}>
+      <Pencil size={15} aria-hidden="true" /> Edit
+    </button>
+  );
+}
+
+function PersonalCard({ profile, onEdit }) {
   const age = ageFromDateOfBirth(profile.date_of_birth);
   const born = profile.date_of_birth && formatCalendarDate(profile.date_of_birth);
   return (
@@ -54,10 +68,11 @@ function PersonalCard({ profile }) {
       rows={[
         { label: "Full Name", value: patientFullName(profile) },
         { label: "Date of Birth", value: born && (age === null ? born : `${born} (${age} years)`) },
-        { label: "Sex at Birth", value: SEX_LABELS[profile.sex_at_birth] },
+        { label: "Gender", value: SEX_LABELS[profile.sex_at_birth] },
         { label: "Medical Record Number", value: profile.mrn },
       ]}
-      footnote="To correct your name, date of birth or sex at birth, please contact reception."
+      action={<EditButton label="Edit personal details" onClick={onEdit} />}
+      footnote="Your medical record number is assigned by the clinic and cannot be changed."
     />
   );
 }
@@ -73,11 +88,7 @@ function ContactCard({ profile, onEdit }) {
         { label: "Address", value: profile.address },
         { label: "Preferred Language", value: profile.preferred_language },
       ]}
-      action={
-        <button type="button" className="secondary small-button" onClick={onEdit}>
-          <Pencil size={15} aria-hidden="true" /> Edit
-        </button>
-      }
+      action={<EditButton label="Edit contact details" onClick={onEdit} />}
     />
   );
 }
@@ -193,7 +204,7 @@ export default function MyPatientProfile() {
   const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState(null);
   const [tab, setTab] = useState("personal");
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(null); // "personal" | "contact" | "all"
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -231,10 +242,10 @@ export default function MyPatientProfile() {
     setAttempt((n) => n + 1); // and the account status that goes with it
   };
 
-  const onSaved = (updated) => {
+  const onSaved = (updated, section) => {
     setProfile(updated);
-    setEditing(false);
-    setNotice("Your contact details were saved");
+    setEditing(null);
+    setNotice(SAVED[section]);
   };
 
   if (missing) {
@@ -265,9 +276,9 @@ export default function MyPatientProfile() {
   }
 
   const name = patientFullName(profile);
-  const openEditor = () => {
+  const openEditor = (section) => () => {
     setNotice("");
-    setEditing(true);
+    setEditing(section);
   };
 
   return (
@@ -275,18 +286,18 @@ export default function MyPatientProfile() {
       <PageHead />
       <Alert kind="success">{notice}</Alert>
 
-      <ProfileSummary profile={profile} status={status} onEdit={openEditor} />
+      <ProfileSummary profile={profile} status={status} onEdit={openEditor("all")} />
       <ProfileTabs active={tab} onChange={setTab} />
 
       <div className="profile-layout">
         <div className="profile-main" id="profile-tab-panel" role="tabpanel" aria-labelledby={`profile-tab-${tab}`}>
           {tab === "personal" && (
             <>
-              <PersonalCard profile={profile} />
-              <ContactCard profile={profile} onEdit={openEditor} />
+              <PersonalCard profile={profile} onEdit={openEditor("personal")} />
+              <ContactCard profile={profile} onEdit={openEditor("contact")} />
             </>
           )}
-          {tab === "contact" && <ContactCard profile={profile} onEdit={openEditor} />}
+          {tab === "contact" && <ContactCard profile={profile} onEdit={openEditor("contact")} />}
           {tab === "medical" && <MedicalPanel profile={profile} can={can} />}
         </div>
 
@@ -316,7 +327,9 @@ export default function MyPatientProfile() {
         </aside>
       </div>
 
-      {editing && <EditContactDialog profile={profile} onSaved={onSaved} onClose={() => setEditing(false)} />}
+      {editing && (
+        <EditDetailsDialog profile={profile} section={editing} onSaved={onSaved} onClose={() => setEditing(null)} />
+      )}
     </div>
   );
 }

@@ -138,14 +138,15 @@ describe("appointment cards", () => {
     expect(screen.queryByText("MRN00000001")).not.toBeInTheDocument();
   });
 
-  it("staff keep the working table", async () => {
+  it("staff get the clinic-wide appointments page, not the patient view", async () => {
     listAppointments.mockResolvedValue(pageOf([sarah]));
+    countAppointments.mockResolvedValue({ data: { upcoming: 1, past: 0, all: 1, today: 0, today_date: "2026-10-05" } });
     getPublicDepartments.mockResolvedValue({ data: { items: [] } });
     listDoctors.mockResolvedValue({ data: { items: [] } });
     renderPage("/appointments", authAs("Rita", ["receptionist"], PERMISSIONS.receptionist));
     expect(await screen.findByRole("table")).toBeInTheDocument();
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(countAppointments).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Today (0)" })).toBeInTheDocument();
+    expect(countAppointments).toHaveBeenCalledWith(expect.objectContaining({ include_today: true }));
   });
 });
 

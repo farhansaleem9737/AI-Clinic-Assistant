@@ -39,3 +39,21 @@ export function statusTone(status) {
   if (status === "cancelled" || status === "no_show") return "danger";
   return "";
 }
+
+// What a menu item says for moving *to* a status. Only transitions the API
+// lists in `allowed_transitions` are ever shown (row menus).
+export const MENU_ACTIONS = {
+  scheduled: "Accept request",
+  confirmed: "Confirm appointment",
+  checked_in: "Check in",
+  in_progress: "Start consultation",
+  completed: "Mark completed",
+  no_show: "Mark as no-show",
+  cancelled: "Cancel appointment",
+};
+// Asked to confirm first: they cannot be undone.
+export const CONFIRM_ACTIONS = {
+  cancelled: { title: "Cancel appointment?", label: "Cancel appointment", danger: true },
+  no_show: { title: "Mark as no-show?", label: "Mark as no-show", danger: true },
+  completed: { title: "Mark as completed?", label: "Mark completed" },
+};

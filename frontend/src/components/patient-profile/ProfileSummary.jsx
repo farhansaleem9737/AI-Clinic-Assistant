@@ -54,7 +54,7 @@ export default function ProfileSummary({ profile, status, onEdit }) {
           value={age === null ? "Age unknown" : `${age} ${age === 1 ? "year" : "years"}`}
           detail={profile.date_of_birth && formatCalendarDate(profile.date_of_birth)}
         />
-        <SummaryFact icon={UserRound} label="Sex at Birth" value={SEX_LABELS[profile.sex_at_birth] ?? "Not recorded"} />
+        <SummaryFact icon={UserRound} label="Gender" value={SEX_LABELS[profile.sex_at_birth] ?? "Not recorded"} />
         <SummaryFact icon={ShieldCheck} label="Account Type" value="Patient" />
       </dl>
       <button type="button" className="edit-profile" onClick={onEdit}>
