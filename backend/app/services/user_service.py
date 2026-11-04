@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import case, delete, func, literal_column, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -79,21 +79,23 @@ async def _roles_by_user(db: AsyncSession, user_ids: Iterable[uuid.UUID]) -> dic
 
 
 async def _profiles_by_user(db: AsyncSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
-    """Phone, photo and profile id from the doctor or patient profile (doctor wins if both)."""
+    """Phone, photo and profile id from the doctor or patient profile (doctor wins if both).
+    Both profiles in one query (UNION ALL), patient rows first."""
     found: dict[uuid.UUID, dict] = {}
-    for model, key in ((Patient, "patient_id"), (Doctor, "doctor_id")):
-        rows = await db.execute(
-            select(model.user_id, model.id, model.phone, StoredFile.object_key)
-            .outerjoin(StoredFile, StoredFile.id == model.photo_file_id)
-            .where(model.user_id.in_(user_ids))
-        )
-        for user_id, profile_id, phone, photo_key in rows:
-            entry = found.setdefault(user_id, {})
-            entry[key] = profile_id
-            if phone:
-                entry["phone"] = phone
-            if photo_key:
-                entry["photo_key"] = photo_key
+    profiles = [
+        select(literal_column(str(rank)), model.user_id, model.id, model.phone, StoredFile.object_key)
+        .outerjoin(StoredFile, StoredFile.id == model.photo_file_id)
+        .where(model.user_id.in_(user_ids))
+        for rank, model in enumerate((Patient, Doctor))
+    ]
+    rows = await db.execute(union_all(*profiles).order_by(literal_column("1")))
+    for rank, user_id, profile_id, phone, photo_key in rows:
+        entry = found.setdefault(user_id, {})
+        entry[("patient_id", "doctor_id")[rank]] = profile_id
+        if phone:
+            entry["phone"] = phone
+        if photo_key:
+            entry["photo_key"] = photo_key
     return found
 
 

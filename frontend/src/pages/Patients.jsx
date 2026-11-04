@@ -14,8 +14,11 @@ import { getErrorMessage } from "../services/api";
 import { listDoctors } from "../services/doctorService";
 import { activatePatient, bulkSetPatientStatus, deactivatePatient, listPatients } from "../services/patientService";
 import { doctorName } from "../utils/format";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { ageFromDateOfBirth, patientFullName, SEX_LABELS, SEX_OPTIONS } from "../utils/patient";
 
+const NONE = new Set();
 const PAGE_SIZE = 10;
 const SEARCH_DELAY_MS = 350;
 const STATUSES = { active: "true", inactive: "false" };
@@ -83,15 +86,10 @@ export default function Patients() {
   const sort = SORTS.has(searchParams.get("sort")) ? searchParams.get("sort") : "name";
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
 
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
-  const [data, setData] = useState(null);
-  const [error, setError] = useState("");
+  const [typed, setTyped] = useDraft("patients:typed", "");
+  const [q, setQ] = useDraft("patients:q", "");
   const [attempt, setAttempt] = useState(0);
-  // The request whose answer is on screen; loading while it differs from the current one.
-  const [loadedKey, setLoadedKey] = useState(null);
   const [doctors, setDoctors] = useState([]);
-  const [selected, setSelected] = useState(() => new Set());
   const [adding, setAdding] = useState(false);
   const [created, setCreated] = useState(null);
   const [notice, setNotice] = useState("");
@@ -117,25 +115,16 @@ export default function Patients() {
   if (to) params.registered_to = to;
   if (gender) params.sex_at_birth = gender;
   if (sort !== "name") params.sort = sort;
-  const requestKey = `${JSON.stringify(params)}#${attempt}`;
-  const loading = loadedKey !== requestKey;
-
-  useEffect(() => {
-    let cancelled = false;
-    const [query] = requestKey.split("#");
-    listPatients(JSON.parse(query))
-      .then((res) => {
-        if (cancelled) return;
-        setData(res.data);
-        setError("");
-        setSelected(new Set()); // selection is for the rows on screen only
-      })
-      .catch((err) => !cancelled && setError(getErrorMessage(err, "Could not load patients")))
-      .finally(() => !cancelled && setLoadedKey(requestKey));
-    return () => {
-      cancelled = true;
-    };
-  }, [requestKey]);
+  const { data, loading, error } = useFetch(() => listPatients(params), [JSON.stringify(params)], {
+    query: "patients/list",
+    refresh: attempt,
+    errorMessage: "Could not load patients",
+  });
+  // The selection is for the rows on screen only: other rows start with none selected.
+  const rowsKey = JSON.stringify(params);
+  const [picked, setPicked] = useState({ rowsKey: null, rows: null, ids: NONE });
+  const selected = picked.rowsKey === rowsKey && picked.rows === data ? picked.ids : NONE;
+  const setSelected = (next) => setPicked({ rowsKey, rows: data, ids: typeof next === "function" ? next(selected) : next });
 
   const update = (changes) => {
     const next = { status, doctor: doctorId, from, to, gender, sort: sort === "name" ? "" : sort, page, ...changes };

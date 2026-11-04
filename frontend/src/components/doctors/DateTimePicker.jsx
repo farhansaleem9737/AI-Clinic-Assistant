@@ -1,5 +1,6 @@
 import { CalendarDays, Clock, Info } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useDraft } from "../../hooks/useDraft";
 import { useFetch } from "../../hooks/useFetch";
 import { getPublicAvailability } from "../../services/doctorService";
 import { addMonths, longDate, monthBounds, monthLabel } from "../../utils/calendar";
@@ -17,21 +18,25 @@ import BookingCalendar from "./BookingCalendar";
  * or month changed, or the time is no longer offered). Bump `refreshKey` to
  * reload the times, e.g. after a booking conflict.
  *
+ * `draftKey` (optional) keeps the month and date being looked at while the
+ * user visits other pages (hooks/useDraft.js).
+ *
  * `layout="panel"` (default) is the compact doctor-profile panel;
  * `layout="cards"` is the booking wizard's "Select a date" and "Available
  * times" cards. Both show unavailable times greyed out.
  */
-export default function DateTimePicker({ doctorId, selected, onSelect, refreshKey = 0, layout = "panel" }) {
+export default function DateTimePicker({ doctorId, selected, onSelect, refreshKey = 0, draftKey = null, layout = "panel" }) {
   // Open on the already-chosen time (e.g. coming back from the confirm step).
   const initialDate = selected?.timezone ? isoDateIn(selected.starts_at, selected.timezone) : null;
-  const [month, setMonth] = useState(() => (initialDate ?? isoDateIn(new Date())).slice(0, 7));
-  const [pickedDate, setPickedDate] = useState(initialDate);
+  const [month, setMonth] = useDraft(draftKey && `${draftKey}:month`, () => (initialDate ?? isoDateIn(new Date())).slice(0, 7));
+  const [pickedDate, setPickedDate] = useDraft(draftKey && `${draftKey}:picked`, initialDate);
   const [attempt, setAttempt] = useState(0); // bumped by "Try again"
 
   const { first, last } = monthBounds(month);
   const { data, loading, error } = useFetch(
     () => getPublicAvailability(doctorId, first, last),
-    [doctorId, first, attempt, refreshKey]
+    [doctorId, first],
+    { query: "availability/public", refresh: `${attempt}:${refreshKey}` }
   );
   const current = loading ? null : data; // never show another month's times while loading
 

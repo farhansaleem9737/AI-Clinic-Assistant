@@ -9,7 +9,6 @@ from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.permissions import Perm, Principal
 from app.core.security import decode_access_token
 from app.db.session import get_db
-from app.models.user import User
 from app.services import rbac_service
 
 # HTTPBearer (not OAuth2PasswordBearer): /auth/login takes a JSON body, so the
@@ -32,12 +31,11 @@ async def get_current_principal(
     except (JWTError, KeyError, TypeError, ValueError):
         raise invalid
 
-    user = await db.get(User, user_id)
+    principal = await rbac_service.load_principal_by_id(db, user_id)
     # A deactivated account loses access immediately, not when its token expires.
-    if user is None or not user.is_active:
+    if principal is None or not principal.user.is_active:
         raise invalid
-
-    return await rbac_service.load_principal(db, user)
+    return principal
 
 
 def require_permission(*perms: Perm):

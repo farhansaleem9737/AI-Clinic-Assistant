@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api, {
   csrfHeaders,
   mayHaveSession,
@@ -6,7 +6,28 @@ import api, {
   setAccessToken,
   setSessionExpiredHandler,
 } from "../services/api";
+import { clearDrafts, setDraftOwner } from "../services/drafts";
+import { setCacheOwner } from "../services/queryClient";
 import { AuthContext } from "./AuthContextObject";
+
+// A server or network failure (e.g. a dropped database connection) gets one
+// more try; a refused session (401/403) does not.
+const transient = (err) => !err?.response || err.response.status >= 500;
+async function getMe() {
+  try {
+    return await api.get("/auth/me");
+  } catch (err) {
+    if (!transient(err)) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return api.get("/auth/me");
+  }
+}
+
+// Cached server data and drafts belong to one user: set before the user is.
+function setOwner(userId) {
+  setCacheOwner(userId);
+  setDraftOwner(userId);
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -16,26 +37,41 @@ export function AuthProvider({ children }) {
   const [initializing, setInitializing] = useState(mayHaveSession);
 
   const fetchCurrentUser = useCallback(async () => {
-    const res = await api.get("/auth/me");
+    const res = await getMe();
+    setOwner(res.data.id);
     setUser(res.data);
     return res.data;
   }, []);
 
+  // Sign-out or an expired session: nothing of this user stays in memory.
   const clearSession = useCallback(() => {
     setAccessToken(null);
+    setOwner(null);
+    clearDrafts();
     setUser(null);
   }, []);
 
+  // One restore per provider, although development mode runs effects twice.
+  const restoring = useRef(null);
   useEffect(() => {
     setSessionExpiredHandler(clearSession);
 
     if (!mayHaveSession()) return;
+    let live = true;
     // Restore the session from the HttpOnly refresh cookie.
-    refreshAccessToken()
-      .then(fetchCurrentUser)
-      .catch(clearSession)
-      .finally(() => setInitializing(false));
-  }, [clearSession, fetchCurrentUser]);
+    restoring.current ??= refreshAccessToken().then(getMe);
+    restoring.current
+      .then((res) => {
+        if (!live) return;
+        setOwner(res.data.id);
+        setUser(res.data);
+      })
+      .catch(() => live && clearSession())
+      .finally(() => live && setInitializing(false));
+    return () => {
+      live = false;
+    };
+  }, [clearSession]);
 
   const login = useCallback(
     // rememberMe: keep the session after the browser closes. Only this flag is

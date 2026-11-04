@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import avatar from "../../assets/clinic-ai-avatar.png";
 import { clampPosition, DRAG_THRESHOLD, launcherSize, loadPosition, savePosition, snapToEdge } from "../../utils/assistant";
 
-const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
+// On phones innerWidth is the layout width, which grows while any content
+// overflows (even briefly during loading); a button placed there sat off-screen
+// and kept the page zoomed out. The screen width bounds it. On desktop the
+// window is never wider than the screen, so this is innerWidth as before.
+const viewport = () => ({ width: Math.min(window.innerWidth, window.screen?.width || Infinity), height: window.innerHeight });
 
 /**
  * The floating Clinic AI Assistant button (D96): the official avatar,
@@ -12,7 +16,7 @@ const viewport = () => ({ width: window.innerWidth, height: window.innerHeight }
  * is a drag and only moves it. The position is remembered on this device
  * and kept on screen when the window size changes.
  */
-export default function AssistantLauncher({ open, onOpen, buttonRef }) {
+export default function AssistantLauncher({ open, onOpen, onIntent, buttonRef }) {
   const [size, setSize] = useState(() => launcherSize(window.innerWidth));
   const [position, setPosition] = useState(() => loadPosition(viewport(), launcherSize(window.innerWidth)));
   const [dragging, setDragging] = useState(false);
@@ -29,6 +33,7 @@ export default function AssistantLauncher({ open, onOpen, buttonRef }) {
   }, []);
 
   const onPointerDown = (event) => {
+    onIntent?.(); // touch screens have no hover: start loading the panel on press
     if (event.button !== undefined && event.button !== 0) return;
     drag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y, moved: false };
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -88,6 +93,8 @@ export default function AssistantLauncher({ open, onOpen, buttonRef }) {
       aria-label="Open Clinic AI Assistant (drag to move)"
       aria-expanded={open}
       aria-haspopup="dialog"
+      onPointerEnter={onIntent}
+      onFocus={onIntent}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={finish}

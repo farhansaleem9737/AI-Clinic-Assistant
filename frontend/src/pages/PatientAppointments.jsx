@@ -144,8 +144,16 @@ export default function PatientAppointments() {
   const valid = rangeIsValid(filters);
   const apiList = listParams(state);
   const apiCounts = filterParams(filters);
-  const list = useFetch(() => listAppointments(apiList), [JSON.stringify(apiList), attempt], { enabled: valid });
-  const counts = useFetch(() => countAppointments(apiCounts), [JSON.stringify(apiCounts), attempt], { enabled: valid });
+  const list = useFetch(() => listAppointments(apiList), [JSON.stringify(apiList)], {
+    query: "appointments/list",
+    refresh: attempt,
+    enabled: valid,
+  });
+  const counts = useFetch(() => countAppointments(apiCounts), [JSON.stringify(apiCounts)], {
+    query: "appointments/counts",
+    refresh: attempt,
+    enabled: valid,
+  });
 
   const [notice, setNotice] = useState("");
   const [cancelling, setCancelling] = useState(null); // { appointment, note, busy, error }

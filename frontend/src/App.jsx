@@ -1,63 +1,19 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
-import AppLayout from "./layouts/AppLayout";
 import AuthLayout from "./layouts/AuthLayout";
 import DirectoryLayout from "./layouts/DirectoryLayout";
-import AcceptAdminInvite from "./pages/AcceptAdminInvite";
-import ForgotPassword from "./pages/ForgotPassword";
-import Help from "./pages/Help";
-import LegalDocument from "./pages/LegalDocument";
 import Login from "./pages/Login";
-import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
-import Departments from "./pages/Departments";
 import Doctors from "./pages/Doctors";
-import DoctorApplication from "./pages/DoctorApplication";
-import DoctorDetail from "./pages/DoctorDetail";
-import MyDoctorProfile from "./pages/MyDoctorProfile";
-import MyPatientProfile from "./pages/MyPatientProfile";
-import NotFound from "./pages/NotFound";
-import Patients from "./pages/Patients";
-import PatientDetail from "./pages/PatientDetail";
-import AdminDashboard from "./components/dashboard/AdminDashboard";
-import { ADMIN_PERMISSIONS } from "./routes/navigation";
-import AccountProfile from "./pages/AccountProfile";
-import AdminDepartments from "./pages/AdminDepartments";
-import AdminSettings from "./pages/AdminSettings";
-import AdminDoctors from "./pages/AdminDoctors";
-import AdminUsers from "./pages/AdminUsers";
-import Appointments from "./pages/Appointments";
-import AppointmentDetail from "./pages/AppointmentDetail";
-import BookAppointment from "./pages/BookAppointment";
-import DoctorSchedule from "./pages/DoctorSchedule";
-import DoctorSchedules from "./pages/DoctorSchedules";
+import { lazyPage } from "./routes/lazyPage";
+import { PAGES, PROTECTED_ROUTES } from "./routes/pages";
 
-// `permission` on a route only hides pages the user cannot use; the API
-// enforces the same permission on every request.
-const APPOINTMENT_READ = ["appointment:read_own", "appointment:read_assigned", "appointment:read_any"];
-
-const PROTECTED_ROUTES = [
-  { path: "/dashboard", element: <Dashboard /> },
-  { path: "/help", element: <Help /> },
-  { path: "/appointments", element: <Appointments />, anyOf: APPOINTMENT_READ },
-  { path: "/appointments/book", element: <BookAppointment />, anyOf: ["appointment:create", "appointment:create_own"] },
-  { path: "/appointments/:id", element: <AppointmentDetail />, anyOf: APPOINTMENT_READ },
-  { path: "/schedule", element: <DoctorSchedule />, anyOf: ["schedule:manage_own", "schedule:manage_any"] },
-  { path: "/doctor-schedules", element: <DoctorSchedules />, permission: "schedule:read" },
-  { path: "/doctor/profile", element: <MyDoctorProfile />, permission: "doctor:update_own" },
-  { path: "/doctor/application", element: <DoctorApplication />, permission: "doctor_application:manage_own" },
-  { path: "/profile", element: <MyPatientProfile />, permission: "patient:read_own" },
-  { path: "/patients", element: <Patients />, permission: "patient:read_any" },
-  { path: "/patients/:id", element: <PatientDetail />, anyOf: ["patient:read_any", "patient:read_assigned"] },
-  // The administrator's dashboard (D85/D86); the backend checks the same permissions.
-  { path: "/admin", element: <AdminDashboard />, allOf: ADMIN_PERMISSIONS },
-  { path: "/admin/settings", element: <AdminSettings />, permission: "settings:manage" },
-  { path: "/account", element: <AccountProfile /> },
-  { path: "/admin/users", element: <AdminUsers />, permission: "user:read" },
-  { path: "/admin/departments", element: <AdminDepartments />, permission: "department:manage" },
-  { path: "/admin/doctors", element: <AdminDoctors />, permission: "doctor:read" },
-];
+// Pages load on demand (code splitting): only the entry pages, the dashboard and
+// the layouts are in the main bundle. Each layout shows a page skeleton while a
+// page's code downloads; a failed download is retried and can be tried again.
+const LAZY = { ...Object.fromEntries(Object.entries(PAGES).map(([name, load]) => [name, lazyPage(load)])), Dashboard };
+const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, LegalDocument, NotFound, Register } = LAZY;
 
 function App() {
   return (
@@ -76,25 +32,27 @@ function App() {
             <Route path="/terms" element={<LegalDocument document="terms" />} />
             <Route path="/privacy" element={<LegalDocument document="privacy" />} />
           </Route>
-          {/* Open to everyone: visitors get the public top navigation,
-              signed-in users keep their app shell. */}
+          {/* One branch for every page in the app shell, so signed-in users keep
+              the same shell (and assistant) on every route. The directory pages
+              are open to everyone: visitors get the public top navigation. */}
           <Route element={<DirectoryLayout />}>
             <Route path="/doctors" element={<Doctors />} />
             <Route path="/doctors/:id" element={<DoctorDetail />} />
             <Route path="/departments" element={<Departments />} />
-          </Route>
-          <Route element={<AppLayout />}>
-            {PROTECTED_ROUTES.map(({ path, element, permission, anyOf, allOf }) => (
-              <Route
-                key={path}
-                path={path}
-                element={
-                  <ProtectedRoute permission={permission} anyOf={anyOf} allOf={allOf}>
-                    {element}
-                  </ProtectedRoute>
-                }
-              />
-            ))}
+            {PROTECTED_ROUTES.map(({ path, page, permission, anyOf, allOf }) => {
+              const Page = LAZY[page];
+              return (
+                <Route
+                  key={path}
+                  path={path}
+                  element={
+                    <ProtectedRoute permission={permission} anyOf={anyOf} allOf={allOf}>
+                      <Page />
+                    </ProtectedRoute>
+                  }
+                />
+              );
+            })}
             <Route path="/" element={<Navigate to="/doctors" replace />} />
             <Route path="*" element={<NotFound />} />
           </Route>

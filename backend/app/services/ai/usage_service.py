@@ -44,31 +44,38 @@ def _day_start(now: datetime) -> datetime:
     return datetime.combine(now.astimezone(tz).date(), time.min, tzinfo=tz)
 
 
-async def _count(db: AsyncSession, since: datetime, user_id=None) -> int:
-    query = select(func.count()).select_from(AiUsage).where(AiUsage.created_at >= since)
-    if user_id is not None:
-        query = query.where(AiUsage.user_id == user_id)
-    return await db.scalar(query) or 0
-
-
 async def check_limits(db: AsyncSession, principal: Principal) -> None:
-    """Raise RateLimitedError (429) when this request would go over a limit."""
+    """Raise RateLimitedError (429) when this request would go over a limit.
+
+    The lock is its own statement so the counts, read after it is granted, see
+    every request that finished meanwhile. The four counts are one query."""
     await db.execute(text("SELECT pg_advisory_xact_lock(:ns, hashtext(:key))"), {"ns": _USER_LOCK, "key": str(principal.user_id)})
     now = clock.utcnow()
     minute_ago = now - timedelta(minutes=1)
     day_start = _day_start(now)
+    mine = AiUsage.user_id == principal.user_id
+    counts = (
+        await db.execute(
+            select(
+                func.count().filter(mine, AiUsage.created_at >= minute_ago),
+                func.count().filter(mine, AiUsage.created_at >= day_start),
+                func.count().filter(AiUsage.created_at >= minute_ago),
+                func.count().filter(AiUsage.created_at >= day_start),
+            ).where(AiUsage.created_at >= min(minute_ago, day_start))
+        )
+    ).one()
     checks = (
-        (settings.ai_rate_limit_per_minute, minute_ago, principal.user_id, "AI_USER_RATE_LIMITED",
+        (settings.ai_rate_limit_per_minute, "AI_USER_RATE_LIMITED",
          "You're sending messages quickly. Please wait a minute and try again."),
-        (settings.ai_daily_request_limit, day_start, principal.user_id, "AI_USER_DAILY_LIMIT",
+        (settings.ai_daily_request_limit, "AI_USER_DAILY_LIMIT",
          "You've reached today's limit for assistant messages. It resets tomorrow."),
-        (settings.ai_global_rate_limit_per_minute, minute_ago, None, "AI_SERVER_BUSY",
+        (settings.ai_global_rate_limit_per_minute, "AI_SERVER_BUSY",
          "The assistant is busy right now. Please try again in a minute."),
-        (settings.ai_global_daily_request_limit, day_start, None, "AI_SERVER_DAILY_LIMIT",
+        (settings.ai_global_daily_request_limit, "AI_SERVER_DAILY_LIMIT",
          "The assistant has reached its usage limit for today. Please try again tomorrow."),
     )
-    for limit, since, user_id, code, message in checks:
-        if limit and await _count(db, since, user_id) >= limit:
+    for (limit, code, message), used in zip(checks, counts):
+        if limit and used >= limit:
             logger.info("ai_limit_reached", extra={"code": code, "user_id": str(principal.user_id)})
             raise RateLimitedError(message, code=code)
 

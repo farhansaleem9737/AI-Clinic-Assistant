@@ -147,7 +147,10 @@ describe("Doctors list", () => {
       expect(lastParams()).toEqual({ page: 1, page_size: 10, sort: "name_asc", q: "0300", department_id: "dep-1", specialization: "Cardiologist", is_active: true })
     );
     await u.click(screen.getByRole("button", { name: "Clear filters" }));
-    await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 10, sort: "name_asc" }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await rowOf("Dr. Sarah Khan")).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveValue("");
+    expect(screen.getByLabelText("Department")).toHaveValue("");
   });
 
   it("a department link from Departments preselects the filter", async () => {

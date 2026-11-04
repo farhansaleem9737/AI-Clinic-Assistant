@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.exceptions import (
@@ -125,6 +125,22 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
     )
 
 
+async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    # The connection to the database dropped mid-request (e.g. a network blip
+    # to Neon). The transaction was rolled back and the pool discards that
+    # connection, so trying again works: say so (503) instead of a generic 500.
+    # The frontend retries a failed read once; it never repeats a change.
+    if exc.connection_invalidated:
+        logger.warning("database_connection_lost", extra={"path": request.url.path})
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "DATABASE_UNAVAILABLE",
+            "The connection to the database was interrupted. Please try again.",
+            headers={"Retry-After": "1"},
+        )
+    return await unhandled_error_handler(request, exc)
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("unhandled_error", extra={"path": request.url.path})
     return error_response(
@@ -139,4 +155,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(IntegrityError, integrity_error_handler)
+    app.add_exception_handler(DBAPIError, database_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

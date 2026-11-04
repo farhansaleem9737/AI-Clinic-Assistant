@@ -150,7 +150,9 @@ describe("My Appointments", () => {
     expect(await screen.findByText("No appointments match your search or status filter.")).toBeInTheDocument();
     listAppointments.mockResolvedValue(page([A1, A2]));
     await user.click(screen.getByRole("button", { name: "Clear search and filters" }));
-    await waitFor(() => expect(lastListParams()).not.toHaveProperty("status"));
+    // The unfiltered day is already loaded: it comes back from the cache (D107).
+    await waitFor(() => expect(screen.queryByText("No appointments match your search or status filter.")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Status")).toHaveValue("");
   });
 
   it("says when a day has no appointments", async () => {

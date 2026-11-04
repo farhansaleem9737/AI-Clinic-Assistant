@@ -1,5 +1,6 @@
 import { LifeBuoy, LogOut, Menu, Search, Settings } from "lucide-react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import PageFallback from "../components/PageFallback";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import BrandMark from "../components/BrandMark";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -9,6 +10,7 @@ import GlobalSearch from "../components/layout/GlobalSearch";
 import NotificationBell from "../components/layout/NotificationBell";
 import { useAuth } from "../context/useAuth";
 import { isAdmin, visibleNavItems } from "../routes/navigation";
+import { pageLoaderFor } from "../routes/pages";
 
 // The application shell: sidebar navigation, top bar, page content.
 export default function AppLayout() {
@@ -17,6 +19,14 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Pointing at, focusing or touching an in-app link starts downloading that
+  // page's code (never its data), so the click rarely waits for it. Failures
+  // are ignored here; the navigation itself retries and reports them.
+  const onNavIntent = (event) => {
+    const link = event.target.closest?.("a[href]");
+    if (!link || link.origin !== window.location.origin) return;
+    pageLoaderFor(link.pathname, can)?.().catch(() => {});
+  };
 
   // Menu visibility is cosmetic; the API enforces every permission.
   const items = visibleNavItems(user, can);
@@ -35,7 +45,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className={`shell${navOpen ? " nav-open" : ""}`}>
+    <div className={`shell${navOpen ? " nav-open" : ""}`} onPointerOver={onNavIntent} onFocus={onNavIntent} onTouchStart={onNavIntent}>
       <aside className="sidebar" aria-label="Main navigation">
         <Link to={user ? (admin ? "/admin" : "/dashboard") : "/doctors"} className="brand">
           <BrandMark />
@@ -111,7 +121,9 @@ export default function AppLayout() {
         <main className="page">
           {/* A page that fails to render never blanks the shell; a new route clears it. */}
           <ErrorBoundary resetKey={location.pathname}>
-            <Outlet />
+            <Suspense fallback={<PageFallback />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>

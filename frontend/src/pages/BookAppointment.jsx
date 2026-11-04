@@ -10,6 +10,8 @@ import DoctorPicker from "../components/booking/DoctorPicker";
 import PatientPickerDialog from "../components/booking/PatientPickerDialog";
 import SelectedPatientCard from "../components/booking/SelectedPatientCard";
 import { useAuth } from "../context/useAuth";
+import { useDraft } from "../hooks/useDraft";
+import { forgetDrafts, loadStoredDraft, readDraft, removeStoredDraft, storeDraft } from "../services/drafts";
 import { getPublicDoctor } from "../services/doctorService";
 import { getPatient } from "../services/patientService";
 
@@ -49,6 +51,15 @@ function usePatientFromUrl(staff, patientId) {
   return state;
 }
 
+// A patient's own unfinished booking also survives a reload of the tab, for
+// this long: the doctor, the step and the chosen time only (never the reason
+// typed). Restoring re-validates the doctor; the confirm step re-checks the time.
+const RELOAD_KEEP_MS = 30 * 60 * 1000;
+const isStoredBooking = (v) =>
+  typeof v?.doctorId === "string" &&
+  [1, 2, 3].includes(v.step) &&
+  (v.slot === null || (typeof v.slot?.starts_at === "string" && !Number.isNaN(Date.parse(v.slot.starts_at))));
+
 /**
  * `?doctor=<id>` (from the directory or a profile) starts at step 2 with that
  * doctor, once the API confirms it is bookable; `&slot=<time>` goes straight
@@ -59,16 +70,22 @@ function BookingWizard({ staff }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const handoffDoctorId = params.get("doctor");
-  const handoffSlot = params.get("slot");
+  // An unfinished booking for this link is kept while the user visits other
+  // pages (D107) and restored here. Nothing is reserved meanwhile.
+  const draft = `booking:${params.toString()}`;
+  const [resumed] = useState(() => readDraft(`${draft}:doctor`) != null);
+  const [stored] = useState(() => (resumed || staff ? null : loadStoredDraft(draft, isStoredBooking)));
+  const handoffDoctorId = resumed ? null : (stored?.doctorId ?? params.get("doctor"));
+  const handoffSlot = resumed || stored ? null : params.get("slot");
   const patientState = usePatientFromUrl(staff, params.get("patient"));
   const patient = patientState.patient;
 
-  const [step, setStep] = useState(1);
-  const [doctor, setDoctor] = useState(null);
-  const [slot, setSlot] = useState(null);
-  // The optional reason typed on step 3; kept while moving between steps.
-  const [reason, setReason] = useState("");
+  const [step, setStep] = useDraft(`${draft}:step`, 1);
+  const [doctor, setDoctor] = useDraft(`${draft}:doctor`, null);
+  const [slot, setSlot] = useDraft(`${draft}:slot`, null);
+  // The optional reason typed on step 3; kept while moving between steps and
+  // pages, in memory only.
+  const [reason, setReason] = useDraft(`${draft}:reason`, "");
   const [notice, setNotice] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [booked, setBooked] = useState(null);
@@ -78,6 +95,15 @@ function BookingWizard({ staff }) {
   // Doctor Schedules: ask for the patient straight away.
   const [picking, setPicking] = useState(staff && !params.get("patient") && Boolean(handoffDoctorId));
 
+  // Keep a patient's own booking for a reload; finished or abandoned, forget it.
+  const storable = !staff && doctor && !booked;
+  const storedSlot = slot && { starts_at: slot.starts_at, ends_at: slot.ends_at ?? null, timezone: slot.timezone ?? null };
+  const storedValue = storable ? JSON.stringify({ doctorId: doctor.id, step, slot: storedSlot }) : null;
+  useEffect(() => {
+    if (storedValue) storeDraft(draft, JSON.parse(storedValue), RELOAD_KEEP_MS);
+    else if (!handoffLoading) removeStoredDraft(draft);
+  }, [draft, storedValue, handoffLoading]);
+
   // Validate a doctor handed over in the URL against the API; never trust the id itself.
   useEffect(() => {
     if (!handoffDoctorId) return;
@@ -86,7 +112,11 @@ function BookingWizard({ staff }) {
       .then((res) => {
         if (cancelled) return;
         setDoctor(res.data);
-        if (handoffSlot && !Number.isNaN(Date.parse(handoffSlot))) {
+        if (stored) {
+          // A booking restored after a reload: the same step and time, checked again before booking.
+          setSlot(stored.slot);
+          setStep(stored.step === 3 && !stored.slot ? 2 : stored.step);
+        } else if (handoffSlot && !Number.isNaN(Date.parse(handoffSlot))) {
           setSlot({ starts_at: handoffSlot });
           setStep(3);
         } else {
@@ -101,16 +131,16 @@ function BookingWizard({ staff }) {
     return () => {
       cancelled = true;
     };
-  }, [handoffDoctorId, handoffSlot]);
+  }, [handoffDoctorId, handoffSlot, stored, setDoctor, setSlot, setStep]);
 
   // Move focus to the new step so keyboard and screen-reader users follow along.
+  // Compared with the last step shown rather than a "first render" flag, which
+  // StrictMode's double-run of effects defeats (the page then scrolled on load).
   const card = useRef(null);
-  const firstRender = useRef(true);
+  const focusedStep = useRef({ step, booked });
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
+    if (focusedStep.current.step === step && focusedStep.current.booked === booked) return;
+    focusedStep.current = { step, booked };
     card.current?.focus();
   }, [step, booked]);
 
@@ -120,10 +150,13 @@ function BookingWizard({ staff }) {
     if (location.key !== "default") navigate(-1);
     else navigate(staff && patient ? `/patients/${patient.id}` : "/dashboard");
   };
-  const chooseDoctor = useCallback((next) => {
-    setDoctor(next);
-    setSlot(null);
-  }, []);
+  const chooseDoctor = useCallback(
+    (next) => {
+      setDoctor(next);
+      setSlot(null);
+    },
+    [setDoctor, setSlot]
+  );
   const toStep = (next) => {
     setNotice("");
     setStep(next);
@@ -174,6 +207,7 @@ function BookingWizard({ staff }) {
           onContinue={() => toStep(2)}
           subtitle={staff ? "Choose a doctor for this appointment." : undefined}
           blockedReason={() => (needsPatient ? "Select the patient this appointment is for before continuing." : null)}
+          draftKey={`${draft}:doctors`}
         />
       </>
     );
@@ -186,6 +220,7 @@ function BookingWizard({ staff }) {
         onSelect={setSlot}
         notice={notice}
         refreshKey={refreshKey}
+        draftKey={`${draft}:date:${doctor.id}`}
         onBack={() => toStep(1)}
         onContinue={() => toStep(3)}
       />
@@ -204,7 +239,12 @@ function BookingWizard({ staff }) {
         onDoctorGone={doctorGone}
         patient={staff ? patient : undefined}
         onBooked={(appointment) => {
+          // Booked: the draft is finished. A new visit starts a new booking.
+          forgetDrafts(draft);
           setReason("");
+          setSlot(null);
+          setDoctor(null);
+          setStep(1);
           setBooked(appointment);
         }}
       />

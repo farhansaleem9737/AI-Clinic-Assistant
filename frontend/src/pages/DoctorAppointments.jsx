@@ -9,6 +9,8 @@ import DateSelect from "../components/DateSelect";
 import EmptyState from "../components/EmptyState";
 import NumberedPager from "../components/NumberedPager";
 import StatusBadge from "../components/StatusBadge";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { changeAppointmentStatus, countAppointmentsByDay, listAppointments } from "../services/appointmentService";
 import { CANCELLATION_REASONS, CONFIRM_ACTIONS, MENU_ACTIONS, STATUS_LABELS } from "../utils/appointments";
@@ -108,12 +110,9 @@ export default function DoctorAppointments() {
   const status = STATUS_LABELS[searchParams.get("status")] ? searchParams.get("status") : "";
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
 
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
-  const [counts, setCounts] = useState(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [typed, setTyped] = useDraft("doctor-appointments:typed", "");
+  const [q, setQ] = useDraft("doctor-appointments:q", "");
+  const [failure, setFailure] = useState(""); // an action that failed outside the dialog
   const [attempt, setAttempt] = useState(0);
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(null); // { appointment, status } awaiting confirmation
@@ -135,29 +134,19 @@ export default function DoctorAppointments() {
 
   // Counts first: they also tell the doctor's timezone and today's date,
   // which the Upcoming / Past ranges are measured from.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const countRes = await countAppointmentsByDay(countParams({ day: selected, status, q }));
-        if (cancelled) return;
-        const c = countRes.data;
-        const listRes = await listAppointments(doctorListParams({ view, day: c.day, today: c.today, status, q, page }));
-        if (cancelled) return;
-        setCounts(c);
-        setData(listRes.data);
-        setError("");
-      } catch (err) {
-        if (!cancelled) setError(getErrorMessage(err, "Could not load your appointments"));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [view, selected, status, q, page, attempt]);
+  const board = useFetch(
+    async () => {
+      const counts = (await countAppointmentsByDay(countParams({ day: selected, status, q }))).data;
+      const list = (await listAppointments(doctorListParams({ view, day: counts.day, today: counts.today, status, q, page }))).data;
+      return { data: { counts, list } };
+    },
+    [view, selected, status, q, page],
+    { query: "appointments/doctor-board", refresh: attempt, errorMessage: "Could not load your appointments" }
+  );
+  const counts = board.data?.counts ?? null;
+  const data = board.data?.list ?? null;
+  const { loading } = board;
+  const error = failure || board.error;
 
   const day = counts?.day ?? selected;
   const isToday = counts && day === counts.today;
@@ -196,7 +185,7 @@ export default function DoctorAppointments() {
         setActionError(message);
       } else {
         setNotice("");
-        setError(message);
+        setFailure(message);
       }
     } finally {
       setBusy(false);
@@ -204,6 +193,7 @@ export default function DoctorAppointments() {
   };
   const onAction = (appointment, target) => {
     setNotice("");
+    setFailure("");
     setActionError("");
     if (CONFIRM_ACTIONS[target]) {
       setCancelReason("doctor_unavailable");
@@ -312,7 +302,11 @@ export default function DoctorAppointments() {
         {error ? (
           <div role="alert" className="appt-error">
             <p>{error}</p>
-            <button type="button" className="secondary" onClick={() => setAttempt((n) => n + 1)}>
+            <button type="button" className="secondary" onClick={() => {
+                setFailure("");
+                setAttempt((n) => n + 1);
+              }}
+            >
               Try again
             </button>
           </div>

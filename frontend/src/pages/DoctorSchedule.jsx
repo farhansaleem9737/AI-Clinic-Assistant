@@ -1,5 +1,5 @@
 import { CalendarDays, Clock } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -7,6 +7,7 @@ import ExceptionDialog from "../components/schedule/ExceptionDialog";
 import ExceptionsCard from "../components/schedule/ExceptionsCard";
 import WeeklyHoursCard from "../components/schedule/WeeklyHoursCard";
 import { useAuth } from "../context/useAuth";
+import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { listDoctors } from "../services/doctorService";
 import {
@@ -70,11 +71,7 @@ export default function DoctorSchedule() {
   // `?doctor=` arrives from Admin > Doctors > Manage Schedule.
   const [searchParams] = useSearchParams();
   const [doctorId, setDoctorId] = useState(managesAny ? searchParams.get("doctor") ?? "" : user.doctor_id ?? "");
-  const [schedule, setSchedule] = useState(null);
-  const [loadError, setLoadError] = useState("");
-  const [exceptions, setExceptions] = useState([]);
-  const [exceptionsLoading, setExceptionsLoading] = useState(true);
-  const [exceptionsError, setExceptionsError] = useState("");
+  const [saved, setSaved] = useState(null); // { doctorId, week }: the server's reply to a save here
   const [attempt, setAttempt] = useState(0);
   const [section, setSection] = useState("weekly");
   const [dialog, setDialog] = useState(null); // { exception } for add/edit
@@ -90,36 +87,25 @@ export default function DoctorSchedule() {
       .catch(() => {});
   }, [managesAny]);
 
-  const loadExceptions = useCallback(async () => {
-    try {
-      const res = await listDateExceptions(doctorId);
-      setExceptions(res.data);
-      setExceptionsError("");
-    } catch (err) {
-      setExceptionsError(getErrorMessage(err, "Could not load the exceptions"));
-    } finally {
-      setExceptionsLoading(false);
-    }
-  }, [doctorId]);
-
-  useEffect(() => {
-    if (!doctorId) return;
-    let cancelled = false;
-    getWeeklySchedule(doctorId)
-      .then((res) => !cancelled && setSchedule(res.data))
-      .catch((err) => !cancelled && setLoadError(getErrorMessage(err, "Could not load the weekly hours")));
-    listDateExceptions(doctorId)
-      .then((res) => {
-        if (cancelled) return;
-        setExceptions(res.data);
-        setExceptionsError("");
-      })
-      .catch((err) => !cancelled && setExceptionsError(getErrorMessage(err, "Could not load the exceptions")))
-      .finally(() => !cancelled && setExceptionsLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [doctorId, attempt]);
+  // Shown again at once when the page is reopened; refreshed when out of date (D107).
+  const weekly = useFetch(() => getWeeklySchedule(doctorId), [doctorId], {
+    query: "schedule/weekly",
+    refresh: attempt,
+    enabled: Boolean(doctorId),
+    errorMessage: "Could not load the weekly hours",
+  });
+  const dates = useFetch(() => listDateExceptions(doctorId), [doctorId], {
+    query: "schedule/date-exceptions",
+    refresh: attempt,
+    enabled: Boolean(doctorId),
+    errorMessage: "Could not load the exceptions",
+  });
+  const schedule = saved?.doctorId === doctorId ? saved.week : weekly.loading ? null : weekly.data;
+  const loadError = weekly.error;
+  const exceptions = dates.loading ? [] : (dates.data ?? []);
+  const exceptionsLoading = dates.loading;
+  const exceptionsError = dates.error;
+  const loadExceptions = dates.reload;
 
   if (!managesAny && !user.doctor_id) {
     return (
@@ -134,12 +120,7 @@ export default function DoctorSchedule() {
   const today = timeZone ? isoDateIn(new Date(), timeZone) : isoDateIn(new Date());
   const timeZoneNote = timeZone ? `Times are in ${timeZoneLabel(timeZone)}.` : "";
 
-  const retry = () => {
-    setLoadError("");
-    setExceptionsError("");
-    setExceptionsLoading(true);
-    setAttempt((n) => n + 1);
-  };
+  const retry = () => setAttempt((n) => n + 1);
 
   const jumpTo = (key, target) => {
     setSection(key);
@@ -151,7 +132,7 @@ export default function DoctorSchedule() {
   const saveWeek = async (days) => {
     try {
       const res = await saveWeeklySchedule(doctorId, days);
-      setSchedule(res.data);
+      setSaved({ doctorId, week: res.data });
       return res.data;
     } catch (err) {
       throw new Error(scheduleError(err, "Could not save the weekly hours"), { cause: err });
@@ -194,9 +175,6 @@ export default function DoctorSchedule() {
           <select
             value={doctorId}
             onChange={(e) => {
-              setSchedule(null);
-              setExceptions([]);
-              setExceptionsLoading(true);
               setDoctorId(e.target.value);
             }}
           >
@@ -220,7 +198,7 @@ export default function DoctorSchedule() {
 
           <div className="schedule-layout">
             {schedule ? (
-              <WeeklyHoursCard key={`${doctorId}-${attempt}`} schedule={schedule} onSave={saveWeek} />
+              <WeeklyHoursCard key={`${doctorId}-${attempt}`} schedule={schedule} onSave={saveWeek} draftKey={`schedule:${doctorId}`} />
             ) : loadError ? (
               <section className="card schedule-card" role="alert" id="weekly-hours">
                 <p>{loadError}</p>

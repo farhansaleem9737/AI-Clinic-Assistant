@@ -1,5 +1,8 @@
+import { Suspense } from "react";
 import { CalendarDays, ShieldPlus, Users } from "lucide-react";
-import { Link, Outlet } from "react-router-dom";
+import PageFallback from "../components/PageFallback";
+import ErrorBoundary from "../components/ErrorBoundary";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import loginHero from "../assets/login-hero.jpg";
 import registerHero from "../assets/register-hero.jpg";
 import BrandMark from "../components/BrandMark";
@@ -28,6 +31,7 @@ const HEROES = {
  * left, the page's card on the right. On small screens only the card is shown.
  */
 export default function AuthLayout({ variant = "login" }) {
+  const { pathname } = useLocation();
   const hero = HEROES[variant];
   return (
     <div className={`auth auth-${variant}`}>
@@ -69,7 +73,11 @@ export default function AuthLayout({ variant = "login" }) {
               Assistant
             </span>
           </Link>
-          <Outlet />
+          <ErrorBoundary resetKey={pathname}>
+            <Suspense fallback={<PageFallback />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </main>
     </div>

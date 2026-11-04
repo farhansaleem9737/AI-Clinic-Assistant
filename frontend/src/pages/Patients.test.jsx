@@ -119,7 +119,9 @@ describe("Patients", () => {
 
     await user.click(screen.getByRole("button", { name: /Registration date:/ }));
     await user.click(screen.getByRole("button", { name: "Clear" }));
-    await waitFor(() => expect(lastParams()).not.toHaveProperty("registered_from"));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await screen.findByRole("button", { name: /Registration date: Select Date Range/ })).toBeInTheDocument();
+    expect(await rows()).not.toHaveLength(0);
   });
 
   it("selects rows on this page, with a select-all that knows a partial selection", async () => {
@@ -238,7 +240,8 @@ describe("Patients", () => {
     await user.selectOptions(screen.getByLabelText("Status"), "active");
     expect(await screen.findByText("No patients match your search or filters.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear search and filters" }));
-    await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 10 }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await screen.findByText("No patients have been registered yet.")).toBeInTheDocument();
   });
 
   it("explains a loading failure and can retry", async () => {

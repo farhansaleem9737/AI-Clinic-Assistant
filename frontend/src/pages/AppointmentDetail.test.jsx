@@ -14,6 +14,7 @@ import { getAvailability } from "../services/scheduleService";
 import { appointmentDetail, authAs, PERMISSIONS } from "../test/fixtures";
 import { formatLongDate, formatTime } from "../utils/datetime";
 import { downloadAppointmentIcs } from "../utils/ics";
+import { queryClient } from "../services/queryClient";
 import AppointmentDetail from "./AppointmentDetail";
 
 vi.mock("../context/useAuth");
@@ -306,6 +307,8 @@ describe("other actions", () => {
     expect(changeAppointmentStatus).toHaveBeenCalledWith("appt-1", { status: "confirmed" });
     expect(await screen.findByText("Thank you, your attendance is confirmed.")).toBeInTheDocument();
     unmount();
+    // Another user signs in: the app empties the cache first (AuthContext, D107).
+    queryClient.clear();
 
     getAppointment.mockResolvedValue({
       data: { ...confirmed, staff_notes: null, booked_by_user_id: "u-9", allowed_transitions: ["checked_in", "no_show", "cancelled"] },

@@ -1,7 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.api.error_handlers import register_exception_handlers
 from app.api.middleware import RequestContextMiddleware
@@ -32,6 +32,14 @@ async def probe_client():
     @probe.get("/integrity")
     async def integrity():
         raise IntegrityError("INSERT ...", {}, Exception("duplicate key (email)=(secret@example.com)"))
+
+    @probe.get("/db-dropped")
+    async def db_dropped():
+        raise DBAPIError("SELECT ...", {}, Exception("connection was closed in the middle of operation"), connection_invalidated=True)
+
+    @probe.get("/db-other")
+    async def db_other():
+        raise DBAPIError("SELECT ...", {}, Exception("password=hunter2 syntax error"))
 
     @probe.get("/crash")
     async def crash():
@@ -76,6 +84,22 @@ async def test_integrity_error_is_409_without_driver_text(probe_client):
     assert assert_error_shape(response.json())["code"] == "CONFLICT"
     assert "secret@example.com" not in response.text
     assert "INSERT" not in response.text
+
+
+async def test_dropped_database_connection_is_503_try_again(probe_client):
+    response = await probe_client.get("/db-dropped")
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    error = assert_error_shape(response.json())
+    assert error["code"] == "DATABASE_UNAVAILABLE"
+    assert "SELECT" not in response.text
+
+
+async def test_other_database_errors_stay_generic_500(probe_client):
+    response = await probe_client.get("/db-other")
+    assert response.status_code == 500
+    assert assert_error_shape(response.json())["code"] == "INTERNAL_ERROR"
+    assert "hunter2" not in response.text
 
 
 async def test_unhandled_error_is_generic_500(probe_client):

@@ -262,6 +262,42 @@ describe("Assistant panel: screenshot design", () => {
     expect(box).toHaveValue("");
   });
 
+  it("shows an activity word instead of dots until the answer starts; Stop and errors remove it", async () => {
+    let push, fail;
+    streamAssistantMessage.mockImplementation(
+      (data, { onDelta, signal }) =>
+        new Promise((resolve, reject) => {
+          push = onDelta;
+          fail = reject;
+          signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        })
+    );
+    const user = userEvent.setup();
+    render(<ClinicAssistant />);
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    const thinking = () => within(panel).queryByRole("status", { name: "Assistant is preparing a response" });
+
+    // The answer starts: the word goes, the text shows.
+    await user.type(within(panel).getByLabelText("Message"), "hello{Enter}");
+    expect(await within(panel).findByRole("status", { name: "Assistant is preparing a response" })).toHaveTextContent("Thinking…");
+    expect(panel.querySelector(".ai-typing")).toBeNull();
+    await act(async () => push("Here is "));
+    expect(thinking()).not.toBeInTheDocument();
+    expect(within(panel).getByText("Here is")).toBeInTheDocument();
+
+    // An error ends it too.
+    await act(async () => fail({ response: { status: 503, data: { error: { message: "The AI service is busy." } } } }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("busy");
+    expect(thinking()).not.toBeInTheDocument();
+
+    // Stop before any text: the word goes at once.
+    await user.type(within(panel).getByLabelText("Message"), "{Enter}");
+    expect(await within(panel).findByRole("status", { name: "Assistant is preparing a response" })).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(thinking()).not.toBeInTheDocument());
+  });
+
   it("a failed request keeps the message and explains", async () => {
     streamAssistantMessage.mockRejectedValue({ response: { status: 503, data: { error: { code: "AI_RATE_LIMITED", message: "The AI service is busy (rate limit). Please try again shortly." } } } });
     const user = userEvent.setup();
@@ -324,9 +360,12 @@ describe("Assistant panel: screenshot design", () => {
     expect(within(panel).getByRole("button", { name: "Attach files" })).toBeDisabled();
   });
 
-  it("a proposed booking needs Confirm and shows the real result", async () => {
-    const proposal = message("m-2", "assistant", "Please confirm.", {
-      action: { type: "book_appointment", status: "pending", doctor_name: "Dr. Sarah Khan", department: "Cardiology", local_time: "Fri 23 Apr 2027, 10:00 AM" },
+  it("a proposed booking is one question with Confirm / Cancel, then a one-line result", async () => {
+    const proposal = message("m-2", "assistant", "Confirm your appointment with Dr. Sarah Khan on Friday, April 23 at 10:00 AM PKT?", {
+      action: {
+        type: "book_appointment", status: "pending", doctor_name: "Dr. Sarah Khan", department: "Cardiology",
+        local_time: "Fri 23 Apr 2027, 10:00 AM", when_text: "Friday, April 23 at 10:00 AM PKT",
+      },
     });
     replyWith(proposal);
     decideAction.mockResolvedValue({ data: { ...proposal, action: { ...proposal.action, status: "booked" } } });
@@ -335,11 +374,13 @@ describe("Assistant panel: screenshot design", () => {
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
     await user.type(within(panel).getByLabelText("Message"), "Book{Enter}");
-    const card = await within(panel).findByRole("group", { name: "Book this appointment?" });
-    expect(card).toHaveTextContent("Dr. Sarah Khan");
+    expect(await within(panel).findByText("Confirm your appointment with Dr. Sarah Khan on Friday, April 23 at 10:00 AM PKT?")).toBeInTheDocument();
+    const card = within(panel).getByRole("group", { name: "Confirm booking" });
+    expect(within(card).getByRole("button", { name: "Cancel" })).toBeEnabled();
     await user.click(within(card).getByRole("button", { name: "Confirm" }));
+    expect(decideAction).toHaveBeenCalledTimes(1);
     expect(decideAction).toHaveBeenCalledWith("c-1", "m-2", true);
-    expect(await within(card).findByText(/Booked/)).toBeInTheDocument();
+    expect(await within(card).findByText("Appointment booked with Dr. Sarah Khan for Friday, April 23 at 10:00 AM PKT.")).toBeInTheDocument();
   });
 
   it("a booking made for a patient shows who; an expired one says so", async () => {
@@ -356,11 +397,11 @@ describe("Assistant panel: screenshot design", () => {
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
     await user.type(within(panel).getByLabelText("Message"), "Book{Enter}");
-    const card = await within(panel).findByRole("group", { name: "Book this appointment?" });
+    const card = await within(panel).findByRole("group", { name: "Confirm booking" });
     expect(card).toHaveTextContent("Test Patient (MRN00000002)");
-    expect(card).toHaveTextContent(/Confirm by/);
     await user.click(within(card).getByRole("button", { name: "Confirm" }));
     expect(await within(card).findByText(/expired before it was confirmed/)).toBeInTheDocument();
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("doctor results are cards with profile and booking links, from the server's data", async () => {
@@ -439,17 +480,79 @@ describe("Assistant panel: screenshot design", () => {
     expect(within(docs).getByRole("link", { name: /View document/ })).toHaveAttribute("href", "/profile");
 
     const report = within(panel).getByRole("region", { name: "Report: Blood count September" });
-    expect(report).toHaveTextContent("Date on report: 01/09/2026 · Test Diagnostics");
-    expect(within(report).getByRole("row", { name: /Platelets/ })).toHaveTextContent("455 x10^3/uL Above range");
+    expect(report).toHaveTextContent("Date on report: 01/09/2026");
+    expect(report).toHaveTextContent("Test Diagnostics");
+    // A summary leads with the abnormal findings and the table.
+    expect(within(report).getByRole("heading", { name: "Abnormal findings" })).toBeInTheDocument();
+    expect(report).toHaveTextContent("Platelets: 455 x10^3/uL — above range");
+    const platelets = within(report).getByRole("row", { name: /Platelets/ });
+    expect(platelets).toHaveTextContent("455 x10^3/uL");
+    expect(platelets).toHaveTextContent("Above range (H)");
     expect(within(report).getByRole("row", { name: /Vitamin D/ })).toHaveTextContent("Not printed");
-    expect(report).toHaveTextContent("Platelets (above range)");
     expect(report).toHaveTextContent("OCR) is not installed");
-    expect(report).toHaveTextContent("This is not a diagnosis");
+    expect(report).toHaveTextContent("Not a diagnosis");
     expect(report).toHaveTextContent("Source: Blood count September, page 1");
 
     replyWith(message("m-4", "assistant", "Shown below."));
     await user.click(within(docs).getByRole("button", { name: /Summarize/ }));
     expect(streamAssistantMessage.mock.calls.at(-1)[0].text).toBe("Explain the medical document with id doc-9.");
+  });
+
+  it("a report card leads with what was asked: the condition, with the rest one click away", async () => {
+    replyWith(
+      message("m-2", "assistant", "The report states type 2 diabetes mellitus.", {
+        results: [{
+          kind: "medical_report", version: 2, focus: "conditions", has_text: true, problem: null, notes: [],
+          document: { document_id: "d-1", title: "Diabetes clinical case", document_kind: "Laboratory report", printed_date: "30 Oct 2026", uploaded: "2026-10-30" },
+          conditions: [{ name: "Type 2 diabetes mellitus", role: "primary", page: 1, source_text: "Findings are consistent with type 2 diabetes mellitus.", about: "A long-term condition." }],
+          symptoms: [{ name: "Increased thirst", page: 1, source_text: "Increased thirst" }],
+          measurements: [{ test: "HbA1c", value: "8.2", unit: "%", reference_range: "Normal <5.7%", report_flag: "HIGH", out_of_range: "high", page: 1, about: null }],
+          sections: [],
+          sources: [{ document_id: "d-1", title: "Diabetes clinical case", pages: [1] }],
+        }],
+      })
+    );
+    const user = userEvent.setup();
+    render(<MemoryRouter><ClinicAssistant /></MemoryRouter>);
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    await user.type(within(panel).getByLabelText("Message"), "which disease?{Enter}");
+    const report = await within(panel).findByRole("region", { name: "Report: Diabetes clinical case" });
+    expect(within(report).getAllByRole("heading", { level: 5 }).map((h) => h.textContent)).toEqual(["Condition"]);
+    expect(report).toHaveTextContent("Type 2 diabetes mellitus · main condition stated in the report");
+    expect(report).toHaveTextContent("“Findings are consistent with type 2 diabetes mellitus.” (page 1)");
+    // The table and symptoms are there, collapsed.
+    const more = [...report.querySelectorAll("details > summary")].map((s) => s.textContent);
+    expect(more).toEqual(expect.arrayContaining(["Symptoms described", "Laboratory results", "Abnormal findings"]));
+  });
+
+  it("appointment history shows the patient's own visits with appointment and profile links, never a Book button", async () => {
+    replyWith(
+      message("m-2", "assistant", "You have 2 past appointments, with Dr. A, Dr. B:", {
+        results: [{
+          kind: "appointment_history", scope: "past", pick: "all", total: 2,
+          items: [
+            { appointment_id: "a-2", doctor_id: "doc-2", doctor: "Dr. B", specialization: "Neurologist", department: "Neurology", date: "Sun 25 Oct 2026", start: "10:00 AM", end: "10:30 AM", status: "cancelled" },
+            { appointment_id: "a-1", doctor_id: "doc-1", doctor: "Dr. A", specialization: "Cardiologist", department: "Cardiology", date: "Sat 10 Oct 2026", start: "9:00 AM", end: "9:30 AM", status: "completed" },
+          ],
+        }],
+      })
+    );
+    const user = userEvent.setup();
+    render(<MemoryRouter><ClinicAssistant /></MemoryRouter>);
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    await user.type(within(panel).getByLabelText("Message"), "doctors I saw before{Enter}");
+    const list = await within(panel).findByRole("list", { name: "Your appointments" });
+    const [first, second] = within(list).getAllByRole("listitem");
+    expect(first).toHaveTextContent("Dr. B");
+    expect(first).toHaveTextContent("Neurologist · Neurology");
+    expect(first).toHaveTextContent("Sun 25 Oct 2026, 10:00 AM–10:30 AM");
+    expect(first).toHaveTextContent("Cancelled");
+    expect(second).toHaveTextContent("Completed");
+    expect(within(first).getByRole("link", { name: /View appointment/ })).toHaveAttribute("href", "/appointments/a-2");
+    expect(within(first).getByRole("link", { name: /Doctor profile/ })).toHaveAttribute("href", "/doctors/doc-2");
+    expect(within(list).queryByRole("link", { name: /Book/ })).not.toBeInTheDocument();
   });
 
   it("shows how many messages are left today and refreshes it after sending", async () => {
@@ -463,14 +566,35 @@ describe("Assistant panel: screenshot design", () => {
     expect(await within(panel).findByText("Daily message limit reached. It resets tomorrow.")).toBeInTheDocument();
   });
 
-  it("a proposed cancellation is labelled as one", async () => {
-    replyWith(message("m-2", "assistant", "Confirm?", { action: { type: "cancel_appointment", status: "pending", doctor_name: "Dr. A", local_time: "Fri" } }));
+  it("a proposed cancellation offers Confirm cancellation / Keep appointment; keeping it says so", async () => {
+    const proposal = message("m-2", "assistant", "Cancel your appointment with Dr. A on Friday, November 6 at 3:00 PM PKT?", {
+      action: { type: "cancel_appointment", status: "pending", doctor_name: "Dr. A", local_time: "Fri", when_text: "Friday, November 6 at 3:00 PM PKT" },
+    });
+    replyWith(proposal);
+    decideAction.mockResolvedValue({ data: { ...proposal, action: { ...proposal.action, status: "cancelled" } } });
     const user = userEvent.setup();
     render(<ClinicAssistant />);
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
     await user.type(within(panel).getByLabelText("Message"), "Cancel it{Enter}");
-    expect(await within(panel).findByRole("group", { name: "Cancel this appointment?" })).toBeInTheDocument();
+    const card = await within(panel).findByRole("group", { name: "Confirm cancellation" });
+    expect(within(card).getByRole("button", { name: "Confirm cancellation" })).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Keep appointment" }));
+    expect(decideAction).toHaveBeenCalledWith("c-1", "m-2", false);
+    expect(await within(card).findByText("Kept your appointment.")).toBeInTheDocument();
+  });
+
+  it("a treatment answer shows the short medical note once, above the answer", async () => {
+    replyWith(message("m-2", "assistant", "AI can make mistakes. Please consult a doctor for medical advice.\n\nIt is usually treated with iron."));
+    const user = userEvent.setup();
+    render(<ClinicAssistant />);
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    await user.type(within(panel).getByLabelText("Message"), "how is anemia treated{Enter}");
+    const note = await within(panel).findByText("AI can make mistakes. Please consult a doctor for medical advice.");
+    expect(note).toHaveClass("ai-medical-note");
+    expect(within(panel).getByText("It is usually treated with iron.")).toBeInTheDocument();
+    expect(within(panel).getAllByText(/AI can make mistakes/)).toHaveLength(1);
   });
 
   it("New conversation clears the view; History reopens a saved one", async () => {

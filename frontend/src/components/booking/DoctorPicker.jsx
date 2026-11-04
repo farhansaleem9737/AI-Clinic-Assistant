@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, BriefcaseMedical, CircleDollarSign, Clock, RotateCcw, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useDraft } from "../../hooks/useDraft";
 import { useFetch } from "../../hooks/useFetch";
 import { getErrorMessage } from "../../services/api";
 import { getPublicDepartments } from "../../services/departmentService";
@@ -82,7 +83,8 @@ function LoadingCards() {
 
 /**
  * Step 1: search and filter real doctors (all filtering happens in the API)
- * and choose one. `selected` is the chosen doctor or null.
+ * and choose one. `selected` is the chosen doctor or null. `draftKey`
+ * (optional) keeps the search and filters while the user visits other pages.
  */
 export default function DoctorPicker({
   selected,
@@ -92,12 +94,14 @@ export default function DoctorPicker({
   subtitle = "Search and choose a doctor to book an appointment.",
   // Optional: returns a message when something else must be chosen first.
   blockedReason,
+  draftKey = null,
 }) {
+  const keep = (name) => draftKey && `${draftKey}:${name}`;
   const [blocked, setBlocked] = useState("");
-  const [query, setQuery] = useState("");
-  const [search, setSearch] = useState("");
-  const [departmentId, setDepartmentId] = useState("");
-  const [specialization, setSpecialization] = useState("");
+  const [query, setQuery] = useDraft(keep("query"), "");
+  const [search, setSearch] = useDraft(keep("search"), "");
+  const [departmentId, setDepartmentId] = useDraft(keep("department"), "");
+  const [specialization, setSpecialization] = useDraft(keep("specialization"), "");
   // Set once the user changes a filter; until then a doctor chosen elsewhere
   // (the profile page, or step 2) stays selected even if not on this page.
   const [touched, setTouched] = useState(false);
@@ -106,10 +110,10 @@ export default function DoctorPicker({
   useEffect(() => {
     const timer = setTimeout(() => setSearch(query.trim()), SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, setSearch]);
 
-  const departments = useFetch(getPublicDepartments, []);
-  const specializations = useFetch(() => getPublicSpecializations(departmentId || undefined), [departmentId]);
+  const departments = useFetch(getPublicDepartments, [], { query: "departments/public" });
+  const specializations = useFetch(() => getPublicSpecializations(departmentId || undefined), [departmentId], { query: "specializations/public" });
 
   // A specialization that does not exist in the chosen department is ignored
   // (shown as "All Specializations") once that department's options load.
@@ -125,7 +129,7 @@ export default function DoctorPicker({
     specialization: activeSpecialization || undefined,
   };
   const filterKey = JSON.stringify(filters);
-  const firstPage = useFetch(() => getPublicDoctors({ ...filters, page: 1, page_size: PAGE_SIZE }), [filterKey]);
+  const firstPage = useFetch(() => getPublicDoctors({ ...filters, page: 1, page_size: PAGE_SIZE }), [filterKey], { query: "doctors/picker" });
 
   // Further pages ("Show more doctors"), kept only for the filters they were loaded with.
   const [more, setMore] = useState({ key: "", items: [], page: 1, loading: false, error: "" });

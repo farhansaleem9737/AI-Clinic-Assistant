@@ -14,6 +14,8 @@ import { getErrorMessage } from "../services/api";
 import { getPublicDepartments, listDepartments } from "../services/departmentService";
 import { activateDoctor, deactivateDoctor, getDoctor, listAllSpecializations, listDoctors } from "../services/doctorService";
 import { COLUMN_LABELS, experienceLabel, sortOf, toggleSort } from "../utils/adminDoctors";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { doctorName } from "../utils/format";
 
 const PAGE_SIZE = 10;
@@ -43,20 +45,14 @@ export default function AdminDoctors() {
   const navigate = useNavigate();
   // `?department=` arrives from Departments (a department's doctor count).
   const [searchParams] = useSearchParams();
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
+  const [typed, setTyped] = useDraft("admin-doctors:typed", "");
+  const [q, setQ] = useDraft("admin-doctors:q", "");
   const [departmentId, setDepartmentId] = useState(() => searchParams.get("department") ?? "");
-  const [specialization, setSpecialization] = useState("");
-  const [status, setStatus] = useState("");
-  const [sort, setSort] = useState("name_asc");
-  const [page, setPage] = useState(1);
+  const [specialization, setSpecialization] = useDraft("admin-doctors:specialization", "");
+  const [status, setStatus] = useDraft("admin-doctors:status", "");
+  const [sort, setSort] = useDraft("admin-doctors:sort", "name_asc");
+  const [page, setPage] = useDraft("admin-doctors:page", 1);
   const [attempt, setAttempt] = useState(0);
-  const [data, setData] = useState(null);
-  const [loadedKey, setLoadedKey] = useState(null);
-  const [error, setError] = useState("");
-  const [allDepartments, setAllDepartments] = useState([]); // filter: inactive included
-  const [activeDepartments, setActiveDepartments] = useState([]); // assignment: active only
-  const [specializations, setSpecializations] = useState([]);
   const [notice, setNotice] = useState("");
   const [dialog, setDialog] = useState(null);
   const [upcoming, setUpcoming] = useState(null);
@@ -65,47 +61,29 @@ export default function AdminDoctors() {
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  useEffect(() => {
-    if (can("department:manage"))
-      listDepartments({ page_size: 100 })
-        .then((res) => setAllDepartments(res.data.items))
-        .catch(() => {});
-    getPublicDepartments()
-      .then((res) => {
-        setActiveDepartments(res.data.items);
-        if (!can("department:manage")) setAllDepartments(res.data.items);
-      })
-      .catch(() => {});
-  }, [can, attempt]);
-  useEffect(() => {
-    listAllSpecializations()
-      .then((res) => setSpecializations(res.data))
-      .catch(() => setSpecializations([]));
-  }, [attempt]);
+  // Filter and assignment options, cached like the list (D107).
+  const manages = can("department:manage");
+  const managed = useFetch(() => listDepartments({ page_size: 100 }), [], {
+    query: "departments/all-options",
+    refresh: attempt,
+    enabled: manages,
+  });
+  const active = useFetch(getPublicDepartments, [], { query: "departments/public", refresh: attempt });
+  const specs = useFetch(listAllSpecializations, [], { query: "specializations/all", refresh: attempt });
+  const activeDepartments = active.data?.items ?? []; // assignment: active only
+  const allDepartments = manages ? (managed.data?.items ?? []) : activeDepartments; // filter: inactive included
+  const specializations = specs.data ?? [];
 
   const params = { page, page_size: PAGE_SIZE, sort };
   if (q.trim()) params.q = q.trim();
   if (departmentId) params.department_id = departmentId;
   if (specialization) params.specialization = specialization;
   if (status) params.is_active = status === "active";
-  const requestKey = `${JSON.stringify(params)}#${attempt}`;
-  const loading = loadedKey !== requestKey;
-
-  useEffect(() => {
-    let cancelled = false;
-    const [query] = requestKey.split("#");
-    listDoctors(JSON.parse(query))
-      .then((res) => {
-        if (cancelled) return;
-        setData(res.data);
-        setError("");
-      })
-      .catch((err) => !cancelled && setError(getErrorMessage(err, "Could not load doctors")))
-      .finally(() => !cancelled && setLoadedKey(requestKey));
-    return () => {
-      cancelled = true;
-    };
-  }, [requestKey]);
+  const { data, loading, error } = useFetch(() => listDoctors(params), [JSON.stringify(params)], {
+    query: "doctors/manage",
+    refresh: attempt,
+    errorMessage: "Could not load doctors",
+  });
 
   const refresh = () => setAttempt((n) => n + 1);
   const filter = (apply) => {

@@ -14,8 +14,11 @@ import DateRangeFilter from "../components/patients/DateRangeFilter";
 import { useAuth } from "../context/useAuth";
 import { getErrorMessage } from "../services/api";
 import { activateUser, bulkSetUserStatus, deactivateUser, listRoles, listUsers } from "../services/userService";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { avatarRole, bulkSummary, DATE_PRESETS, joinedOn, nextSort, presetRange, SORTABLE, sortState } from "../utils/adminUsers";
 
+const NONE = new Set();
 const PAGE_SIZE = 10;
 const SEARCH_DELAY_MS = 350;
 const ROLE_ORDER = ["admin", "doctor", "receptionist", "patient"];
@@ -65,18 +68,14 @@ export default function AdminUsers() {
   // `?q=` arrives from the global search's user results.
   const [typed, setTyped] = useState(() => searchParams.get("q") ?? "");
   const [q, setQ] = useState(() => searchParams.get("q") ?? "");
-  const [role, setRole] = useState("");
-  const [status, setStatus] = useState("");
-  const [datePreset, setDatePreset] = useState("all");
-  const [range, setRange] = useState({ from: "", to: "" });
-  const [sort, setSort] = useState("name");
-  const [page, setPage] = useState(1);
+  const [role, setRole] = useDraft("admin-users:role", "");
+  const [status, setStatus] = useDraft("admin-users:status", "");
+  const [datePreset, setDatePreset] = useDraft("admin-users:datePreset", "all");
+  const [range, setRange] = useDraft("admin-users:range", { from: "", to: "" });
+  const [sort, setSort] = useDraft("admin-users:sort", "name");
+  const [page, setPage] = useDraft("admin-users:page", 1);
   const [attempt, setAttempt] = useState(0);
-  const [data, setData] = useState(null);
-  const [loadedKey, setLoadedKey] = useState(null);
-  const [error, setError] = useState("");
   const [roles, setRoles] = useState([]);
-  const [selected, setSelected] = useState(() => new Set());
   const [notice, setNotice] = useState(null); // {text, failed?}
   const [actionError, setActionError] = useState("");
   const [dialog, setDialog] = useState(null);
@@ -96,25 +95,16 @@ export default function AdminUsers() {
   if (status) params.is_active = status === "active";
   if (range.from) params.joined_from = range.from;
   if (range.to) params.joined_to = range.to;
-  const requestKey = `${JSON.stringify(params)}#${attempt}`;
-  const loading = loadedKey !== requestKey;
-
-  useEffect(() => {
-    let cancelled = false;
-    const [query] = requestKey.split("#");
-    listUsers(JSON.parse(query))
-      .then((res) => {
-        if (cancelled) return;
-        setData(res.data);
-        setError("");
-        setSelected(new Set()); // selection is for the rows on screen only
-      })
-      .catch((err) => !cancelled && setError(getErrorMessage(err, "Could not load users")))
-      .finally(() => !cancelled && setLoadedKey(requestKey));
-    return () => {
-      cancelled = true;
-    };
-  }, [requestKey]);
+  const { data, loading, error } = useFetch(() => listUsers(params), [JSON.stringify(params)], {
+    query: "users/list",
+    refresh: attempt,
+    errorMessage: "Could not load users",
+  });
+  // The selection is for the rows on screen only: other rows start with none selected.
+  const rowsKey = JSON.stringify(params);
+  const [picked, setPicked] = useState({ rowsKey: null, rows: null, ids: NONE });
+  const selected = picked.rowsKey === rowsKey && picked.rows === data ? picked.ids : NONE;
+  const setSelected = (next) => setPicked({ rowsKey, rows: data, ids: typeof next === "function" ? next(selected) : next });
 
   const refresh = () => setAttempt((n) => n + 1);
   const filter = (apply) => {

@@ -363,6 +363,12 @@ th { font-size: 0.8rem; font-weight: 600; color: var(--muted); background: #f8fa
   .doctor-summary h1 { font-size: 1.45rem; }
   .doctor-summary-facts { gap: 0.75rem 1.5rem; }
 }
+/* Small phones: brand name + both buttons need ~390px, so "Create account"
+   dropped onto its own row. Show the logo only; the name stays in the link
+   text for screen readers. */
+@media (max-width: 430px) {
+  .public-brand { font-size: 0; gap: 0; margin-right: 0; }
+}
 
 /* ---- Dashboard ------------------------------------------------------------- */
 .dash-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
@@ -836,6 +842,8 @@ button.large { min-height: 52px; font-size: 1.05rem; font-weight: 600; border-ra
 @media (max-width: 480px) {
   .auth-providers { grid-template-columns: minmax(0, 1fr); }
   .auth-card { border-radius: 16px; }
+  /* Let the card shrink to the screen instead of its content's minimum width. */
+  .auth-panel { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---- Patient: My Profile ------------------------------------------------------- */
@@ -1115,6 +1123,11 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .doctor-summary .doctor-summary-side { align-self: flex-start; margin-top: 2.5rem; }
 .doctor-summary .doctor-summary-facts li + li { border-left: 1px solid var(--border); padding-left: 2.25rem; }
 .doctor-profile-grid { grid-template-columns: minmax(0, 2.15fr) minmax(320px, 1fr); }
+/* The rule above comes after the earlier 860px breakpoint and would otherwise
+   keep two columns on phones, squeezing the profile under the booking card. */
+@media (max-width: 860px) {
+  .doctor-profile-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 .profile-sections { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .profile-sections > .card { margin: 0; }
@@ -1463,6 +1476,12 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .view-schedule { display: inline-flex; align-items: center; gap: 0.5rem; min-height: 44px; border-color: var(--accent); }
 
 .appt-table-wrap { overflow-x: auto; padding: 0 0.5rem; }
+/* Absolutely positioned screen-reader text in a header cell escaped the
+   scrolling wrapper and widened the whole page on phones; make the wrapper
+   its containing block so it scrolls with the table. */
+@media (max-width: 860px) {
+  .table-wrap, .appt-table-wrap { position: relative; }
+}
 .appt-table { width: 100%; border-collapse: collapse; }
 .appt-table thead th { background: #f3f6fb; color: var(--heading); font-weight: 500; text-align: left; padding: 0.85rem 0.9rem; }
 .appt-table td { padding: 0.85rem 0.9rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -1633,7 +1652,9 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
   .pd-header { align-items: flex-start; }
   .pd-actions { width: 100%; }
   .pd-actions .button, .pd-actions button { flex: 1; justify-content: center; }
-  .pd-tabs { padding: 0; }
+  /* position: relative keeps the locked tab's absolutely positioned sr-only
+     text inside the scrolling tab bar; without it the page grew sideways. */
+  .pd-tabs { padding: 0; position: relative; }
   .pd-tabs a, .pd-locked { flex: none; padding: 0.85rem 1rem; }
   .pd-section .info-list div { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
   .pd-facts li + li::before { margin: 0 0.5rem; }
@@ -1841,6 +1862,12 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
   .admin-action-grid { grid-template-columns: minmax(0, 1fr); }
   .admin-head .date-select { width: 100%; }
 }
+/* Small phones: beside the icon, a two-column card left ~30px for its label,
+   so "Appointments" spilled out of the card. Put the icon above the text. */
+@media (max-width: 430px) {
+  .kpi-card { flex-direction: column; gap: 0.6rem; }
+  .kpi-card .body { width: 100%; }
+}
 
 /* ---- Workspace header: search, notifications, account (D86) ---- */
 .global-search { position: relative; flex: 1 1 22rem; max-width: 34rem; }
@@ -2034,6 +2061,11 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 @media (max-width: 1200px) {
   .admin-pair { grid-template-columns: 1fr; }
 }
+/* A bare 1fr column grows to the tables' full width on phones, so the page
+   zoomed out instead of the tables scrolling inside their wrappers. */
+@media (max-width: 760px) {
+  .admin-pair { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 760px) {
   .admin-users-table { table-layout: auto; }
 }
@@ -2090,10 +2122,18 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .ai-markdown code { background: #eef1f5; padding: 0 0.25rem; border-radius: 4px; }
 .ai-msg-meta { display: flex; align-items: center; justify-content: flex-end; gap: 0.3rem; margin-top: 0.25rem; font-size: 0.72rem; color: #667085; }
 .ai-msg-files { list-style: none; margin: 0.4rem 0 0; padding: 0; font-size: 0.8rem; color: #475467; }
-.ai-typing { display: flex; gap: 4px; padding: 0.75rem 0.9rem; }
-.ai-typing span { width: 7px; height: 7px; border-radius: 50%; background: #1677ff; opacity: 0.5; animation: ai-dot 1.2s infinite; }
-.ai-typing span:nth-child(2) { animation-delay: 0.2s; } .ai-typing span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes ai-dot { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+/* While an answer is being prepared: one activity word at a time (ThinkingWords.jsx).
+   Fixed line height so the bubble never changes height; long words are cut, never overflow. */
+.ai-thinking { display: block; max-width: 100%; height: 1.5rem; line-height: 1.5rem; overflow: hidden; }
+.ai-thinking-word { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #1677ff; font-weight: 500;
+  animation: ai-word-in 180ms ease-out both; transition: opacity 180ms ease-out, transform 180ms ease-out; }
+.ai-thinking-word.leaving { opacity: 0; transform: translateY(-5px); }
+.ai-thinking-rest { visibility: hidden; } /* letters not yet revealed: keep their space */
+@keyframes ai-word-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-thinking-word { animation: none; transition: none; }
+  .ai-thinking-word.leaving { opacity: 1; transform: none; }
+}
 .ai-action { margin-top: 0.6rem; padding: 0.65rem 0.75rem; border: 1px solid #cfe0fb; border-radius: 10px; background: #f5f9ff; }
 .ai-action strong { display: flex; align-items: center; gap: 0.35rem; color: #102a56; }
 .ai-action dl { margin: 0.45rem 0; display: grid; gap: 0.2rem; font-size: 0.85rem; }
@@ -2198,7 +2238,11 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .ai-result-links { display: flex; gap: 0.85rem; margin-top: 0.15rem; font-size: 0.82rem; font-weight: 600; }
 .ai-result .badge { flex: none; }
 .ai-results-more { margin: 0.35rem 0 0; }
+.ai-result-muted { background: #f7f9fc; }
+.ai-result-muted .ai-result-body strong { color: #667085; }
 .ai-action-expiry { margin: 0.35rem 0 0; }
+.ai-medical-note { margin: 0 0 0.45rem; padding: 0.3rem 0.55rem; border-left: 3px solid #1677ff; background: #f5f9ff; color: #475467; font-size: 0.8rem; border-radius: 4px; }
+.ai-action-result { display: flex; align-items: center; gap: 0.35rem; }
 
 /* Medical documents and reports (D101): read on the server, shown as is. */
 .ai-result-icon { color: #1677ff; flex: none; }
@@ -2221,9 +2265,13 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .ai-profile div { display: flex; gap: 0.5rem; }
 .ai-profile dt { min-width: 120px; color: #667085; }
 .ai-profile dd { margin: 0; color: #172b4d; }
+.ai-report-list { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.35rem; font-size: 0.85rem; }
+.ai-report-list p { margin: 0.1rem 0 0; }
+.ai-quote { font-style: italic; }
+.ai-report-more { margin-top: 0.5rem; }
+.ai-report-more > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600; color: #102a56; }
 .ai-attachment-thumb { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; flex: none; }
-.ai-typing { display: inline-flex; gap: 4px; padding: 0.35rem 0.1rem; }
-.ai-msg-assistant .ai-bubble:has(.ai-typing) { padding: 0.55rem 0.8rem; }
+.ai-msg-assistant .ai-bubble:has(.ai-thinking) { padding: 0.55rem 0.8rem; min-width: 0; max-width: 100%; }
 .ai-history-empty { margin-top: 1rem; }
 
 @media (max-width: 640px) {
@@ -2233,3 +2281,10 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
   .ai-hero img { width: 118px; height: 118px; }
   .ai-welcome h3 { font-size: 1.3rem; }
 }
+
+/* Page skeleton while a page's code downloads (code splitting). */
+.page-fallback { display: grid; gap: 0.75rem; padding: 0.25rem 0; }
+.page-fallback-title { height: 30px; width: min(320px, 60%); border-radius: 8px; }
+.page-fallback-line { height: 14px; width: min(460px, 80%); border-radius: 6px; }
+.page-fallback-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 0.5rem; }
+.page-fallback-grid .card { height: 180px; margin: 0; }

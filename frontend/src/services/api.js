@@ -1,4 +1,5 @@
 import axios from "axios";
+import { invalidateAfterChange } from "./queryClient";
 
 // Set in frontend/.env (see .env.example). In development this is the relative
 // path "/api/v1": the Vite dev server proxies it to FastAPI, so the page and the
@@ -12,6 +13,15 @@ const CSRF_COOKIE = "csrf_token";
 const CSRF_HEADER = "X-CSRF-Token";
 
 const api = axios.create({ baseURL: API_BASE_URL });
+
+// A successful change (anything but GET) marks the cached data it affects as
+// out of date (services/queryClient.js). Only after the server confirmed it:
+// a failed request changes nothing.
+api.interceptors.response.use((response) => {
+  const method = (response.config?.method ?? "get").toLowerCase();
+  if (method !== "get" && method !== "head") invalidateAfterChange(response.config.url);
+  return response;
+});
 
 // The access token lives only in memory — never in localStorage, where any
 // injected script could read it. A page reload loses it on purpose; the

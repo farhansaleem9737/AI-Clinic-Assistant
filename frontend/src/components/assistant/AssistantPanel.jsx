@@ -21,13 +21,14 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import avatar from "../../assets/clinic-ai-avatar.png";
 import { getErrorMessage } from "../../services/api";
 import { decideAction, deleteConversation, listConversations } from "../../services/aiService";
 import { ACCEPT, fileSize, suggestionsFor, unavailableReason, usageNote } from "../../utils/assistant";
 import AssistantResults from "./AssistantResults";
 import SafeMarkdown from "./SafeMarkdown";
+import ThinkingWords from "./ThinkingWords";
 
 const time = (iso) => new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 const STATUS_LABEL = { uploading: "Uploading…", processing: "Processing…", ready: "Ready", no_text: "Ready", failed: "Failed" };
@@ -41,25 +42,43 @@ const SUGGESTION_ICONS = {
   chart: ChartColumn,
   file: FileText,
 };
-const ACTION_TITLES = {
-  book_appointment: "Book this appointment?",
-  cancel_appointment: "Cancel this appointment?",
-  reschedule_appointment: "Move this appointment?",
+// Proposed actions (D104): the question itself is the message text above the card
+// ("Confirm your appointment with ... on ...?"); the card adds only the buttons and
+// anything the question does not say.
+const ACTIONS = {
+  book_appointment: { label: "Confirm booking", yes: "Confirm", no: "Cancel", busy: "Booking…" },
+  cancel_appointment: { label: "Confirm cancellation", yes: "Confirm cancellation", no: "Keep appointment", busy: "Cancelling…" },
+  reschedule_appointment: { label: "Confirm change", yes: "Confirm change", no: "Keep original", busy: "Moving…" },
 };
-const ACTION_RESULTS = {
-  booked: "Booked. You can see it in Appointments.",
-  cancelled_appointment: "The appointment was cancelled.",
-  rescheduled: "The appointment was moved.",
-  cancelled: "No change was made.",
-  expired: "This proposal expired before it was confirmed. Ask again to check the current times.",
-};
+const when = (a) => a.when_text ?? a.local_time;
+
+function actionResult(a) {
+  switch (a.status) {
+    case "booked":
+      return `Appointment booked with ${a.doctor_name} for ${when(a)}.`;
+    case "cancelled_appointment":
+      return `Your appointment with ${a.doctor_name} on ${when(a)} was cancelled.`;
+    case "rescheduled":
+      return `Moved to ${a.new_when_text ?? a.new_local_time}.`;
+    case "cancelled":
+      return { book_appointment: "Not booked.", cancel_appointment: "Kept your appointment.", reschedule_appointment: "Kept the original time." }[a.type];
+    case "expired":
+      return "This expired before it was confirmed. Ask again to check the current times.";
+    case "failed":
+      return `Couldn't complete it: ${a.error}`;
+    default:
+      return "";
+  }
+}
 
 function ActionCard({ message, conversationId, onUpdated }) {
   const action = message.action;
-  const [busy, setBusy] = useState(false);
+  const kind = ACTIONS[action.type] ?? { label: "Confirm", yes: "Confirm", no: "Cancel", busy: "Working…" };
+  const [busy, setBusy] = useState(null); // true = confirming, false = declining
   const [error, setError] = useState("");
   const decide = async (confirm) => {
-    setBusy(true);
+    if (busy !== null) return; // one decision only
+    setBusy(confirm);
     setError("");
     try {
       const res = await decideAction(conversationId, message.id, confirm);
@@ -67,47 +86,39 @@ function ActionCard({ message, conversationId, onUpdated }) {
     } catch (err) {
       setError(getErrorMessage(err, "Could not record your decision"));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
+  // Only what the one-line question does not already say.
   const rows = [
     ["Patient", action.patient_name && `${action.patient_name}${action.patient_mrn ? ` (${action.patient_mrn})` : ""}`],
-    ["Doctor", action.doctor_name],
-    ["Department", action.department],
-    [action.type === "reschedule_appointment" ? "Now" : "When", action.local_time],
-    ["New time", action.new_local_time],
     ["Fee", action.consultation_fee],
     ["Reason", action.reason],
   ].filter(([, v]) => v);
-  const label = ACTION_TITLES[action.type] ?? "Confirm this action?";
   return (
-    <div className={`ai-action ai-action-${action.status}`} role="group" aria-label={label}>
-      <strong>
-        <CalendarCheck size={16} aria-hidden="true" /> {label}
-      </strong>
-      <dl>
-        {rows.map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>{v}</dd>
-          </div>
-        ))}
-      </dl>
-      {action.status === "pending" && action.expires_at && (
-        <p className="muted small ai-action-expiry">Confirm by {time(action.expires_at)}; after that, ask again.</p>
+    <div className={`ai-action ai-action-${action.status}`} role="group" aria-label={kind.label}>
+      {rows.length > 0 && (
+        <dl>
+          {rows.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
       )}
       {action.status === "pending" ? (
         <div className="ai-action-buttons">
-          <button type="button" className="small-button" disabled={busy} onClick={() => decide(true)}>
-            Confirm
+          <button type="button" className="small-button" disabled={busy !== null} onClick={() => decide(true)}>
+            {busy === true ? kind.busy : kind.yes}
           </button>
-          <button type="button" className="secondary small-button" disabled={busy} onClick={() => decide(false)}>
-            Cancel
+          <button type="button" className="secondary small-button" disabled={busy !== null} onClick={() => decide(false)}>
+            {kind.no}
           </button>
         </div>
       ) : (
         <p className="ai-action-result" role="status">
-          {action.status === "failed" ? `Could not complete it: ${action.error}` : ACTION_RESULTS[action.status]}
+          <CalendarCheck size={15} aria-hidden="true" /> {actionResult(action)}
         </p>
       )}
       {error && <p className="field-error">{error}</p>}
@@ -115,7 +126,11 @@ function ActionCard({ message, conversationId, onUpdated }) {
   );
 }
 
-function Message({ message, conversationId, onUpdated, documents, canBook, ownRecord, onAsk }) {
+// The short medical note the assistant puts first on treatment questions (D104), shown subtly.
+const DISCLAIMER = "AI can make mistakes. Please consult a doctor for medical advice.";
+
+// Memoised: while an answer streams, only the streaming message re-renders (and re-parses its Markdown).
+const Message = memo(function Message({ message, conversationId, onUpdated, documents, canBook, ownRecord, onAsk }) {
   const [copied, setCopied] = useState(false);
   const mine = message.role === "user";
   const copy = async () => {
@@ -133,13 +148,14 @@ function Message({ message, conversationId, onUpdated, documents, canBook, ownRe
       {!mine && <img className="ai-msg-avatar" src={avatar} alt="" />}
       <div className="ai-bubble">
         {streaming ? (
-          <span className="ai-typing" role="status" aria-label="Assistant is thinking">
-            <span /> <span /> <span />
-          </span>
+          <ThinkingWords />
         ) : mine ? (
           <p className="ai-user-text">{message.content}</p>
         ) : (
-          <SafeMarkdown text={message.content} />
+          <>
+            {message.content.startsWith(DISCLAIMER) && <p className="ai-medical-note">{DISCLAIMER}</p>}
+            <SafeMarkdown text={message.content.startsWith(DISCLAIMER) ? message.content.slice(DISCLAIMER.length).trim() : message.content} />
+          </>
         )}
         {message.document_ids?.length > 0 && (
           <ul className="ai-msg-files" aria-label="Attached files">
@@ -165,7 +181,7 @@ function Message({ message, conversationId, onUpdated, documents, canBook, ownRe
       </div>
     </li>
   );
-}
+});
 
 function HistoryList({ onOpen, onClose }) {
   const [items, setItems] = useState(null);
@@ -287,6 +303,7 @@ export default function AssistantPanel({ assistant, onClose }) {
     newConversation,
     openConversation,
     updateMessage,
+    ask,
     usage,
   } = assistant;
   const [showHistory, setShowHistory] = useState(false);
@@ -389,7 +406,7 @@ export default function AssistantPanel({ assistant, onClose }) {
           ) : (
             <ul className="ai-message-list" aria-live="polite" aria-label="Conversation">
               {messages.map((m) => (
-                <Message key={m.id} message={m} conversationId={conversationId} onUpdated={updateMessage} documents={documents} canBook={canBook} ownRecord={ownRecord} onAsk={sending ? undefined : (text) => send(text)} />
+                <Message key={m.id} message={m} conversationId={conversationId} onUpdated={updateMessage} documents={documents} canBook={canBook} ownRecord={ownRecord} onAsk={sending ? undefined : ask} />
               ))}
             </ul>
           )}

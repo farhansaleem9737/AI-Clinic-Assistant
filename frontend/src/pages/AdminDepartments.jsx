@@ -10,6 +10,8 @@ import { DepartmentDetailsDialog, DepartmentFormDialog, ManageDoctorsDialog } fr
 import DepartmentCard from "../components/departments/DepartmentCard";
 import { getErrorMessage } from "../services/api";
 import { activateDepartment, deactivateDepartment, getDepartment, getDepartmentSummary, listDepartments } from "../services/departmentService";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { getClinicSettings } from "../services/workspaceService";
 
 const PAGE_SIZE = 12; // three rows of four cards
@@ -29,62 +31,35 @@ const STATS = [
  * appointments; it stops new bookings (enforced by the API).
  */
 export default function AdminDepartments() {
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState("");
-  const [summary, setSummary] = useState(null);
-  const [page, setPage] = useState(1);
+  const [typed, setTyped] = useDraft("admin-departments:typed", "");
+  const [q, setQ] = useDraft("admin-departments:q", "");
+  const [status, setStatus] = useDraft("admin-departments:status", "");
+  const [page, setPage] = useDraft("admin-departments:page", 1);
   const [attempt, setAttempt] = useState(0);
-  const [data, setData] = useState(null);
-  const [loadedKey, setLoadedKey] = useState(null);
-  const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dialog, setDialog] = useState(null);
   const [impact, setImpact] = useState(null); // detail of the department being deactivated
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [clinicZone, setClinicZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [browserZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  useEffect(() => {
-    getClinicSettings()
-      .then((res) => res.data?.operational?.timezone && setClinicZone(res.data.operational.timezone))
-      .catch(() => {});
-  }, []);
+  const settings = useFetch(getClinicSettings, [], { query: "settings/clinic" });
+  const clinicZone = settings.data?.operational?.timezone || browserZone;
 
   // Clinic-wide: the search and status filter do not change these.
-  useEffect(() => {
-    let live = true;
-    getDepartmentSummary()
-      .then((res) => live && setSummary(res.data))
-      .catch(() => live && setSummary({ failed: true }));
-    return () => {
-      live = false;
-    };
-  }, [attempt]);
+  const totals = useFetch(getDepartmentSummary, [], { query: "departments/summary", refresh: attempt });
+  const summary = totals.error ? { failed: true } : totals.data;
 
   const params = { page, page_size: PAGE_SIZE, sort: "name" };
   if (q.trim()) params.q = q.trim();
   if (status) params.is_active = status === "active";
-  const requestKey = `${JSON.stringify(params)}#${attempt}`;
-  const loading = loadedKey !== requestKey;
-
-  useEffect(() => {
-    let cancelled = false;
-    const [query] = requestKey.split("#");
-    listDepartments(JSON.parse(query))
-      .then((res) => {
-        if (cancelled) return;
-        setData(res.data);
-        setError("");
-      })
-      .catch((err) => !cancelled && setError(getErrorMessage(err, "Could not load departments")))
-      .finally(() => !cancelled && setLoadedKey(requestKey));
-    return () => {
-      cancelled = true;
-    };
-  }, [requestKey]);
+  const { data, loading, error, reset } = useFetch(() => listDepartments(params), [JSON.stringify(params)], {
+    query: "departments/manage",
+    refresh: attempt,
+    errorMessage: "Could not load departments",
+  });
 
   const refresh = () => setAttempt((n) => n + 1);
   const onSearch = (value) => {
@@ -211,10 +186,10 @@ export default function AdminDepartments() {
 
       <ErrorBoundary
         title="Unable to load departments"
-        onRetry={() => {
-          setData(null); // render the skeleton, not the data that failed, until the reload arrives
-          refresh();
-        }}
+        // Render the skeleton, not the data that failed, until the reload arrives;
+        // the boundary clears once the data is replaced.
+        resetKey={data}
+        onRetry={reset}
       >
       <section className="dept-grid-wrap" aria-label="Departments list" aria-busy={loading}>
         {error ? (

@@ -1,5 +1,5 @@
 import { Camera, HeartPulse, Info, Pencil, Phone, UserRound } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Alert from "../components/Alert";
 import PatientDocuments from "../components/documents/PatientDocuments";
 import EditDetailsDialog from "../components/patient-profile/EditDetailsDialog";
@@ -8,6 +8,7 @@ import ProfileSummary from "../components/patient-profile/ProfileSummary";
 import PatientFields from "../components/PatientFields";
 import PhotoUploader from "../components/PhotoUploader";
 import { useAuth } from "../context/useAuth";
+import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { getDashboardSummary } from "../services/dashboardService";
 import {
@@ -199,44 +200,30 @@ function LoadingProfile() {
 export default function MyPatientProfile() {
   const { fetchCurrentUser, can } = useAuth();
   const [attempt, setAttempt] = useState(0);
-  const [profile, setProfile] = useState(null);
-  const [missing, setMissing] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [status, setStatus] = useState(null);
   const [tab, setTab] = useState("personal");
   const [editing, setEditing] = useState(null); // "personal" | "contact" | "all"
   const [notice, setNotice] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    getMyPatientProfile()
-      .then((res) => {
-        if (cancelled) return;
-        setProfile(res.data);
-        setLoadError("");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (err.response?.data?.error?.code === "NO_PATIENT_PROFILE") setMissing(true);
-        else setLoadError(getErrorMessage(err, "Could not load your profile"));
-      });
-    // The status badge is optional: if this fails it is simply not shown.
-    getDashboardSummary()
-      .then((res) => !cancelled && setStatus(accountStatus(res.data)))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [attempt]);
+  // Shared with the dashboard's profile card and status (D107).
+  const loaded = useFetch(getMyPatientProfile, [], {
+    query: "profile/patient",
+    refresh: attempt,
+    errorMessage: "Could not load your profile",
+  });
+  // The status badge is optional: if this fails it is simply not shown.
+  const summary = useFetch(getDashboardSummary, [], { query: "dashboard/summary", refresh: attempt });
+  const [saved, setProfile] = useState(null); // the server's reply to a change made here
+  const [created, setCreated] = useState(false);
+  const missing = !created && loaded.code === "NO_PATIENT_PROFILE";
+  const profile = saved ?? (loaded.loading ? null : loaded.data);
+  const loadError = missing ? "" : loaded.error;
+  const status = summary.data ? accountStatus(summary.data) : null;
 
-  const retry = () => {
-    setLoadError("");
-    setAttempt((n) => n + 1);
-  };
+  const retry = () => setAttempt((n) => n + 1);
 
   const onCreated = async (created) => {
     setProfile(created);
-    setMissing(false);
+    setCreated(true);
     setNotice("Profile saved");
     await fetchCurrentUser(); // picks up the new patient_id
     setAttempt((n) => n + 1); // and the account status that goes with it

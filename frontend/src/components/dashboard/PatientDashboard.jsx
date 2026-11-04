@@ -56,7 +56,7 @@ function Fact({ icon: Icon, label, children }) {
 }
 
 function ProfileCard({ hasProfile, active }) {
-  const { data: profile, loading, error } = useFetch(getMyPatientProfile, [], { enabled: hasProfile });
+  const { data: profile, loading, error } = useFetch(getMyPatientProfile, [], { query: "profile/patient", enabled: hasProfile });
 
   return (
     <SectionCard title="My Profile" icon={UserRound} moreTo="/profile" moreLabel="View profile" loading={loading} error={error} className="profile-card">

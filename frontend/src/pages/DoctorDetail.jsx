@@ -31,7 +31,10 @@ export default function DoctorDetail() {
   const { hash } = useLocation();
   const { user, can } = useAuth();
   const [attempt, setAttempt] = useState(0);
-  const { data: doctor, loading, error, status } = useFetch(() => getPublicDoctor(id), [id, attempt]);
+  const { data: doctor, loading, error, status } = useFetch(() => getPublicDoctor(id), [id], {
+    query: "doctors/public-profile",
+    refresh: attempt,
+  });
   const bookingHeading = useRef(null);
 
   // "Change time" on the confirmation step links back to /doctors/:id#book.

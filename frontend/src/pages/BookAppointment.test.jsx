@@ -7,6 +7,7 @@ import { bookAppointment } from "../services/appointmentService";
 import { getPublicDepartments } from "../services/departmentService";
 import { getPublicAvailability, getPublicDoctor, getPublicDoctors, getPublicSpecializations } from "../services/doctorService";
 import { getPatient, listPatients } from "../services/patientService";
+import { setDraftOwner } from "../services/drafts";
 import { getAvailability } from "../services/scheduleService";
 import { appointment, authAs, PERMISSIONS, publicDoctor } from "../test/fixtures";
 import { longDate } from "../utils/calendar";
@@ -232,6 +233,61 @@ describe("steps 2 and 3", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /Continue/ }));
     expect(await screen.findByRole("textbox", { name: "Reason for Appointment" })).toHaveValue("Follow-up");
+  });
+
+  it("keeps an unfinished booking while the patient visits other pages, and re-checks the time", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderBooking(patient());
+    await chooseSarahAndTime(user);
+    await user.type(screen.getByRole("textbox", { name: "Reason for Appointment" }), "Follow-up");
+    unmount(); // e.g. a look at the dashboard
+
+    const checks = getPublicAvailability.mock.calls.length;
+    renderBooking(patient());
+    expect(await screen.findByRole("heading", { name: "Confirm your appointment" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "Reason for Appointment" })).toHaveValue("Follow-up");
+    const details = await screen.findByRole("region", { name: "Appointment Details" });
+    expect(details).toHaveTextContent(formatSlotTime(SLOT, TZ));
+    // A kept time is not a reservation: it is checked against live availability again.
+    expect(getPublicAvailability.mock.calls.length).toBeGreaterThan(checks);
+    expect(bookAppointment).not.toHaveBeenCalled();
+  });
+
+  it("restores a patient's booking after a reload without the typed reason", async () => {
+    setDraftOwner("u-1");
+    try {
+      const user = userEvent.setup();
+      const { unmount } = renderBooking(patient());
+      await chooseSarahAndTime(user);
+      await user.type(screen.getByRole("textbox", { name: "Reason for Appointment" }), "Chest pain");
+      unmount();
+      // A reload empties memory; only the tab's stored draft remains.
+      setDraftOwner(null);
+      setDraftOwner("u-1");
+      expect(JSON.stringify(sessionStorage)).not.toContain("Chest pain");
+
+      getPublicDoctor.mockClear();
+      renderBooking(patient());
+      expect(await screen.findByRole("heading", { name: "Confirm your appointment" })).toBeInTheDocument();
+      expect(getPublicDoctor).toHaveBeenCalledWith("doc-1"); // the doctor is validated again
+      expect(await screen.findByRole("textbox", { name: "Reason for Appointment" })).toHaveValue("");
+      expect(await screen.findByRole("region", { name: "Appointment Details" })).toHaveTextContent("Dr. Sarah Khan");
+    } finally {
+      setDraftOwner(null);
+    }
+  });
+
+  it("a finished booking is not restored: the next visit starts a new one", async () => {
+    const user = userEvent.setup();
+    bookAppointment.mockResolvedValue({ data: appointment({ id: "appt-9", starts_at: SLOT, timezone: TZ, status: "scheduled" }) });
+    const { unmount } = renderBooking(patient());
+    await chooseSarahAndTime(user);
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(await screen.findByRole("heading", { name: "Your appointment is booked" })).toBeInTheDocument();
+    unmount();
+    renderBooking(patient());
+    expect(await screen.findByRole("radio", { name: /Sarah Khan/ })).not.toBeChecked();
+    expect(screen.getByText("Select Doctor").closest("li")).toHaveAttribute("aria-current", "step");
   });
 
   it("sends one request however many times Confirm is pressed", async () => {

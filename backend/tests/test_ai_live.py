@@ -80,3 +80,44 @@ async def test_live_emergency_message_never_reaches_the_model(client, db_session
     assert response.status_code == 200
     assert "emergency" in response.json()["assistant_message"]["content"].lower()
     assert (await db_session.scalars(select(AiUsage))).all() == []
+
+
+# ---- semantic regression (D103): different phrasings, the same workflow ----------------------------
+
+from tests.test_ai_appointments import history  # noqa: E402,F401  (fixture: 2 completed, 1 cancelled, 1 upcoming)
+
+HISTORY_PHRASES = [
+    "Could you just give me the name and schedule of the doctors with whome I got any appointment in the past?",
+    "Which doctors I visited before?",
+    "whome I got appointment in past",
+    "Tell me my previous doctor schedules.",
+    "Doctors whom I booked earlier.",
+    "Who was my last doctor?",
+    "Show the doctor from my last appointment.",
+    "my appoinment history pls",
+]
+DISCOVERY_PHRASES = ["Find a cardiologist.", "Which doctors work in neurology?"]
+
+
+def _kinds(message):
+    return [card["kind"] for card in message["results"]]
+
+
+@pytest.mark.parametrize("text", HISTORY_PHRASES)
+async def test_live_history_phrasings_use_the_patients_own_appointments(client, clinic, history, text):
+    headers = await clinic.headers_for(clinic.patient_a.user_id)
+    response = await client.post(f"{BASE}/messages", json={"text": text}, headers=headers)
+    assert response.status_code == 200, response.text
+    message = response.json()["assistant_message"]
+    print(f"\n{text!r} -> {_kinds(message)} | {message['content'][:160]!r}")
+    kinds = _kinds(message)
+    # The patient's own history comes first; a doctor profile may follow it ("show the doctor from my last appointment").
+    assert kinds and kinds[0] == "appointment_history"
+
+
+@pytest.mark.parametrize("text", DISCOVERY_PHRASES)
+async def test_live_discovery_phrasings_use_the_directory(client, clinic, history, text):
+    headers = await clinic.headers_for(clinic.patient_a.user_id)
+    message = (await client.post(f"{BASE}/messages", json={"text": text}, headers=headers)).json()["assistant_message"]
+    print(f"\n{text!r} -> {_kinds(message)}")
+    assert "appointment_history" not in _kinds(message)

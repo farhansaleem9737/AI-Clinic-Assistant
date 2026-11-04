@@ -26,7 +26,7 @@ const ACTIONS = [
 const TODAY_STATUSES = [...ACTIVE_STATUSES, "completed", "no_show"];
 
 function ProfileCard() {
-  const { data: profile, loading, error } = useFetch(getMyDoctorProfile, []);
+  const { data: profile, loading, error } = useFetch(getMyDoctorProfile, [], { query: "profile/doctor" });
   return (
     <SectionCard title="My Profile" icon={UserRound} moreTo="/doctor/profile" moreLabel="View profile" loading={loading} error={error}>
       {profile && (
@@ -73,11 +73,13 @@ function Workload({ figures }) {
   const today = figures.today;
   const todays = useFetch(
     () => listAppointments({ status: TODAY_STATUSES, date_from: today.date, date_to: today.date, page_size: 20 }),
-    [today.date]
+    [today.date],
+    { query: "appointments/doctor-today" }
   );
   const upcoming = useFetch(
     () => listAppointments({ status: ACTIVE_STATUSES, date_from: addDays(today.date, 1), page_size: 5 }),
-    [today.date]
+    [today.date],
+    { query: "appointments/doctor-upcoming" }
   );
 
   return (

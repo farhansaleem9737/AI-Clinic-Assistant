@@ -57,9 +57,10 @@ function DoctorSummary({ doctor }) {
 /**
  * Step 2: a date and a free time for the chosen doctor, from real
  * availability. `notice` explains why the user is back here (e.g. the time
- * was just taken); `refreshKey` reloads the times.
+ * was just taken); `refreshKey` reloads the times. `draftKey` keeps the
+ * month and date being looked at while the user visits other pages.
  */
-export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKey, onBack, onContinue }) {
+export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKey, draftKey, onBack, onContinue }) {
   return (
     <>
       <h2 id="booking-step-title" className="sr-only">
@@ -68,7 +69,14 @@ export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKe
       <DoctorSummary doctor={doctor} />
       <Alert kind="warn">{notice}</Alert>
 
-      <DateTimePicker doctorId={doctor.id} selected={slot} onSelect={onSelect} refreshKey={refreshKey} layout="cards" />
+      <DateTimePicker
+        doctorId={doctor.id}
+        selected={slot}
+        onSelect={onSelect}
+        refreshKey={refreshKey}
+        draftKey={draftKey}
+        layout="cards"
+      />
 
       <div className="card booking-footer-card">
         <p className="sr-only" aria-live="polite">

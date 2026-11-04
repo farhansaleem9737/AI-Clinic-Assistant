@@ -222,18 +222,16 @@ async def test_the_tool_loop_is_bounded(client, auth_headers, provider, monkeypa
     headers = await auth_headers(RoleCode.patient)
     response = await client.post(f"{BASE}/messages", json={"text": "loop"}, headers=headers)
     assert len(provider.calls) == 3
-    assert "could not finish" in response.json()["assistant_message"]["content"]
+    assert "couldn't work out what you need" in response.json()["assistant_message"]["content"]  # INTENT_UNCERTAIN, not a blame
 
 
 async def test_patient_data_tools_follow_the_privacy_switch(client, clinic, provider, monkeypatch):
     headers = await clinic.headers_for(clinic.patient_a.user_id)  # a patient with a patient record
     provider.replies = [text_reply("ok")]
     await client.post(f"{BASE}/messages", json={"text": "x"}, headers=headers)
-    assert "get_my_appointments" not in provider.calls[0]["tools"]
-    monkeypatch.setattr(settings, "ai_phi_allowed", True)
-    provider.replies = [text_reply("ok")]
-    await client.post(f"{BASE}/messages", json={"text": "y"}, headers=headers)
-    assert "get_my_appointments" in provider.calls[1]["tools"]
+    # D103: the history tool is always offered; the privacy switch decides what the model sees (test_ai_appointments).
+    assert "get_my_appointments" in provider.calls[0]["tools"]
+    assert "find_patient" not in provider.calls[0]["tools"]
 
 
 async def test_staff_are_never_offered_self_booking(client, auth_headers, provider):
@@ -376,7 +374,7 @@ async def test_status_reports_capabilities_for_the_user(client, clinic, auth_hea
     everyone = {"find_doctors", "clinic_help", "dashboard_figures"}
     patient_headers = await clinic.headers_for(clinic.patient_a.user_id)
     patient = (await client.get(f"{BASE}/status", headers=patient_headers)).json()
-    assert patient["configured"] and set(patient["capabilities"]) == everyone | {"book_appointment"}
+    assert patient["configured"] and set(patient["capabilities"]) == everyone | {"book_appointment", "my_appointments", "medical_documents"}
     assert patient["model"] == "test-model" and "api_key" not in json.dumps(patient)
     # A patient login without a patient record cannot book or see appointments.
     bare = (await client.get(f"{BASE}/status", headers=await auth_headers(RoleCode.patient))).json()
@@ -384,7 +382,6 @@ async def test_status_reports_capabilities_for_the_user(client, clinic, auth_hea
     assert patient["documents_enabled"] is False
     monkeypatch.setattr(settings, "ai_phi_allowed", True)
     patient = (await client.get(f"{BASE}/status", headers=patient_headers)).json()
-    assert "my_appointments" in patient["capabilities"]
     assert "documents" not in patient["capabilities"]  # also needs AI_ENABLE_MEDICAL_DOCUMENT_UPLOAD
     monkeypatch.setattr(settings, "ai_enable_medical_document_upload", True)
     patient = (await client.get(f"{BASE}/status", headers=patient_headers)).json()
@@ -454,7 +451,8 @@ async def test_stream_sends_text_as_it_comes_and_saves_exactly_that(client, auth
 
 
 async def test_stream_errors_arrive_as_an_event_and_save_nothing(client, auth_headers, provider):
-    provider.replies = [AiUnavailableError("The AI service did not answer. Please try again.")]
+    # Twice: one transient failure is retried (D103); the second is reported.
+    provider.replies = [AiUnavailableError("The AI service did not answer. Please try again.")] * 2
     headers = await auth_headers(RoleCode.patient)
     events = parse_sse((await client.post(f"{BASE}/messages/stream", json={"text": "hi"}, headers=headers)).text)
     assert events == [("error", {"code": "AI_UNAVAILABLE", "message": "The AI service did not answer. Please try again."})]

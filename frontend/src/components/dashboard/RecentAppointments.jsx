@@ -12,7 +12,9 @@ import StatusBadge from "../StatusBadge";
 // The caller's latest appointments, newest first. The API already limits the
 // list to what this user may see.
 export default function RecentAppointments({ showPatient = false }) {
-  const { data, loading, error } = useFetch(() => listAppointments({ newest_first: true, page_size: 5 }), []);
+  const { data, loading, error } = useFetch(() => listAppointments({ newest_first: true, page_size: 5 }), [], {
+    query: "appointments/recent",
+  });
   const items = data?.items ?? [];
 
   return (

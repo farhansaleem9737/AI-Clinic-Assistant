@@ -19,26 +19,34 @@ async def role_codes_for(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
     return set(result.all())
 
 
-async def load_principal(db: AsyncSession, user: User) -> Principal:
-    """Resolve roles and permissions from the database: a role change or
-    deactivation takes effect on the very next request."""
-    rows = await db.execute(
-        select(Role.code, Permission.code)
-        .select_from(UserRole)
-        .join(Role, Role.id == UserRole.role_id)
+def _principal_query(user_filter):
+    """User, roles, permissions and doctor/patient ids in ONE query: each
+    database round trip costs ~120 ms against the hosted database, and this
+    runs on every authenticated request."""
+    doctor_id = select(Doctor.id).where(Doctor.user_id == User.id).scalar_subquery()
+    patient_id = select(Patient.id).where(Patient.user_id == User.id).scalar_subquery()
+    return (
+        select(User, Role.code, Permission.code, doctor_id, patient_id)
+        .outerjoin(UserRole, UserRole.user_id == User.id)
+        .outerjoin(Role, Role.id == UserRole.role_id)
         .outerjoin(RolePermission, RolePermission.role_id == Role.id)
         .outerjoin(Permission, Permission.id == RolePermission.permission_id)
-        .where(UserRole.user_id == user.id)
+        .where(user_filter)
     )
+
+
+def _principal(rows) -> Principal | None:
+    user, doctor_id, patient_id = None, None, None
     roles: set[str] = set()
     permissions: set[str] = set()
-    for role_code, permission_code in rows:
-        roles.add(role_code)
+    for row_user, role_code, permission_code, row_doctor_id, row_patient_id in rows:
+        user, doctor_id, patient_id = row_user, row_doctor_id, row_patient_id
+        if role_code is not None:
+            roles.add(role_code)
         if permission_code is not None:
             permissions.add(permission_code)
-
-    doctor_id = await db.scalar(select(Doctor.id).where(Doctor.user_id == user.id))
-    patient_id = await db.scalar(select(Patient.id).where(Patient.user_id == user.id))
+    if user is None:
+        return None
     return Principal(
         user=user,
         roles=frozenset(roles),
@@ -46,6 +54,17 @@ async def load_principal(db: AsyncSession, user: User) -> Principal:
         doctor_id=doctor_id,
         patient_id=patient_id,
     )
+
+
+async def load_principal(db: AsyncSession, user: User) -> Principal:
+    """Resolve roles and permissions from the database: a role change or
+    deactivation takes effect on the very next request."""
+    return _principal(await db.execute(_principal_query(User.id == user.id)))
+
+
+async def load_principal_by_id(db: AsyncSession, user_id: uuid.UUID) -> Principal | None:
+    """The signed-in caller, read fresh in a single query (None if no such user)."""
+    return _principal(await db.execute(_principal_query(User.id == user_id)))
 
 
 async def user_has_role(db: AsyncSession, user_id: uuid.UUID, role: RoleCode) -> bool:

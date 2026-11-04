@@ -110,12 +110,14 @@ async def test_summary_compares_same_tests_and_reports_unreadable_documents(clie
     assert result["documents_unreadable"] == 1 and "summary" in result  # approved: details go to the model
 
 
-async def test_document_text_is_fenced_data_when_sharing_is_approved(client, clinic, cast, record, provider, monkeypatch):
+async def test_only_validated_findings_reach_the_model_never_the_raw_file(client, clinic, cast, record, provider, monkeypatch):
     monkeypatch.setattr(settings, "ai_phi_allowed", True)
     provider.replies = [call("explain_medical_document", document_id=record["new"]), text_reply("ok")]
     await client.post(f"{BASE}/messages", json={"text": "Explain it"}, headers=cast.alice)
-    text = tool_results(provider.calls[1])["explain_medical_document"]["text"]
-    assert text.count("<<<END DOCUMENT>>>") == 1 and "‹‹‹END DOCUMENT›››" in text  # the file's imitation is neutralised
+    result = tool_results(provider.calls[1])["explain_medical_document"]
+    assert "text" not in result  # no raw file text (D102)
+    assert {m["test"] for m in result["findings"]["measurements"]} == {"Hemoglobin", "Platelets", "Vitamin D"}
+    assert "Ignore all previous rules" not in json.dumps(result)  # the file's injected instruction never reaches the model
 
 
 async def test_nobody_reaches_another_patients_documents(client, clinic, cast, record, provider):
@@ -162,3 +164,100 @@ async def test_unrelated_messages_read_no_documents(client, clinic, cast, record
     system = provider.calls[0]["system"]
     assert "ONLY when the user's current message asks" in system
     assert "Blood count" not in json.dumps([t.text for t in provider.calls[0]["turns"]])
+
+
+# ---- the four golden synthetic PDFs, end to end (D102) ------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+FIXTURES = Path(__file__).parent / "fixtures" / "medical"
+
+
+async def add_fixture(client, headers, patient, name, title, day):
+    files = {"file": (name, (FIXTURES / name).read_bytes(), "application/pdf")}
+    response = await upload(client, headers, patient, files=files, title=title, document_date=day)
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def ask(client, headers, provider, text, *calls, conversation_id=None):
+    provider.calls.clear()
+    provider.replies = [*calls, text_reply("Answer.")]
+    body = {"text": text, **({"conversation_id": conversation_id} if conversation_id else {})}
+    sent = (await client.post(f"{BASE}/messages", json=body, headers=headers)).json()
+    return sent, [tool_results(c) for c in provider.calls[1:]]
+
+
+async def test_golden_reports_answer_each_question_from_the_right_document(client, storage, clinic, cast, provider, monkeypatch):
+    # One long conversation: the per-user message limits are not what is tested here.
+    monkeypatch.setattr(settings, "ai_rate_limit_per_minute", 0)
+    monkeypatch.setattr(settings, "ai_daily_request_limit", 0)
+    diabetes = await add_fixture(client, cast.alice, clinic.patient_a, "clinical_case_type2_diabetes_sample.pdf", "Diabetes clinical case", "2026-10-30")
+    anemia = await add_fixture(client, cast.alice, clinic.patient_a, "sample_iron_deficiency_anemia_report.pdf", "Anemia report", "2026-10-30")
+    second = await add_fixture(client, cast.alice, clinic.patient_a, "sample_type2_diabetes_medical_report.pdf", "Diabetes report 2", "2026-10-29")
+    cbc = await add_fixture(client, cast.alice, clinic.patient_a, "mock_cbc_test_report.pdf", "Mock CBC", "2026-01-15")
+
+    # Most recent *upload* is the CBC, although its report date is the oldest.
+    sent, [listed] = await ask(client, cast.alice, provider, "What is my most recently uploaded report?", call("list_medical_documents"))
+    first = listed["list_medical_documents"]["documents"][0]
+    assert first["document_id"] == cbc and first["most_recent_upload"] is True
+    conversation = sent["conversation"]["id"]
+
+    # Free tier, synthetic switch off: nothing from the file reaches the model, but the card answers the question.
+    sent, [r] = await ask(client, cast.alice, provider, "Which disease is in my diabetes case?",
+                          call("explain_medical_document", document_id=diabetes, focus="conditions"), conversation_id=conversation)
+    seen = r["explain_medical_document"]
+    assert "findings" not in seen and "not shared with you" in seen["note"] and "diabetes" not in json.dumps(seen).lower()
+    [card] = sent["assistant_message"]["results"]
+    assert card["focus"] == "conditions" and card["document"]["document_id"] == diabetes
+    assert [c["name"] for c in card["conditions"]] == ["Type 2 diabetes mellitus", "Moderately increased albuminuria", "Dyslipidemia"]
+    assert card["conditions"][0]["about"] and card["conditions"][0]["page"] == 1
+
+    # Synthetic test documents may be explained by the model (development switch).
+    monkeypatch.setattr(settings, "ai_allow_synthetic_documents", True)
+    # Follow-up without naming the document: the conversation's active document is used.
+    sent, [r] = await ask(client, cast.alice, provider, "What symptoms does it describe?",
+                          call("explain_medical_document", focus="symptoms"), conversation_id=conversation)
+    seen = r["explain_medical_document"]
+    assert seen["document_id"] == diabetes and seen["focus"] == "symptoms"
+    assert [s["name"] for s in seen["findings"]["symptoms"]] == ["Increased thirst", "Frequent urination", "Fatigue", "Blurred vision"]
+    assert "active document" in provider.calls[0]["system"].lower() and diabetes in provider.calls[0]["system"]
+
+    # A different question gives a different answer: the full table, then the abnormal results.
+    sent, [r] = await ask(client, cast.alice, provider, "Give me its complete blood test table",
+                          call("explain_medical_document", focus="measurements"), conversation_id=conversation)
+    [card] = sent["assistant_message"]["results"]
+    assert card["focus"] == "measurements" and len(card["measurements"]) == 10
+    assert {m["test"]: m["value"] for m in card["measurements"]}["Urine albumin/creatinine ratio"] == "42"
+    sent, [r] = await ask(client, cast.alice, provider, "Explain every abnormal result",
+                          call("explain_medical_document", focus="abnormal"), conversation_id=conversation)
+    abnormal = [m["test"] for m in r["explain_medical_document"]["findings"]["measurements"] if m["out_of_range"]]
+    assert len(abnormal) == 9 and "Serum creatinine" not in abnormal
+
+    # The anemia report, then a follow-up about "it".
+    sent, [r] = await ask(client, cast.alice, provider, "Explain my anemia report",
+                          call("explain_medical_document", document_id=anemia, focus="summary"), conversation_id=conversation)
+    assert [c["name"] for c in r["explain_medical_document"]["findings"]["conditions"]] == ["Iron-deficiency anemia"]
+    assert len(r["explain_medical_document"]["findings"]["measurements"]) == 9
+    sent, [r] = await ask(client, cast.alice, provider, "And what does it say to do next?",
+                          call("explain_medical_document", focus="follow_up"), conversation_id=conversation)
+    assert r["explain_medical_document"]["document_id"] == anemia
+    assert any(s["kind"] == "follow_up" for s in r["explain_medical_document"]["findings"]["report_text"])
+
+    # The CBC: all 14 rows.
+    sent, [r] = await ask(client, cast.alice, provider, "Show my CBC", call("explain_medical_document", document_id=cbc, focus="measurements"),
+                          conversation_id=conversation)
+    assert len(sent["assistant_message"]["results"][0]["measurements"]) == 14
+
+    # Comparing the two diabetes reports: same tests side by side, by date.
+    sent, [r] = await ask(client, cast.alice, provider, "Compare my two diabetes reports",
+                          call("summarize_medical_documents", document_ids=[diabetes, second]), conversation_id=conversation)
+    [summary] = sent["assistant_message"]["results"]
+    series = {s["key"]: s for s in summary["series"]}
+    assert [p["value"] for p in series["creatinine"]["points"]] == ["0.94", "1.02"]  # "Creatinine" vs "Serum creatinine", oldest first
+    assert series["ldl"]["comparable"] and [p["value"] for p in series["ldl"]["points"]] == ["139", "142"]
+    assert "uacr" not in series  # measured in one report only
+
+    # Bob cannot reach any of them, active document or not.
+    _, [r] = await ask(client, cast.bob, provider, "Explain it", call("explain_medical_document", document_id=diabetes))
+    assert "not found" in r["explain_medical_document"]["error"].lower()

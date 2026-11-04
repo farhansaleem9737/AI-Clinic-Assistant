@@ -14,6 +14,7 @@ AI_PHI_ALLOWED; staff still see them on cards, which never leave the server
 except to the signed-in user who is entitled to them.
 """
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ from app.services.ai.provider import ToolSpec
 from app.services.doctor_service import DoctorFilters
 from app.services.pagination import PageParams
 
+logger = logging.getLogger(__name__)
+
 
 class _Args(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -57,10 +60,6 @@ class AvailabilityArgs(_Args):
     doctor_id: uuid.UUID
     date_from: date
     date_to: date | None = None
-
-
-class MyAppointmentsArgs(_Args):
-    scope: Literal["upcoming", "past", "all"] = "upcoming"
 
 
 class ProposeCancellationArgs(_Args):
@@ -114,6 +113,9 @@ class ToolOutcome:
     action: dict | None = None
     # Shown to the user as a result card (D100), e.g. {"kind": "doctors", "items": [...]}.
     card: dict | None = None
+    # A factual answer composed from the database, shown to the user as part of the
+    # assistant's reply and never sent to the model (D103).
+    reply: str | None = None
 
 
 Executor = Callable[[AsyncSession, Principal, BaseModel], Awaitable[ToolOutcome]]
@@ -124,12 +126,30 @@ class Tool:
     spec: ToolSpec
     args: type[BaseModel]
     run: Executor
-    # Medical-document tools (D101) also receive the file storage.
+    # Medical-document tools (D101) also receive the request's ToolContext (storage, active document).
     needs_storage: bool = False
 
 
 def _when(instant: datetime, tz: str) -> str:
     return instant.astimezone(ZoneInfo(tz)).strftime("%a %d %b %Y, %I:%M %p")
+
+
+def friendly(instant: datetime, tz: str) -> str:
+    """"Friday, November 6 at 3:00 PM PKT": exact backend time, in the clinic's time zone."""
+    local = instant.astimezone(ZoneInfo(tz))
+    return f"{local:%A, %B} {local.day} at {local:%I:%M %p}".replace(" at 0", " at ") + f" {local:%Z}"
+
+
+def confirmation_question(action: dict) -> str:
+    """The one-line question shown with Confirm / Cancel (D104): backend values only, no model call."""
+    doctor, when = action["doctor_name"], action["when_text"]
+    if action["type"] == "book_appointment":
+        if action.get("patient_name"):
+            return f"Book {action['patient_name']} with {doctor} on {when}?"
+        return f"Confirm your appointment with {doctor} on {when}?"
+    if action["type"] == "cancel_appointment":
+        return f"Cancel your appointment with {doctor} on {when}?"
+    return f"Move your appointment with {doctor} from {when} to {action['new_when_text']}?"
 
 
 def _expiry() -> str:
@@ -298,16 +318,6 @@ async def _availability(db: AsyncSession, principal: Principal, a: AvailabilityA
     )
 
 
-async def _my_appointments(db: AsyncSession, principal: Principal, a: MyAppointmentsArgs) -> ToolOutcome:
-    filters = appointment_service.AppointmentFilters(
-        patient_id=principal.patient_id, scope=appointment_service.AppointmentScope(a.scope), newest_first=a.scope == "past"
-    )
-    views, total = await appointment_service.list_appointments(db, principal, PageParams(page=1, page_size=10), filters)
-    items = [_appointment_item(v, with_patient=False) for v in views]
-    card = {"kind": "appointments", "total": total, "items": items} if items else None
-    return ToolOutcome({"total": total, "appointments": items}, card=card)
-
-
 async def _propose_booking(db: AsyncSession, principal: Principal, a: ProposeBookingArgs) -> ToolOutcome:
     """Checks the slot is really free now; books nothing."""
     patient = None
@@ -329,6 +339,7 @@ async def _propose_booking(db: AsyncSession, principal: Principal, a: ProposeBoo
         "specialization": doctor.doctor.specialization,
         "starts_at": slot.starts_at.isoformat(),
         "local_time": _when(slot.starts_at, tz),
+        "when_text": friendly(slot.starts_at, tz),
         "timezone": tz,
         "consultation_fee": str(doctor.doctor.consultation_fee) if doctor.doctor.consultation_fee is not None else None,
         "reason": a.reason,
@@ -337,8 +348,7 @@ async def _propose_booking(db: AsyncSession, principal: Principal, a: ProposeBoo
     if patient is not None:
         action.update(patient_id=str(patient.id), patient_name=f"{patient.first_name} {patient.last_name}", patient_mrn=patient.mrn)
     return ToolOutcome(
-        {"proposed": True, "note": "Shown to the user with Confirm and Cancel. It is NOT booked until they confirm."},
-        action=action,
+        {"proposed": True, "note": "The confirmation question with Confirm / Cancel buttons is already shown to the user. Do not write anything else: no summary, no instructions."}, action=action, reply=confirmation_question(action)
     )
 
 
@@ -348,6 +358,7 @@ def _appointment_summary(view) -> dict:
         "doctor_name": " ".join(filter(None, [view.doctor_title, view.doctor_name])),
         "department": view.department_name,
         "local_time": _when(view.appointment.starts_at, view.timezone),
+        "when_text": friendly(view.appointment.starts_at, view.timezone),
         "timezone": view.timezone,
     }
 
@@ -361,7 +372,7 @@ async def _propose_cancellation(db: AsyncSession, principal: Principal, a: Propo
     if "cancelled" not in view.allowed_transitions:
         return ToolOutcome({"error": "This appointment can no longer be cancelled here; contact the clinic."})
     action = {"type": "cancel_appointment", "status": "pending", **_appointment_summary(view), "expires_at": _expiry()}
-    return ToolOutcome({"proposed": True, "note": "Shown with Confirm and Cancel. Nothing changes until the user confirms."}, action=action)
+    return ToolOutcome({"proposed": True, "note": "The confirmation question with Confirm / Cancel buttons is already shown to the user. Do not write anything else: no summary, no instructions."}, action=action, reply=confirmation_question(action))
 
 
 async def _propose_reschedule(db: AsyncSession, principal: Principal, a: ProposeRescheduleArgs) -> ToolOutcome:
@@ -381,9 +392,10 @@ async def _propose_reschedule(db: AsyncSession, principal: Principal, a: Propose
         **_appointment_summary(view),
         "new_starts_at": slot.starts_at.isoformat(),
         "new_local_time": _when(slot.starts_at, view.timezone),
+        "new_when_text": friendly(slot.starts_at, view.timezone),
         "expires_at": _expiry(),
     }
-    return ToolOutcome({"proposed": True, "note": "Shown with Confirm and Cancel. Nothing changes until the user confirms."}, action=action)
+    return ToolOutcome({"proposed": True, "note": "The confirmation question with Confirm / Cancel buttons is already shown to the user. Do not write anything else: no summary, no instructions."}, action=action, reply=confirmation_question(action))
 
 
 def _spec(name: str, description: str, args: type[BaseModel]) -> ToolSpec:
@@ -407,7 +419,10 @@ def available_tools(principal: Principal) -> dict[str, Tool]:
     """Only what this user may do, and only patient data when allowed (AI_PHI_ALLOWED)."""
     tools = {
         "search_doctors": Tool(
-            _spec("search_doctors", "Search the clinic's listed doctors by words, department, specialization or minimum years of experience.", SearchDoctorsArgs),
+            _spec("search_doctors",
+                  "Search the PUBLIC directory of the clinic's doctors (by name words, department, specialization, experience) to find "
+                  "a new doctor. NOT for the user's own appointments or the doctors they have seen or booked: use get_my_appointments.",
+                  SearchDoctorsArgs),
             SearchDoctorsArgs,
             _search_doctors,
         ),
@@ -423,7 +438,9 @@ def available_tools(principal: Principal) -> dict[str, Tool]:
             _clinic_help,
         ),
         "get_dashboard_figures": Tool(
-            _spec("get_dashboard_figures", "Counts from the user's dashboard (appointments today, upcoming, totals) that their role may see.", _Args),
+            _spec("get_dashboard_figures",
+                  "Counts only (appointments today, upcoming, totals) from the user's dashboard. For the appointments themselves "
+                  "(which doctors, dates, statuses) use get_my_appointments (patients) or list_appointments (staff).", _Args),
             _Args,
             _dashboard_figures,
         ),
@@ -433,11 +450,22 @@ def available_tools(principal: Principal) -> dict[str, Tool]:
             _availability,
         ),
     }
-    if settings.ai_phi_allowed and principal.patient_id and principal.has(Perm.appointment_read_own):
+    if principal.patient_id and principal.has(Perm.appointment_read_own):
+        # D103: always offered; appointment_tools keeps the details from the model unless AI_PHI_ALLOWED.
+        from app.services.ai import appointment_tools
+
         tools["get_my_appointments"] = Tool(
-            _spec("get_my_appointments", "The signed-in patient's own appointments, with ids and whether each can be cancelled or rescheduled.", MyAppointmentsArgs),
-            MyAppointmentsArgs,
-            _my_appointments,
+            _spec(
+                "get_my_appointments",
+                "The signed-in patient's OWN appointment history and bookings: which doctors they saw or booked, when, and the status "
+                "(completed, cancelled, missed, upcoming). Use for 'my appointments', 'doctors I visited / had appointments with', "
+                "'my last appointment', 'who treated me', 'my previous doctors', also when misspelled ('whome I got appointment'). "
+                "The answer is shown to the user directly.",
+                appointment_tools.MyAppointmentsArgs,
+            ),
+            appointment_tools.MyAppointmentsArgs,
+            appointment_tools.get_my_appointments,
+            needs_storage=True,
         )
         if principal.has(Perm.appointment_cancel_own):
             tools["propose_cancellation"] = Tool(
@@ -495,16 +523,28 @@ def available_tools(principal: Principal) -> dict[str, Tool]:
 
 
 async def run_tool(
-    db: AsyncSession, principal: Principal, tools: dict[str, Tool], name: str, arguments: dict, storage=None
+    db: AsyncSession, principal: Principal, tools: dict[str, Tool], name: str, arguments: dict, context=None
 ) -> ToolOutcome:
     tool = tools.get(name)
     if tool is None:
-        return ToolOutcome({"error": f"Tool {name!r} is not available."})
+        return ToolOutcome({"error": f"Tool {name!r} is not available.", "error_code": "TOOL_UNAVAILABLE"})
     try:
         args = tool.args.model_validate(arguments or {})
     except ValidationError as exc:
-        return ToolOutcome({"error": "Invalid arguments", "details": [e["msg"] for e in exc.errors()[:5]]})
-    if tool.needs_storage:
-        return await tool.run(db, principal, args, storage)
-    return await tool.run(db, principal, args)
+        return ToolOutcome({"error": "Invalid arguments", "error_code": "INVALID_ARGUMENTS", "details": [e["msg"] for e in exc.errors()[:5]]})
+    try:
+        # A savepoint: a failing tool undoes only its own work, never the conversation being saved.
+        async with db.begin_nested():
+            if tool.needs_storage:
+                from app.services.ai.medical_tools import ToolContext
+
+                return await tool.run(db, principal, args, context or ToolContext())
+            return await tool.run(db, principal, args)
+    except DomainError as exc:
+        code = "TOOL_PERMISSION_DENIED" if exc.code in ("PERMISSION_DENIED", "NOT_FOUND") else "TOOL_EXECUTION_FAILED"
+        return ToolOutcome({"error": exc.message, "error_code": code})
+    except Exception:
+        # Never a raw exception to the model or the user; logged without arguments (they may hold patient data).
+        logger.exception("ai_tool_failed", extra={"tool": name})
+        return ToolOutcome({"error": "This lookup failed on the server.", "error_code": "TOOL_EXECUTION_FAILED"})
 

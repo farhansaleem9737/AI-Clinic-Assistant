@@ -13,6 +13,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, distinct, func, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
@@ -87,18 +88,20 @@ async def _patient_section(db: AsyncSession, principal: Principal, now: datetime
         return PatientSummary(
             has_profile=False, profile_active=False, upcoming_appointments=0, total_appointments=0, my_doctors=0
         )
-    upcoming, total, doctors = (
+    # One round trip: the counts and the record's status together.
+    profile_active = select(Patient.is_active).where(Patient.id == principal.patient_id).scalar_subquery()
+    upcoming, total, doctors, profile_active = (
         await db.execute(
             select(
                 _count(_upcoming(now)),
                 _count(),
                 func.count(distinct(Appointment.doctor_id)).filter(Appointment.status.in_(ACTIVE_STATUSES)),
+                profile_active,
             )
             .select_from(Appointment)
             .where(access.own_appointments(principal))
         )
     ).one()
-    profile_active = await db.scalar(select(Patient.is_active).where(Patient.id == principal.patient_id))
     return PatientSummary(
         has_profile=True,
         profile_active=bool(profile_active),
@@ -146,27 +149,30 @@ async def _front_desk_section(db: AsyncSession, principal: Principal, now: datet
 
 
 async def _overview_section(db: AsyncSession, principal: Principal) -> OverviewSummary | None:
-    overview = OverviewSummary()
+    """Every total the caller may see, in ONE query (each a scalar subquery):
+    a round trip to the hosted database costs ~120 ms."""
+    def total(model, condition=None):
+        query = select(func.count()).select_from(model)
+        return (query.where(condition) if condition is not None else query).scalar_subquery()
+
+    wanted: dict[str, object] = {}
     if principal.has(Perm.user_read):
-        overview.users_total, overview.users_active = (
-            await db.execute(select(_count(), _count(User.is_active.is_(True))).select_from(User))
-        ).one()
+        wanted["users_total"] = total(User)
+        wanted["users_active"] = total(User, User.is_active.is_(True))
     if principal.has(Perm.doctor_read):
-        overview.doctors_active = await db.scalar(
-            select(func.count()).select_from(Doctor).where(Doctor.is_active.is_(True))
-        )
+        wanted["doctors_active"] = total(Doctor, Doctor.is_active.is_(True))
     if principal.has(Perm.department_manage):
-        overview.departments_active = await db.scalar(
-            select(func.count()).select_from(Department).where(Department.is_active.is_(True))
-        )
+        wanted["departments_active"] = total(Department, Department.is_active.is_(True))
     if principal.has(Perm.patient_read_any):
-        overview.patients_total, overview.patients_active = (
-            await db.execute(select(_count(), _count(Patient.is_active.is_(True))).select_from(Patient))
-        ).one()
+        wanted["patients_total"] = total(Patient)
+        wanted["patients_active"] = total(Patient, Patient.is_active.is_(True))
     if principal.has(Perm.appointment_read_any):
-        overview.appointments_total = await db.scalar(select(func.count()).select_from(Appointment))
+        wanted["appointments_total"] = total(Appointment)
     # Nothing the caller may see: no section at all.
-    return overview if overview.model_dump(exclude_none=True) else None
+    if not wanted:
+        return None
+    row = (await db.execute(select(*(value.label(key) for key, value in wanted.items())))).one()
+    return OverviewSummary(**row._mapping)
 
 
 async def get_summary(db: AsyncSession, principal: Principal) -> DashboardSummary:
@@ -211,36 +217,40 @@ async def admin_dashboard(db: AsyncSession, day=None) -> AdminDashboard:
 
     Totals are cumulative: every record created up to the end of `day`,
     whatever its current status (a deactivated department or a cancelled
-    appointment still existed). One COUNT query per table; nothing loaded."""
+    appointment still existed). Two queries: every table's counts as scalar
+    subqueries of one SELECT, then the newest users with their role codes."""
     tz = ZoneInfo(settings.clinic_timezone)
     day = day or clock.utcnow().astimezone(tz).date()
     cutoff = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
     month_start = datetime.combine(day.replace(day=1), time.min, tzinfo=tz)
 
+    counts = []
+    for _, model in _KPI_TABLES:
+        for since in (cutoff, month_start):
+            counts.append(select(func.count()).select_from(model).where(model.created_at < since).scalar_subquery())
+    row = (await db.execute(select(*counts))).one()
     kpis = []
-    for key, model in _KPI_TABLES:
-        total, previous = (
-            await db.execute(
-                select(_count(model.created_at < cutoff), _count(model.created_at < month_start)).select_from(model)
-            )
-        ).one()
+    for i, (key, _) in enumerate(_KPI_TABLES):
+        total, previous = row[2 * i], row[2 * i + 1]
         percent, trend = growth(total, previous)
         kpis.append(AdminKpi(key=key, total=total, previous=previous, change_percent=percent, trend=trend))
 
-    users = (
-        await db.scalars(
-            select(User).where(User.created_at < cutoff).order_by(User.created_at.desc(), User.id.desc()).limit(RECENT_USERS)
+    role_codes = (
+        select(func.array_agg(aggregate_order_by(Role.code, Role.code)))
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == User.id)
+        .scalar_subquery()
+    )
+    rows = (
+        await db.execute(
+            select(User, role_codes)
+            .where(User.created_at < cutoff)
+            .order_by(User.created_at.desc(), User.id.desc())
+            .limit(RECENT_USERS)
         )
     ).all()
-    roles: dict = {u.id: [] for u in users}
-    if users:
-        for user_id, code in await db.execute(
-            select(UserRole.user_id, Role.code)
-            .join(Role, Role.id == UserRole.role_id)
-            .where(UserRole.user_id.in_(roles))
-            .order_by(Role.code)
-        ):
-            roles[user_id].append(code)
+    users = [u for u, _ in rows]
+    roles = {u.id: list(codes or []) for u, codes in rows}
     return AdminDashboard(
         date=day,
         timezone=tz.key,

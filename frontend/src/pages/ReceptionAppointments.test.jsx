@@ -134,7 +134,9 @@ describe("staff Appointments", () => {
 
     // Clear Filters resets every filter (and the sort) in one go.
     await user.click(screen.getByRole("button", { name: "Clear Filters" }));
-    await waitFor(() => expect(lastList()).toEqual({ page: 1, page_size: 10 }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    await waitFor(() => expect(screen.getByLabelText("Doctor")).toHaveValue(""));
+    expect(screen.getByLabelText("Department")).toHaveValue("");
     expect(screen.getByRole("button", { name: "Clear Filters" })).toBeDisabled();
   });
 

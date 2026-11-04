@@ -460,7 +460,7 @@ async def availability_status(
     ``settings.availability_status_days`` days.
 
     Uses the same templates, exceptions and bookings as ``available_slots`` (so
-    the badge and the bookable slots cannot disagree), but in four queries for
+    the badge and the bookable slots cannot disagree), but in three queries for
     the whole list instead of several per doctor. Judged from a patient's
     point of view: the booking lead time applies.
     """
@@ -470,35 +470,37 @@ async def availability_status(
     if not doctor_ids:
         return result
 
-    timezones = dict(
-        (
-            await db.execute(
-                select(Doctor.id, Department.timezone)
-                .join(Department, Department.id == Doctor.department_id)
-                .where(Doctor.id.in_(doctor_ids), Doctor.is_active.is_(True), Department.is_active.is_(True))
-            )
-        ).all()
-    )
+    # Each schedule row carries its doctor's department timezone, so no separate
+    # lookup: a doctor with neither weekly hours nor exceptions has no slots and
+    # keeps the default "unavailable".
+    def bookable(model):
+        return (
+            select(model, Department.timezone)
+            .join(Doctor, Doctor.id == model.doctor_id)
+            .join(Department, Department.id == Doctor.department_id)
+            .where(Doctor.id.in_(doctor_ids), Doctor.is_active.is_(True), Department.is_active.is_(True))
+        )
+
+    timezones: dict[uuid.UUID, str] = {}
     earliest = now + timedelta(minutes=settings.booking_min_lead_minutes)
     horizon = now + timedelta(days=settings.availability_status_days)
     # One day either side covers every department timezone.
     first_day, last_day = (now - timedelta(days=1)).date(), (horizon + timedelta(days=1)).date()
 
     templates: dict[uuid.UUID, list[ScheduleTemplate]] = defaultdict(list)
-    for template in await db.scalars(
-        select(ScheduleTemplate).where(
-            ScheduleTemplate.doctor_id.in_(timezones),
+    for template, tz_name in await db.execute(
+        bookable(ScheduleTemplate).where(
             ScheduleTemplate.is_active.is_(True),
             ScheduleTemplate.valid_from <= last_day,
             or_(ScheduleTemplate.valid_until.is_(None), ScheduleTemplate.valid_until >= first_day),
         )
     ):
         templates[template.doctor_id].append(template)
+        timezones[template.doctor_id] = tz_name
 
     exceptions: dict[uuid.UUID, list[ScheduleException]] = defaultdict(list)
-    for exception in await db.scalars(
-        select(ScheduleException).where(
-            ScheduleException.doctor_id.in_(timezones),
+    for exception, tz_name in await db.execute(
+        bookable(ScheduleException).where(
             # The whole days, not just [now, horizon]: a custom-hours day must
             # replace that day's weekly hours even where its own hours have
             # already ended or start after the horizon.
@@ -507,8 +509,11 @@ async def availability_status(
         )
     ):
         exceptions[exception.doctor_id].append(exception)
+        timezones[exception.doctor_id] = tz_name
 
     booked: dict[uuid.UUID, list[tuple[datetime, datetime]]] = defaultdict(list)
+    if not timezones:
+        return result
     for doctor_id, starts_at, ends_at in await db.execute(
         select(Appointment.doctor_id, Appointment.starts_at, Appointment.ends_at).where(
             Appointment.doctor_id.in_(timezones),

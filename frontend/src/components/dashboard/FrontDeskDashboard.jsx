@@ -52,7 +52,8 @@ export default function FrontDeskDashboard({ summary }) {
   // People still to be seen today, in time order: the check-in worklist.
   const worklist = useFetch(
     () => listAppointments({ status: ACTIVE_STATUSES, date_from: today.date, date_to: today.date, page_size: 20 }),
-    [today.date]
+    [today.date],
+    { query: "appointments/front-desk-today" }
   );
 
   return (

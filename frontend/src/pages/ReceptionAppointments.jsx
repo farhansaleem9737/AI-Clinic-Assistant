@@ -107,9 +107,11 @@ export default function ReceptionAppointments() {
     setParams(next, { replace: true });
   };
 
-  const doctors = useFetch(() => listDoctors({ page_size: 100, sort: "name_asc" }), []);
+  const doctors = useFetch(() => listDoctors({ page_size: 100, sort: "name_asc" }), [], { query: "doctors/staff-options" });
   // Administrators also filter by inactive departments (past appointments keep theirs).
-  const departments = useFetch(() => (can("department:manage") ? listDepartments({ page_size: 100 }) : getPublicDepartments()), []);
+  const departments = useFetch(() => (can("department:manage") ? listDepartments({ page_size: 100 }) : getPublicDepartments()), [], {
+    query: "departments/appointment-filter",
+  });
 
   // Everything but the tab: what the counts and every tab share.
   const filters = {};
@@ -123,7 +125,8 @@ export default function ReceptionAppointments() {
   if (to) dated.date_to = to;
   const counts = useFetch(
     () => countAppointments({ ...filters, ...dated, include_today: true }),
-    [JSON.stringify(filters), from, to, attempt]
+    [JSON.stringify(filters), from, to],
+    { query: "appointments/counts", refresh: attempt }
   );
   const today = counts.data?.today_date;
 
@@ -137,7 +140,11 @@ export default function ReceptionAppointments() {
     if (!sort) listParams.newest_first = true;
   }
   const waitingForToday = tab === "today" && !today;
-  const list = useFetch(() => listAppointments(listParams), [JSON.stringify(listParams), attempt], { enabled: !waitingForToday });
+  const list = useFetch(() => listAppointments(listParams), [JSON.stringify(listParams)], {
+    query: "appointments/list",
+    refresh: attempt,
+    enabled: !waitingForToday,
+  });
 
   const onSearch = (value) => {
     setTyped(value);

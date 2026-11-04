@@ -38,7 +38,9 @@ function Panel({ icon: Icon, title, children, action }) {
 export default function UpcomingAppointments({ enabled, onChanged }) {
   const [attempt, setAttempt] = useState(0);
   const [cancelling, setCancelling] = useState(null); // { appointment, note, busy, error }
-  const { data, loading, error } = useFetch(() => listAppointments({ scope: "upcoming", page_size: PREVIEW_SIZE }), [attempt], {
+  const { data, loading, error } = useFetch(() => listAppointments({ scope: "upcoming", page_size: PREVIEW_SIZE }), [], {
+    query: "appointments/upcoming",
+    refresh: attempt,
     enabled,
   });
   const items = [...(data?.items ?? [])].sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));

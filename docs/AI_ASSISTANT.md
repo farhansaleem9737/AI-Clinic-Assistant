@@ -122,6 +122,29 @@ cannot interpret them; the explanation shown is the server's own fixed, general 
 With an approved provider (`AI_PHI_ALLOWED=true`), the model also receives the fenced
 text and parsed values and writes the explanation.
 
+### Document reader v2 (D102)
+
+- Tables are read by their header columns (test, result, unit, reference, flag) from the PDF's layout text, so values,
+  units, references and flags stay together. Reference text ("Desirable <200 mg/dL") is never mistaken for a test.
+- Each report yields typed findings: measurements (with source line and page), conditions stated in the report's
+  interpretation (negated mentions and family history left out), symptoms, and the interpretation / follow-up text.
+- A file is extracted once per content hash and extraction version; changing the reader bumps the version, so older
+  results are never reused. Report cards saved in older conversations are marked as read by an earlier version.
+- Questions are answered by focus: the disease, symptoms, the full table, each abnormal value, the follow-up, or a summary.
+  "It" / "that report" means the conversation's active document (the last report shown); access is re-checked every time.
+- `AI_ALLOW_SYNTHETIC_DOCUMENTS=true` (development only) lets the model explain documents that declare themselves
+  synthetic/fictional; real reports still stay on the server unless `AI_PHI_ALLOWED=true`.
+- Golden fixtures: `backend/tests/fixtures/medical/` (four synthetic PDFs), checked by `tests/test_medical_extraction.py`.
+
+### Appointment history (D103)
+
+Patients can ask about their own appointments in their own words ("which doctors did I visit", "whome I got appointment
+in past", "who was my last doctor"): `get_my_appointments` returns only their own records (past, completed visits,
+upcoming, cancelled, latest/earliest, by doctor or dates) with doctor, specialty, department, date, time and status.
+Cancelled and missed appointments are labelled as not having taken place. Follow-ups ("which one was the latest?",
+"show that doctor's profile") use the appointments just shown. With `AI_PHI_ALLOWED=false` the model sees only ids and
+statuses; the answer itself is written by the server from the database.
+
 ## 4. Privacy and safety
 
 - **Free tiers and patient data.** Google may use free-tier content to improve its

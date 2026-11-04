@@ -36,9 +36,12 @@ export default function Doctors() {
   }, [location.hash, location.key]);
 
   const apiParams = directoryApiParams(state);
-  const { data, loading, error } = useFetch(() => getPublicDoctors(apiParams), [JSON.stringify(apiParams), attempt]);
-  const departments = useFetch(getPublicDepartments, []);
-  const specializations = useFetch(getPublicSpecializations, []);
+  const { data, loading, error } = useFetch(() => getPublicDoctors(apiParams), [JSON.stringify(apiParams)], {
+    query: "doctors/directory",
+    refresh: attempt,
+  });
+  const departments = useFetch(getPublicDepartments, [], { query: "departments/public" });
+  const specializations = useFetch(getPublicSpecializations, [], { query: "specializations/public" });
 
   const update = (changes) => setSearchParams(directorySearchParams({ ...state, ...changes }));
   const doctors = data?.items ?? [];

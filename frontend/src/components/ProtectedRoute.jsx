@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
+import { canOpen } from "../routes/pages";
 
 /**
  * Route guard. `permission` (optional) hides pages the user can't use.
@@ -14,7 +15,8 @@ export default function ProtectedRoute({ children, permission, anyOf, allOf }) {
   // e.g. to the booking page for the doctor that was chosen.
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
 
-  const allowed = permission ? can(permission) : anyOf ? anyOf.some(can) : allOf ? allOf.every(can) : true;
+  // The same rule decides which pages a link may preload (routes/pages.js).
+  const allowed = canOpen({ permission, anyOf, allOf }, can);
   if (!allowed) return <Navigate to="/dashboard" replace />;
 
   return children;

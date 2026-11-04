@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { getErrorMessage } from "../../services/api";
 import {
   deleteAssistantDocument,
@@ -9,8 +9,15 @@ import {
   uploadAssistantDocuments,
 } from "../../services/aiService";
 import { checkFiles } from "../../utils/assistant";
+import { lazyPage } from "../../routes/lazyPage";
+import ErrorBoundary from "../ErrorBoundary";
 import AssistantLauncher from "./AssistantLauncher";
-import AssistantPanel from "./AssistantPanel";
+
+// The panel (chat, Markdown, result cards) is a separate download, started when the
+// launcher is first pointed at, focused or pressed (no AI request), or on opening.
+const loadPanel = () => import("./AssistantPanel");
+const AssistantPanel = lazyPage(loadPanel);
+const preloadPanel = () => loadPanel().catch(() => {}); // opening retries and reports a failure
 
 let attachmentSeq = 0;
 const STREAM_ID = "streaming-reply";
@@ -160,6 +167,17 @@ export default function ClinicAssistant() {
     }
   };
 
+  // Stable callbacks, so finished messages are not re-rendered on every streamed chunk.
+  const updateMessage = useCallback(
+    (message) => setMessages((list) => list.map((m) => (m.id === message.id ? message : m))),
+    []
+  );
+  const sendRef = useRef(null);
+  useEffect(() => {
+    sendRef.current = send;
+  });
+  const ask = useCallback((text) => sendRef.current?.(text), []);
+
   const assistant = {
     status,
     statusError,
@@ -192,15 +210,23 @@ export default function ClinicAssistant() {
         setError(getErrorMessage(err, "Could not open the conversation"));
       }
     },
-    updateMessage: (message) => setMessages((list) => list.map((m) => (m.id === message.id ? message : m))),
+    updateMessage,
+    ask,
     usage,
   };
 
   return (
     <>
       {/* Stays mounted (hidden while open) so its position and focus survive. */}
-      <AssistantLauncher open={open} onOpen={() => setOpen(true)} buttonRef={launcherRef} />
-      {open && <AssistantPanel assistant={assistant} onClose={close} />}
+      <AssistantLauncher open={open} onOpen={() => setOpen(true)} onIntent={preloadPanel} buttonRef={launcherRef} />
+      {open && (
+        // A panel that cannot load or render never takes the page down with it.
+        <ErrorBoundary title="The assistant could not be opened">
+          <Suspense fallback={null}>
+            <AssistantPanel assistant={assistant} onClose={close} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
     </>
   );
 }

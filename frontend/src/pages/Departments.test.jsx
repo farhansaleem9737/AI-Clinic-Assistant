@@ -100,9 +100,11 @@ describe("Patient Departments", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search departments" }), { target: { value: "skin" } });
     await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 12, q: "skin" }));
     expect(await screen.findByText("No departments match “skin”.")).toBeInTheDocument();
-    getPublicDepartments.mockResolvedValue(page([CARDIO]));
+    const calls = getPublicDepartments.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "Clear search" }));
-    await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 12 }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await cardOf("Cardiology")).toBeInTheDocument();
+    expect(getPublicDepartments).toHaveBeenCalledTimes(calls);
     expect(screen.getByRole("searchbox", { name: "Search departments" })).toHaveValue("");
   });
 

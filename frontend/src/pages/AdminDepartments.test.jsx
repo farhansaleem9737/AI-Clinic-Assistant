@@ -105,7 +105,7 @@ describe("Departments list", () => {
   it("a failed totals request shows dashes, not made-up numbers", async () => {
     getDepartmentSummary.mockRejectedValue(new Error("down"));
     renderPage();
-    expect(await screen.findByLabelText("Total Departments: unavailable")).toHaveTextContent("—");
+    await waitFor(() => expect(screen.getByLabelText("Total Departments: unavailable")).toHaveTextContent("—"));
   });
 
   it("searches after a pause and filters by status, back to page 1", async () => {
@@ -128,7 +128,9 @@ describe("Departments list", () => {
     await u.selectOptions(screen.getByLabelText("Status"), "active");
     expect(await screen.findByText("No departments match your search or filters.")).toBeInTheDocument();
     await u.click(screen.getByRole("button", { name: "Clear search and filters" }));
-    await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 12, sort: "name" }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await screen.findByText(/No departments yet/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveValue("");
   });
 
   it("explains a loading failure and retries", async () => {

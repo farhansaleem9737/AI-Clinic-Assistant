@@ -1,5 +1,6 @@
 import { Clock, Pencil, Plus, Save, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useDraft } from "../../hooks/useDraft";
 import { formatWallTime, WEEKDAYS } from "../../utils/datetime";
 import Alert from "../Alert";
 import { draftFrom, intervalsError, payloadFrom } from "./weekly";
@@ -109,10 +110,12 @@ function DayEditor({ name, intervals, error, onChange, onDone, onCancel }) {
 /**
  * The regular week as a draft: switch days on and off and edit their hours,
  * then Save Changes sends the whole week at once. Nothing is saved before.
+ * With `draftKey`, unsaved changes survive visiting other pages, but only
+ * onto the same saved week they were made to.
  */
-export default function WeeklyHoursCard({ schedule, onSave }) {
+export default function WeeklyHoursCard({ schedule, onSave, draftKey = null }) {
   const [saved, setSaved] = useState(() => draftFrom(schedule));
-  const [days, setDays] = useState(saved);
+  const [days, setDays] = useDraft(draftKey && `${draftKey}:${JSON.stringify(saved)}`, saved);
   const [editing, setEditing] = useState(null); // { weekday, intervals, error }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

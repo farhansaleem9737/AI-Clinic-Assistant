@@ -113,8 +113,8 @@ export default function AppointmentDetail() {
   const { user, can } = useAuth();
 
   const [attempt, setAttempt] = useState(0);
-  const appointmentFetch = useFetch(() => getAppointment(id), [id, attempt]);
-  const history = useFetch(() => getAppointmentHistory(id), [id, attempt]);
+  const appointmentFetch = useFetch(() => getAppointment(id), [id], { query: "appointments/detail", refresh: attempt });
+  const history = useFetch(() => getAppointmentHistory(id), [id], { query: "appointments/history", refresh: attempt });
   const refresh = () => setAttempt((n) => n + 1);
 
   // A notice belongs to the history entry it was shown on, e.g. "booked"

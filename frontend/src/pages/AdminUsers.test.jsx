@@ -116,7 +116,10 @@ describe("Users list", () => {
     // Administrator is listed as a role to filter by.
     expect(within(screen.getByLabelText("Role")).getByRole("option", { name: "Administrator" })).toBeInTheDocument();
     await u.click(screen.getByRole("button", { name: "Clear filters" }));
-    await waitFor(() => expect(lastParams()).toEqual({ page: 1, page_size: 10, sort: "name" }));
+    // The unfiltered list is already loaded: it comes back from the cache (D107).
+    expect(await rowOf("Ahmed Raza")).toBeInTheDocument();
+    expect(screen.getByLabelText("Role")).toHaveValue("");
+    expect(screen.getByLabelText("Status")).toHaveValue("");
   });
 
   it("sorts on the server, toggling direction", async () => {

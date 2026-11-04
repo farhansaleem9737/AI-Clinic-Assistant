@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # Logs every SQL statement *with its parameters*. Keep off anywhere real
     # patient data exists.
     sql_echo: bool = False
+    # Connection pool (see app/db/database.py). A pooled connection idle for
+    # longer than db_ping_after_idle_seconds is checked (one round trip) before
+    # reuse; connections older than db_pool_recycle_seconds are replaced. Keep
+    # the recycle below Neon's 5-minute auto-suspend.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 240
+    db_ping_after_idle_seconds: float = 30
 
     secret_key: str
     algorithm: str = "HS256"
@@ -199,6 +207,10 @@ class Settings(BaseSettings):
     # tools and document analysis are switched off (doctor search and booking
     # proposals still work). True only for synthetic test data or an approved provider.
     ai_phi_allowed: bool = False
+    # Development (D102): documents whose own text declares them synthetic /
+    # fictional test data may be explained by the AI provider even when
+    # AI_PHI_ALLOWED is false. Real reports stay on the server. Keep false in production.
+    ai_allow_synthetic_documents: bool = False
     # Uploading medical documents to the assistant. Needs AI_PHI_ALLOWED too;
     # off by default until privacy and clinical safeguards are approved.
     ai_enable_medical_document_upload: bool = False

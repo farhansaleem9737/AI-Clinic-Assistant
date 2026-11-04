@@ -21,7 +21,9 @@ export default function AppointmentCalendar({ title = "My Schedule" }) {
   const today = isoDateIn(new Date());
   const [month, setMonth] = useState(today.slice(0, 7));
   const { first, last } = monthBounds(month);
-  const { data, error } = useFetch(() => listAppointments({ date_from: first, date_to: last, page_size: 100 }), [month]);
+  const { data, error } = useFetch(() => listAppointments({ date_from: first, date_to: last, page_size: 100 }), [month], {
+    query: "appointments/calendar",
+  });
 
   const marks = {};
   for (const a of data?.items ?? []) {

@@ -91,7 +91,10 @@ function RecentAppointments({ day, onChanged }) {
   const [reason, setReason] = useState("clinic_decision");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const list = useFetch(() => listAppointments({ date_from: day, date_to: day, page_size: 5 }), [day, attempt]);
+  const list = useFetch(() => listAppointments({ date_from: day, date_to: day, page_size: 5 }), [day], {
+    query: "appointments/admin-day",
+    refresh: attempt,
+  });
   const items = list.data?.items ?? [];
 
   const cancel = async () => {
@@ -292,7 +295,8 @@ export default function AdminDashboard() {
   // `fetched_at`: when this browser received the figures (shown as "Last updated").
   const dashboard = useFetch(
     () => getAdminDashboard(day ?? undefined).then((res) => ({ ...res, data: { ...res.data, fetched_at: new Date().toISOString() } })),
-    [day, version]
+    [day],
+    { query: "dashboard/admin", refresh: version }
   );
   const data = dashboard.data;
 
@@ -314,10 +318,30 @@ export default function AdminDashboard() {
           </button>
         </div>
       ) : !data ? (
-        <div className="kpi-grid" role="status" aria-label="Loading dashboard">
-          {Object.keys(KPIS).map((key) => (
-            <div key={key} className="card skeleton" style={{ height: 120, margin: 0 }} />
-          ))}
+        // The same blocks as the loaded page, so nothing below jumps when the figures arrive.
+        <div role="status" aria-label="Loading dashboard">
+          <div className="kpi-grid">
+            {Object.keys(KPIS).map((key) => (
+              <div key={key} className="card skeleton" style={{ height: 120, margin: 0 }} />
+            ))}
+          </div>
+          <div className="card admin-strip skeleton" style={{ height: 46 }} />
+          <div className="admin-pair">
+            {[
+              [CalendarDays, "Recent Appointments"],
+              [Users, "Recent Users"],
+            ].map(([Icon, title]) => (
+              <section key={title} className="card admin-card" aria-hidden="true">
+                <div className="pd-card-head">
+                  <Icon className="pd-icon" size={28} />
+                  <h2>{title}</h2>
+                </div>
+                {[0, 1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="skeleton" style={{ height: 52, marginBottom: 8 }} />
+                ))}
+              </section>
+            ))}
+          </div>
         </div>
       ) : (
         <>

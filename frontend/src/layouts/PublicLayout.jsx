@@ -1,10 +1,14 @@
+import { Suspense } from "react";
 import { Search } from "lucide-react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import PageFallback from "../components/PageFallback";
+import ErrorBoundary from "../components/ErrorBoundary";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import BrandMark from "../components/BrandMark";
 
 // Top-navigation layout for visitors who are not signed in (the directory
 // pages). Signed-in users see the same pages inside the app shell instead.
 export default function PublicLayout() {
+  const { pathname } = useLocation();
   return (
     <div className="public">
       <header className="public-nav">
@@ -32,7 +36,11 @@ export default function PublicLayout() {
         </div>
       </header>
       <main className="public-page">
-        <Outlet />
+        <ErrorBoundary resetKey={pathname}>
+          <Suspense fallback={<PageFallback />}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
@@ -44,5 +45,27 @@ describe("layout of the public directory pages", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading");
     expect(screen.queryByText("Directory page")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
+  it("never remounts the signed-in shell between the directory and the user's own pages", async () => {
+    useAuth.mockReturnValue(authAs("John Doe", ["patient"], PERMISSIONS.patient));
+    render(
+      <MemoryRouter initialEntries={["/doctors"]}>
+        <Routes>
+          <Route element={<DirectoryLayout />}>
+            <Route path="/doctors" element={<p>Directory page</p>} />
+            <Route path="/dashboard" element={<p>Dashboard page</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    );
+    // The shell holds the assistant's conversation: it must be the same element after navigating.
+    const shell = document.querySelector(".shell");
+    await userEvent.click(screen.getByRole("link", { name: "Dashboard" }));
+    expect(await screen.findByText("Dashboard page")).toBeInTheDocument();
+    expect(document.querySelector(".shell")).toBe(shell);
+    await userEvent.click(screen.getByRole("link", { name: "Doctors" }));
+    expect(await screen.findByText("Directory page")).toBeInTheDocument();
+    expect(document.querySelector(".shell")).toBe(shell);
   });
 });

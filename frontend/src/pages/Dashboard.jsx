@@ -40,7 +40,7 @@ function RoleDashboard() {
   const { user, can } = useAuth();
   const applicant = can("doctor_application:manage_own");
   const [version, setVersion] = useState(0);
-  const { data: summary, loading, error } = useFetch(getDashboardSummary, [version]);
+  const { data: summary, loading, error } = useFetch(getDashboardSummary, [], { query: "dashboard/summary", refresh: version });
   const now = new Date();
   const firstName = user.name.replace(/^(Dr\.?|Prof\.?)\s+/i, "").split(" ")[0];
 

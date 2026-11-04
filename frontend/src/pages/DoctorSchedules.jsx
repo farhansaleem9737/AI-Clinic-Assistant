@@ -209,8 +209,10 @@ export default function DoctorSchedules() {
   const key = `${doctorId}|${date ?? ""}`;
   const selectedSlot = pick.key === key ? pick.slot : null;
 
-  const departments = useFetch(getPublicDepartments, []);
-  const specializations = useFetch(() => getPublicSpecializations(departmentId || undefined), [departmentId]);
+  const departments = useFetch(getPublicDepartments, [], { query: "departments/public" });
+  const specializations = useFetch(() => getPublicSpecializations(departmentId || undefined), [departmentId], {
+    query: "specializations/public",
+  });
   const doctors = useFetch(
     () =>
       getPublicDoctors({
@@ -219,7 +221,8 @@ export default function DoctorSchedules() {
         sort: "name_asc",
         page_size: 100,
       }),
-    [departmentId, specialization]
+    [departmentId, specialization],
+    { query: "doctors/schedules-list" }
   );
   const doctorList = doctors.data?.items ?? [];
   const doctor = doctorList.find((d) => d.id === doctorId) ?? null;

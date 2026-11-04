@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import EmptyState from "../components/EmptyState";
 import NumberedPager from "../components/NumberedPager";
 import DepartmentCard from "../components/departments/DepartmentCard";
-import { getErrorMessage } from "../services/api";
+import { useDraft } from "../hooks/useDraft";
+import { useFetch } from "../hooks/useFetch";
 import { getPublicDepartments } from "../services/departmentService";
 
 const PAGE_SIZE = 12;
@@ -16,36 +17,20 @@ const SEARCH_DELAY_MS = 350;
  * users see it inside their own app shell (DirectoryLayout).
  */
 export default function Departments() {
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
+  const [typed, setTyped] = useDraft("departments:typed", "");
+  const [q, setQ] = useDraft("departments:q", "");
+  const [page, setPage] = useDraft("departments:page", 1);
   const [attempt, setAttempt] = useState(0);
-  const [data, setData] = useState(null);
-  const [error, setError] = useState("");
-  const [loadedKey, setLoadedKey] = useState(null);
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const params = { page, page_size: PAGE_SIZE };
   if (q.trim()) params.q = q.trim();
-  const requestKey = `${JSON.stringify(params)}#${attempt}`;
-  const loading = loadedKey !== requestKey;
-
-  useEffect(() => {
-    let cancelled = false;
-    const [query] = requestKey.split("#");
-    getPublicDepartments(JSON.parse(query))
-      .then((res) => {
-        if (cancelled) return;
-        setData(res.data);
-        setError("");
-      })
-      .catch((err) => !cancelled && setError(getErrorMessage(err, "Could not load departments")))
-      .finally(() => !cancelled && setLoadedKey(requestKey));
-    return () => {
-      cancelled = true;
-    };
-  }, [requestKey]);
+  const { data, loading, error } = useFetch(() => getPublicDepartments(params), [JSON.stringify(params)], {
+    query: "departments/public-page",
+    refresh: attempt,
+    errorMessage: "Could not load departments",
+  });
 
   const onSearch = (value) => {
     setTyped(value);
