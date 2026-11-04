@@ -5,8 +5,9 @@ from app.models.ai import AiConversation, AiDocument, AiMessage, AiUsage
 from app.models.appointment import Appointment, AppointmentStatusHistory
 from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
+from app.models.email import EmailOutbox
 from app.models.doctor_application import DoctorApplication, DoctorApplicationDocument
-from app.models.notification import ClinicSettings, Notification
+from app.models.notification import ClinicSettings, FollowUp, Notification, NotificationPreference
 from app.models.patient import Patient
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.refresh_token import RefreshToken
@@ -30,6 +31,9 @@ __all__ = [
     "DoctorApplicationDocument",
     "DoctorEducation",
     "DoctorExperience",
+    "EmailOutbox",
+    "FollowUp",
+    "NotificationPreference",
     "Patient",
     "Permission",
     "RefreshToken",

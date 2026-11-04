@@ -23,7 +23,7 @@ from sqlalchemy.orm import aliased
 from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError, PermissionDeniedError
-from app.core.permissions import Perm, Principal
+from app.core.permissions import Perm, Principal, RoleCode
 from app.models.appointment import (
     ACTIVE_STATUSES,
     Appointment,
@@ -38,7 +38,7 @@ from app.models.patient import Patient
 from app.models.stored_file import StoredFile
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreate, AppointmentUpdate, Reschedule, StatusChange
-from app.services import access, appointment_state, availability_service, notification_service
+from app.services import access, appointment_state, availability_service, email_outbox_service, notification_service
 from app.services.appointment_state import Context
 from app.services.pagination import PageParams, paginate
 
@@ -617,6 +617,9 @@ async def book(
     await _flush_or_conflict(db)
     _record_booking(db, appt, principal)
     await _notify_doctor_of_booking(db, appt, principal)
+    await _notify_patient_of_booking(db, appt, principal)
+    # The patient's receipt by email, however it was booked (D109).
+    await email_outbox_service.appointment_email(db, appt, "appointment_booked")
     await db.commit()
     logger.info(
         "appointment_booked",
@@ -653,19 +656,86 @@ async def _notify_doctor_of_booking(db: AsyncSession, appt: Appointment, princip
     )
 
 
+async def _patient_user(db: AsyncSession, patient_id: uuid.UUID) -> uuid.UUID | None:
+    """The patient's login, if they have one (walk-in records have none)."""
+    return await db.scalar(select(Patient.user_id).where(Patient.id == patient_id))
+
+
+async def _front_desk_if_patient_acted(db: AsyncSession, principal: Principal, patient_user: uuid.UUID | None) -> list[uuid.UUID]:
+    """The front desk hears about changes a patient made online, not about their own (D108)."""
+    if patient_user is None or principal.user_id != patient_user:
+        return []
+    return await notification_service.with_role(db, RoleCode.receptionist)
+
+
+async def _notify_patient_of_booking(db: AsyncSession, appt: Appointment, principal: Principal) -> None:
+    """Booked on the patient's behalf (front desk, doctor): the patient hears about it."""
+    patient_user = await _patient_user(db, appt.patient_id)
+    if patient_user is None or patient_user == principal.user_id:
+        return
+    _, tz = await _doctor_user_and_tz(db, appt.doctor_id)
+    await notification_service.notify_optional(
+        db,
+        [patient_user],
+        type="appointment_booked_for_you",
+        title="Appointment booked",
+        message=f"An appointment was booked for you on {notification_service.when(appt.starts_at, tz)}.",
+        link=f"/appointments/{appt.id}",
+    )
+
+
 async def _notify_cancellation(db: AsyncSession, ctx: Context) -> None:
     """The doctor and the patient (if they have a login) hear about it,
-    except whoever cancelled."""
+    except whoever cancelled; the front desk when the patient cancelled online."""
     appt = ctx.appointment
     doctor_user, _ = await _doctor_user_and_tz(db, appt.doctor_id)
-    patient_user = await db.scalar(select(Patient.user_id).where(Patient.id == appt.patient_id))
-    notification_service.notify(
+    patient_user = await _patient_user(db, appt.patient_id)
+    desk = await _front_desk_if_patient_acted(db, ctx.principal, patient_user)
+    await notification_service.notify_optional(
         db,
-        [u for u in (doctor_user, patient_user) if u is not None and u != ctx.principal.user_id],
+        [u for u in (doctor_user, patient_user, *desk) if u is not None and u != ctx.principal.user_id],
         type="appointment_cancelled",
         title="Appointment cancelled",
         message=f"The appointment on {notification_service.when(appt.starts_at, ctx.timezone)} was cancelled.",
         link=f"/appointments/{appt.id}",
+    )
+
+
+async def _notify_status(db: AsyncSession, ctx: Context, status: S) -> None:
+    """Confirmed: the patient hears about it. Checked in: the doctor."""
+    appt = ctx.appointment
+    if status is S.confirmed:
+        recipients = [await _patient_user(db, appt.patient_id)]
+        title, message = "Appointment confirmed", f"Your appointment on {notification_service.when(appt.starts_at, ctx.timezone)} is confirmed."
+        type_ = "appointment_confirmed"
+    elif status is S.checked_in:
+        recipients = [(await _doctor_user_and_tz(db, appt.doctor_id))[0]]
+        title, message = "Patient checked in", f"The patient for {notification_service.when(appt.starts_at, ctx.timezone)} has arrived."
+        type_ = "patient_checked_in"
+    else:
+        return
+    await notification_service.notify_optional(
+        db, [u for u in recipients if u != ctx.principal.user_id], type=type_, title=title, message=message,
+        link=f"/appointments/{appt.id}",
+    )
+
+
+async def _notify_reschedule(db: AsyncSession, principal: Principal, old: Appointment, new: Appointment) -> None:
+    """Patient and doctor(s), except whoever moved it; the front desk if the patient did."""
+    new_doctor, tz = await _doctor_user_and_tz(db, new.doctor_id)
+    old_doctor = new_doctor if old.doctor_id == new.doctor_id else (await _doctor_user_and_tz(db, old.doctor_id))[0]
+    patient_user = await _patient_user(db, new.patient_id)
+    desk = await _front_desk_if_patient_acted(db, principal, patient_user)
+    await notification_service.notify_optional(
+        db,
+        [u for u in (patient_user, new_doctor, old_doctor, *desk) if u is not None and u != principal.user_id],
+        type="appointment_rescheduled",
+        title="Appointment rescheduled",
+        message=(
+            f"The appointment on {notification_service.when(old.starts_at, tz)} "
+            f"was moved to {notification_service.when(new.starts_at, tz)}."
+        ),
+        link=f"/appointments/{new.id}",
     )
 
 
@@ -707,8 +777,12 @@ async def change_status(
     if change.status is S.cancelled:
         _cancel(ctx, change.cancellation_reason, change.note)
         await _notify_cancellation(db, ctx)
+        await email_outbox_service.appointment_email(db, appt, "appointment_cancelled")
     else:
         appt.status = change.status
+        await _notify_status(db, ctx, change.status)
+        if change.status is S.confirmed and await _patient_user(db, appt.patient_id) != principal.user_id:
+            await email_outbox_service.appointment_email(db, appt, "appointment_confirmed")
     _record(db, appt, previous, change.status, principal.user_id, change.note)
     await db.commit()
     logger.info(
@@ -758,6 +832,8 @@ async def reschedule(
     )
     await _flush_or_conflict(db)
     _record_booking(db, new, principal)
+    await _notify_reschedule(db, principal, old, new)
+    await email_outbox_service.appointment_email(db, new, "appointment_rescheduled", old=old)
     await db.commit()
     logger.info(
         "appointment_rescheduled",

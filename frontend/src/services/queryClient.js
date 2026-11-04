@@ -67,6 +67,7 @@ const AFFECTS = {
   users: ["users", "doctors", "patients", "dashboard"],
   admin: ["users", "dashboard"],
   settings: ["settings", "dashboard"],
+  "follow-ups": ["appointments"],
   notifications: [],
   auth: [],
 };

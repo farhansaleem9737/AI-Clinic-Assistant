@@ -1,0 +1,64 @@
+# Render Blueprint for the backend (docs/DEPLOYMENT_READINESS.md).
+# Render → New → Blueprint → pick this repository. Values marked sync: false
+# are asked for once in the dashboard and never stored in Git.
+services:
+  - type: web
+    name: clinic-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # Next to Neon (Singapore) and R2.
+    region: singapore
+    # free: 512 MB, sleeps after 15 min idle (first request then takes ~1 min).
+    # Use starter or higher for real clinic use.
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    # Frontend-only commits do not redeploy the API.
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      # Secrets
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      # The Vercel origin, e.g. https://clinic-ai-assistant.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false
+      # Storage
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_REGION
+        value: auto
+      # AI
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: AI_PHI_ALLOWED
+        value: "false"
+      - key: AI_ENABLE_MEDICAL_DOCUMENT_UPLOAD
+        value: "false"
+      # General
+      - key: CLINIC_TIMEZONE
+        value: Asia/Karachi
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SQL_ECHO
+        value: "false"

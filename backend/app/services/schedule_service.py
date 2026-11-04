@@ -14,6 +14,7 @@ from app.core.permissions import Perm, Principal
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.schedule import ExceptionKind, ScheduleException, ScheduleTemplate
+from app.services import notification_service
 from app.schemas.schedule import (
     DateExceptionRead,
     DateExceptionType,
@@ -215,6 +216,17 @@ async def delete_exception(db: AsyncSession, principal: Principal, exception_id:
     await _delete(db, exception)
 
 
+async def _tell_doctor(db: AsyncSession, principal: Principal, doctor_id: uuid.UUID, message: str) -> None:
+    """Someone else (the front desk, an administrator) changed this doctor's
+    schedule: the doctor hears about it (D108). Booked appointments are never
+    affected: changes that would strand one are refused."""
+    doctor_user = await db.scalar(select(Doctor.user_id).where(Doctor.id == doctor_id))
+    if doctor_user is not None and doctor_user != principal.user_id:
+        notification_service.notify(
+            db, [doctor_user], type="schedule_changed", title="Schedule updated", message=message, link="/schedule"
+        )
+
+
 async def _delete(db: AsyncSession, exception: ScheduleException) -> None:
     await lock_doctor_schedule(db, exception.doctor_id)
     if exception.kind is ExceptionKind.custom_hours:
@@ -352,6 +364,7 @@ async def update_weekly(
         return await get_weekly(db, principal, doctor_id)
 
     await _ensure_week_keeps_appointments(db, doctor_id, tz, changed)
+    await _tell_doctor(db, principal, doctor_id, "Your weekly working hours were changed by the clinic.")
 
     for weekday, (wanted, slot) in changed.items():
         for template in week.get(weekday, []):
@@ -546,6 +559,7 @@ async def create_date_exception(
         created_by_user_id=principal.user_id,
     )
     db.add(exception)
+    await _tell_doctor(db, principal, doctor_id, f"The clinic changed your availability on {data.date:%a %d %b %Y}.")
     await db.commit()
     await db.refresh(exception)
     logger.info(
@@ -590,6 +604,7 @@ async def update_date_exception(
     elif not exception.kind.is_unavailable:
         exception.kind = ExceptionKind.leave  # an existing leave/holiday/block keeps its kind
     exception.starts_at, exception.ends_at, exception.reason = starts_at, ends_at, data.reason
+    await _tell_doctor(db, principal, doctor_id, f"The clinic changed your availability on {data.date:%a %d %b %Y}.")
     await db.commit()
     await db.refresh(exception)
     logger.info("schedule_exception_updated", extra={"exception_id": str(exception.id), "kind": exception.kind.value})
@@ -603,4 +618,6 @@ async def delete_date_exception(
     exception = await _own_exception(db, doctor_id, exception_id)
     if exception.ends_at <= clock.utcnow():
         raise BusinessRuleError("Past exceptions are kept as they were", code="PAST_DATE")
+    tz = await doctor_timezone(db, doctor_id)
+    await _tell_doctor(db, principal, doctor_id, f"The clinic removed a schedule change on {exception.starts_at.astimezone(tz):%a %d %b %Y}.")
     await _delete(db, exception)

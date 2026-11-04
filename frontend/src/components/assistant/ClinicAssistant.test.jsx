@@ -286,28 +286,105 @@ describe("Assistant panel: screenshot design", () => {
     expect(thinking()).not.toBeInTheDocument();
     expect(within(panel).getByText("Here is")).toBeInTheDocument();
 
-    // An error ends it too.
-    await act(async () => fail({ response: { status: 503, data: { error: { message: "The AI service is busy." } } } }));
-    expect(await within(panel).findByRole("alert")).toHaveTextContent("busy");
+    // An error ends it too; what had arrived stays, marked as interrupted.
+    await act(async () => fail({ response: { status: 503, data: { error: { message: "Traceback: internal detail" } } } }));
+    const card = await within(panel).findByRole("alert");
+    expect(card).toHaveTextContent("Couldn't complete that response");
+    expect(card).toHaveTextContent("The assistant is temporarily unavailable. Please try again shortly.");
+    expect(card).not.toHaveTextContent("Traceback"); // never server internals
     expect(thinking()).not.toBeInTheDocument();
+    expect(within(panel).getByText("Here is")).toBeInTheDocument();
+    expect(within(panel).getByText("Response interrupted")).toBeInTheDocument();
 
-    // Stop before any text: the word goes at once.
-    await user.type(within(panel).getByLabelText("Message"), "{Enter}");
+    // A new question replaces the failed one; Stop before any text: the word goes at once.
+    await user.type(within(panel).getByLabelText("Message"), "again{Enter}");
     expect(await within(panel).findByRole("status", { name: "Assistant is preparing a response" })).toBeInTheDocument();
+    expect(within(panel).queryByText("hello")).not.toBeInTheDocument();
     await user.click(within(panel).getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(thinking()).not.toBeInTheDocument());
+    expect(within(panel).getByLabelText("Message")).toHaveValue("again"); // stopped: back in the composer
   });
 
-  it("a failed request keeps the message and explains", async () => {
-    streamAssistantMessage.mockRejectedValue({ response: { status: 503, data: { error: { code: "AI_RATE_LIMITED", message: "The AI service is busy (rate limit). Please try again shortly." } } } });
+  async function sendHello() {
     const user = userEvent.setup();
     render(<ClinicAssistant />);
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
     await user.type(within(panel).getByLabelText("Message"), "hello{Enter}");
-    expect(await within(panel).findByRole("alert")).toHaveTextContent("busy (rate limit)");
+    return { user, panel };
+  }
+  const saved = (text) => ({
+    conversation: { id: "c-1", title: "hello", created_at: "", updated_at: "" },
+    user_message: message("m-1", "user", text),
+    assistant_message: message("m-2", "assistant", "Here you go."),
+  });
+
+  it("a failed request keeps the message in the conversation; Try again sends it once more, without a duplicate", async () => {
+    streamAssistantMessage
+      .mockRejectedValueOnce({ response: { status: 429, data: { error: { code: "AI_RATE_LIMITED", message: "provider says 429" } } } })
+      .mockImplementation(async (data) => saved(data.text));
+    const { user, panel } = await sendHello();
+    const card = await within(panel).findByRole("alert");
+    expect(card).toHaveTextContent("The assistant is receiving too many requests right now. Please try again in a moment.");
+    expect(within(panel).getByText("hello")).toBeInTheDocument();
+    expect(within(panel).getByText("Not sent")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Message")).toHaveValue(""); // not duplicated into the composer
+
+    await user.click(within(card).getByRole("button", { name: "Try again" }));
+    expect(await within(panel).findByText("Here you go.")).toBeInTheDocument();
+    expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(panel).getAllByText("hello")).toHaveLength(1);
+    expect(streamAssistantMessage).toHaveBeenCalledTimes(2);
+    expect(streamAssistantMessage.mock.calls[1][0]).toEqual(streamAssistantMessage.mock.calls[0][0]); // same message and files
+  });
+
+  it("after a broken connection, Try again first looks for an answer the server already saved", async () => {
+    streamAssistantMessage.mockRejectedValue(new TypeError("Failed to fetch"));
+    const { user, panel } = await sendHello();
+    const card = await within(panel).findByRole("alert");
+    expect(card).toHaveTextContent("Connection interrupted. Check your internet connection and try again.");
+    const now = new Date().toISOString();
+    listConversations.mockResolvedValue({ data: [{ id: "c-9", title: "hello", created_at: now, updated_at: now }] });
+    getConversation.mockResolvedValue({
+      data: { id: "c-9", title: "hello", messages: [message("m-1", "user", "hello", { created_at: now }), message("m-2", "assistant", "Saved answer.", { created_at: now })] },
+    });
+    await user.click(within(card).getByRole("button", { name: "Try again" }));
+    expect(await within(panel).findByText("Saved answer.")).toBeInTheDocument();
+    expect(streamAssistantMessage).toHaveBeenCalledTimes(1); // not asked a second time
+    expect(within(panel).getAllByText("hello")).toHaveLength(1);
+  });
+
+  it("a refusal offers no pointless Try again; Dismiss puts the message back in the composer", async () => {
+    streamAssistantMessage.mockRejectedValue({ response: { status: 400, data: { error: { code: "AI_PHI_NOT_ALLOWED", message: "Document analysis is switched off." } } } });
+    const { user, panel } = await sendHello();
+    const card = await within(panel).findByRole("alert");
+    expect(card).toHaveTextContent("Document analysis is switched off.");
+    expect(within(card).queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Dismiss" }));
+    expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
     expect(within(panel).getByLabelText("Message")).toHaveValue("hello");
-    expect(within(panel).getByRole("heading", { name: /How can I help/ })).toBeInTheDocument(); // nothing half-shown
+    expect(within(panel).getByRole("heading", { name: /How can I help/ })).toBeInTheDocument();
+  });
+
+  it("a booking whose confirmation got no answer is checked, never confirmed twice", async () => {
+    const proposal = message("m-2", "assistant", "Confirm your appointment?", {
+      action: { type: "book_appointment", status: "pending", doctor_name: "Dr. Sarah Khan", local_time: "Fri 23 Apr 2027, 10:00 AM", when_text: "Friday, April 23 at 10:00 AM PKT" },
+    });
+    replyWith(proposal);
+    decideAction.mockRejectedValue(new TypeError("Failed to fetch"));
+    const user = userEvent.setup();
+    render(<ClinicAssistant />);
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    await user.type(within(panel).getByLabelText("Message"), "Book{Enter}");
+    const card = await within(panel).findByRole("group", { name: "Confirm booking" });
+    await user.click(within(card).getByRole("button", { name: "Confirm" }));
+    expect(await within(card).findByText("We couldn't confirm whether this went through.")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    getConversation.mockResolvedValue({ data: { id: "c-1", title: "Book", messages: [{ ...proposal, action: { ...proposal.action, status: "booked" } }] } });
+    await user.click(within(card).getByRole("button", { name: "Check status" }));
+    expect(await within(card).findByText("Appointment booked with Dr. Sarah Khan for Friday, April 23 at 10:00 AM PKT.")).toBeInTheDocument();
+    expect(decideAction).toHaveBeenCalledTimes(1);
   });
 
   it("files: validates, previews images, uploads each, retries a failure, and sends with the message", async () => {

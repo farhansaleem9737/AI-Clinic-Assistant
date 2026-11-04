@@ -103,6 +103,9 @@ def isolated_side_channels(tmp_path, monkeypatch):
             monkeypatch.setattr(settings, name, field.default)
     monkeypatch.setattr(settings, "email_backend", EmailBackend.outbox)
     monkeypatch.setattr(settings, "email_outbox_dir", tmp_path / "outbox")
+    # Notification emails stay queued until a test runs the outbox itself (D109):
+    # no sending in the background against the test transaction.
+    monkeypatch.setattr(settings, "email_send_after_commit", False)
     yield tmp_path / "outbox"
     limiter.reset()
 

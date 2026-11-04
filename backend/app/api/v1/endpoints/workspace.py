@@ -14,6 +14,8 @@ from app.schemas.settings import (
     ClinicSettingsRead,
     ClinicSettingsUpdate,
     NotificationList,
+    NotificationPreferences,
+    NotificationPreferencesUpdate,
     NotificationRead,
     SearchAppointment,
     SearchDoctor,
@@ -41,7 +43,13 @@ SEARCH_LIMIT = 5
 
 def to_notification(n: Notification) -> NotificationRead:
     return NotificationRead(
-        id=n.id, type=n.type, title=n.title, message=n.message, link=n.link, read_at=n.read_at, created_at=n.created_at
+        id=n.id,
+        type=n.type,
+        title=n.title,
+        message=n.message,
+        link=notification_service.safe_link(n.link),  # only known pages of this app
+        read_at=n.read_at,
+        created_at=n.created_at,
     )
 
 
@@ -51,13 +59,34 @@ def to_notification(n: Notification) -> NotificationRead:
 @router.get("/notifications", response_model=NotificationList)
 async def list_notifications(
     limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=1000),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
-    items = await notification_service.list_mine(db, principal, limit)
+    # One extra row tells whether an older page exists.
+    items = await notification_service.list_mine(db, principal, limit + 1, offset)
     return NotificationList(
-        items=[to_notification(n) for n in items], unread=await notification_service.unread_count(db, principal)
+        items=[to_notification(n) for n in items[:limit]],
+        unread=await notification_service.unread_count(db, principal),
+        has_more=len(items) > limit,
     )
+
+
+@router.get("/notifications/preferences", response_model=NotificationPreferences)
+async def notification_preferences(
+    db: AsyncSession = Depends(get_db), principal: Principal = Depends(get_current_principal)
+):
+    return NotificationPreferences(**await notification_service.get_preferences(db, principal))
+
+
+@router.put("/notifications/preferences", response_model=NotificationPreferences)
+async def update_notification_preferences(
+    data: NotificationPreferencesUpdate,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    changes = data.model_dump(exclude_none=True)
+    return NotificationPreferences(**await notification_service.update_preferences(db, principal, changes))
 
 
 @router.get("/notifications/unread-count", response_model=UnreadCount)

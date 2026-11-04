@@ -69,5 +69,6 @@ export async function streamAssistantMessage(data, { signal, onDelta } = {}) {
       else if (event === "error") throw { response: { status: LIMIT_CODES.has(parsed.code) ? 429 : 503, data: { error: parsed } } };
     }
   }
-  throw { response: { status: 503, data: { error: { message: "The connection closed before the answer finished." } } } };
+  // The answer may or may not have been saved by the server: the caller checks before repeating it.
+  throw { response: { status: 503, data: { error: { code: "STREAM_INTERRUPTED", message: "The connection closed before the answer finished." } } } };
 }

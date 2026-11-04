@@ -46,3 +46,6 @@ httpx==0.28.1
 pypdf==6.1.1
 anthropic==2.3.0
 google-genai==2.34.0
+# Verifies Cloud Scheduler's OIDC token on the reminder run (D108); already installed with google-genai.
+google-auth==2.62.0
+requests==2.34.2

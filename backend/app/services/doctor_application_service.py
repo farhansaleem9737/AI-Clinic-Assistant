@@ -47,7 +47,7 @@ from app.models.stored_file import FileCategory, FileStatus
 from app.models.user import User
 from app.schemas.doctor_application import DoctorApplicationUpdate, DoctorRegistration, ProfessionalDetails
 from app.services.audit_service import AuditAction, record
-from app.services import auth_service, doctor_service, file_service, notification_service, rbac_service
+from app.services import auth_service, doctor_service, email_outbox_service, file_service, notification_service, rbac_service
 from app.services.file_validation import CheckedFile
 from app.services.pagination import PageParams, paginate
 
@@ -128,6 +128,7 @@ async def register(db: AsyncSession, data: DoctorRegistration) -> User:
         type="doctor_application",
         title="New doctor application",
         message=f"{data.name} registered as a doctor and is waiting for credential review.",
+        link="/admin/doctors",
     )
     await db.commit()
     logger.info("doctor_applicant_registered", extra={"user_id": str(user.id)})
@@ -385,6 +386,14 @@ async def approve(
     application.doctor_id = doctor.id
     record(db, AuditAction.doctor_application_approved, actor_id=principal.user_id, target_type="doctor_application",
            target_id=application.id, details={"doctor_id": str(doctor.id)})
+    notification_service.notify(
+        db, [user.id], type="doctor_application_approved", title="Application approved",
+        message="Your doctor application was approved. You can now complete your profile and working hours.",
+        link="/doctor/profile",
+    )
+    await email_outbox_service.enqueue(
+        db, user.id, "doctor_application_approved", {}, dedupe_key=f"doctor_application_approved:{application.id}"
+    )
     await db.commit()
     logger.info(
         "doctor_application_approved",
@@ -401,6 +410,15 @@ async def reject(db: AsyncSession, principal: Principal, application_id: uuid.UU
     # The reason itself is stored on the application, not copied here.
     record(db, AuditAction.doctor_application_rejected, actor_id=principal.user_id, target_type="doctor_application",
            target_id=application.id)
+    notification_service.notify(
+        db, [application.user_id], type="doctor_application_rejected", title="Application reviewed",
+        message="Your doctor application was not approved. The reason is shown on your application.",
+        link="/doctor/application",
+    )
+    # The reviewer's notes stay on the application: never in the email.
+    await email_outbox_service.enqueue(
+        db, application.user_id, "doctor_application_rejected", {}, dedupe_key=f"doctor_application_rejected:{application.id}"
+    )
     await db.commit()
     logger.info(
         "doctor_application_rejected", extra={"application_id": str(application.id), "by": str(principal.user_id)}

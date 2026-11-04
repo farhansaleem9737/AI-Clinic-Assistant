@@ -18,3 +18,8 @@ export const rescheduleAppointment = (id, data) => api.post(`/appointments/${id}
 // server returns the first booking instead of creating a second one.
 export const bookAppointment = (data, idempotencyKey) =>
   api.post("/appointments/", data, { headers: { "Idempotency-Key": idempotencyKey } });
+// A follow-up visit recorded as due by a date (D108): read by anyone who sees the
+// appointment, recorded by its doctor or the clinic, dismissed by them or the patient.
+export const getFollowUp = (appointmentId) => api.get(`/appointments/${appointmentId}/follow-up`);
+export const saveFollowUp = (appointmentId, dueDate) => api.put(`/appointments/${appointmentId}/follow-up`, { due_date: dueDate });
+export const dismissFollowUp = (followUpId) => api.post(`/follow-ups/${followUpId}/dismiss`);

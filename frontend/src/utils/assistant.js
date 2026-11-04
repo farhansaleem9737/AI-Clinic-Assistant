@@ -201,3 +201,36 @@ export function usageNote(usage) {
   const left = usage.remaining_today ?? 0;
   return left === 0 ? "Daily message limit reached. It resets tomorrow." : `${left} of ${usage.daily_limit} messages left today`;
 }
+
+// What to tell the user when an assistant request fails (D108), from the
+// error's status and code only: never server internals or provider text.
+// `retry`: Try again can help. `uncertain`: the connection broke, so the
+// server may have finished and saved the answer; check before sending again.
+const RATE_LIMITED = new Set(["AI_RATE_LIMITED", "AI_USER_RATE_LIMITED", "AI_SERVER_BUSY"]);
+const LIMIT_REACHED = new Set(["AI_USER_DAILY_LIMIT", "AI_SERVER_DAILY_LIMIT", "AI_QUOTA_EXHAUSTED"]);
+const FAILURE_TITLE = "Couldn't complete that response";
+
+export function describeFailure(err) {
+  const status = err?.response?.status;
+  const error = err?.response?.data?.error ?? {};
+  const failure = (kind, message, { retry = true, uncertain = false } = {}) => ({ kind, title: FAILURE_TITLE, message, retry, uncertain });
+  if (!err?.response || error.code === "STREAM_INTERRUPTED") {
+    return failure("network", "Connection interrupted. Check your internet connection and try again.", { uncertain: true });
+  }
+  if (error.code === "AI_TIMEOUT" || status === 504) {
+    return failure("timeout", "This request is taking longer than expected. You can try again.");
+  }
+  if (RATE_LIMITED.has(error.code)) {
+    return failure("rate_limit", "The assistant is receiving too many requests right now. Please try again in a moment.");
+  }
+  if (LIMIT_REACHED.has(error.code)) {
+    // Our own limit messages say when it resets; trying again now cannot help.
+    return failure("limit", error.message || "The assistant's limit for today has been reached.", { retry: false });
+  }
+  if (status >= 500) return failure("unavailable", "The assistant is temporarily unavailable. Please try again shortly.");
+  if (status >= 400 && status !== 401 && error.message) {
+    // A rule of this clinic (e.g. documents switched off): the same request would fail again.
+    return failure("refused", error.message, { retry: false });
+  }
+  return failure("unknown", "Something went wrong while preparing your response. Please try again.");
+}

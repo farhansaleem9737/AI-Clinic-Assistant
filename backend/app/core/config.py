@@ -121,6 +121,20 @@ class Settings(BaseSettings):
     # How far ahead the directory looks when labelling a doctor Available / Busy / Unavailable.
     availability_status_days: int = 7
 
+    # Appointment reminders (D108), sent by the reminder run (POST
+    # /internal/reminders/run, called by Cloud Scheduler). Minutes before the
+    # start; patients get each, the doctor the doctor list.
+    reminder_offsets_minutes: Annotated[list[int], NoDecode] = [1440, 60]
+    doctor_reminder_offsets_minutes: Annotated[list[int], NoDecode] = [60]
+    # A recorded follow-up is mentioned to the patient this many days before it is due.
+    follow_up_reminder_days: int = 7
+    # Who may call the reminder run. In production: Cloud Scheduler's OIDC
+    # token, checked for this audience (the run URL) and service-account e-mail.
+    reminders_oidc_audience: str | None = None
+    reminders_invoker_email: str | None = None
+    # Development / other schedulers only: a shared secret in X-Reminders-Secret.
+    reminders_cron_secret: SecretStr | None = None
+
 
     # Cloudflare R2 object storage, through its S3-compatible API. Optional in
     # development and tests (file features answer 503 without it); required in
@@ -164,7 +178,20 @@ class Settings(BaseSettings):
     smtp_username: str | None = None
     smtp_password: SecretStr | None = None
     smtp_starttls: bool = True
+    # Implicit TLS from the first byte (usually port 465) instead of STARTTLS.
+    smtp_ssl: bool = False
     smtp_timeout_seconds: int = 10
+    # Unencrypted SMTP is refused unless set, and then only to this machine
+    # (a local test server such as Mailpit). Never for a real provider.
+    smtp_allow_plaintext_localhost: bool = False
+
+    # Notification emails (D109): queued in the email_outbox table and sent
+    # by the outbox run (also part of the reminder run). After a commit that
+    # queued email, this process also starts sending at once, without waiting
+    # for the next run. Reminder emails: these offsets only (minutes before).
+    email_send_after_commit: bool = True
+    email_reminder_offsets_minutes: Annotated[list[int], NoDecode] = [1440]
+    email_max_attempts: int = 6
 
     # AI assistant (D96). Off unless a provider, model and key are all set.
     # AI_ENABLED=false switches it off whatever else is configured.
@@ -269,6 +296,33 @@ class Settings(BaseSettings):
     def blank_smtp_host_is_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
 
+    @field_validator("smtp_username", "smtp_password", mode="before")
+    @classmethod
+    def blank_smtp_login_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("email_reminder_offsets_minutes", mode="before")
+    @classmethod
+    def split_email_offsets(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [int(v) for v in value.split(",") if v.strip()]
+        return value
+
+    @field_validator("email_from")
+    @classmethod
+    def valid_sender(cls, value: str) -> str:
+        from email.headerregistry import Address
+        from email.utils import parseaddr
+
+        name, address = parseaddr(value)
+        try:
+            Address(display_name=name, addr_spec=address)
+        except (ValueError, IndexError) as exc:
+            raise ValueError("EMAIL_FROM must be an address, optionally with a name: Name <user@example.com>") from exc
+        if "@" not in address:
+            raise ValueError("EMAIL_FROM must be an address, optionally with a name: Name <user@example.com>")
+        return value
+
     @field_validator("doctor_approval_requirements", mode="before")
     @classmethod
     def split_requirements(cls, value: object) -> object:
@@ -299,6 +353,26 @@ class Settings(BaseSettings):
         if "*" in value:
             raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
         return value
+
+    @field_validator("reminder_offsets_minutes", "doctor_reminder_offsets_minutes", mode="before")
+    @classmethod
+    def split_offsets(cls, value: object) -> object:
+        # "1440,60" in the environment, like CORS_ORIGINS.
+        if isinstance(value, str):
+            return [int(v) for v in value.split(",") if v.strip()]
+        return value
+
+    @field_validator("reminder_offsets_minutes", "doctor_reminder_offsets_minutes")
+    @classmethod
+    def positive_offsets(cls, value: list[int]) -> list[int]:
+        if any(v <= 0 for v in value):
+            raise ValueError("Reminder offsets must be positive minutes")
+        return sorted(set(value), reverse=True)
+
+    @field_validator("reminders_oidc_audience", "reminders_invoker_email", "reminders_cron_secret", mode="before")
+    @classmethod
+    def blank_reminder_setting_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("clinic_timezone")
     @classmethod
@@ -342,7 +416,25 @@ class Settings(BaseSettings):
             raise ValueError("EMAIL_BACKEND=outbox is for development only")
         if self.email_backend is EmailBackend.smtp and not self.smtp_host:
             raise ValueError("EMAIL_BACKEND=smtp needs SMTP_HOST")
+        if self.smtp_host:
+            self._check_smtp_security()
         return self
+
+    def _check_smtp_security(self) -> None:
+        """Never plaintext to a real server, never a half-configured login."""
+        if self.smtp_ssl and self.smtp_starttls:
+            raise ValueError("Choose one: SMTP_SSL=true (implicit TLS, port 465) or SMTP_STARTTLS=true (port 587)")
+        if not (self.smtp_ssl or self.smtp_starttls):
+            local = self.smtp_host in ("localhost", "127.0.0.1", "::1")
+            if not (self.smtp_allow_plaintext_localhost and local):
+                raise ValueError(
+                    "SMTP without TLS is refused; set SMTP_STARTTLS=true or SMTP_SSL=true "
+                    "(a local test server needs SMTP_ALLOW_PLAINTEXT_LOCALHOST=true)"
+                )
+        if self.smtp_port == 465 and self.smtp_starttls:
+            raise ValueError("Port 465 uses implicit TLS: set SMTP_SSL=true and SMTP_STARTTLS=false")
+        if bool(self.smtp_username) != bool(self.smtp_password):
+            raise ValueError("SMTP_USERNAME and SMTP_PASSWORD go together")
 
     @property
     def effective_email_backend(self) -> EmailBackend:

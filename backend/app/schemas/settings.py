@@ -62,6 +62,25 @@ class NotificationRead(BaseModel):
 class NotificationList(BaseModel):
     items: list[NotificationRead]
     unread: int
+    # Older notifications exist beyond this page (?offset=).
+    has_more: bool = False
+
+
+class NotificationPreferences(BaseModel):
+    """Optional categories (D108); essential notifications are always sent."""
+
+    appointment_updates: bool
+    reminders: bool
+    follow_ups: bool
+    # The enabled categories also by email.
+    emails: bool
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    appointment_updates: bool | None = None
+    reminders: bool | None = None
+    follow_ups: bool | None = None
+    emails: bool | None = None
 
 
 class UnreadCount(BaseModel):

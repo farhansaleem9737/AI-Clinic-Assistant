@@ -212,3 +212,34 @@ cd frontend && npx vitest run src/components/assistant src/services
 - Watch `ai_usage` (or the `ai_usage` log lines) for cost and failures.
 - Medical-document analysis stays off until privacy, security and clinical
   safeguards are approved.
+
+## 9. When a request fails (D108)
+
+A failed question stays in the conversation, marked "Not sent". Under it, a compact
+card says what happened. The explanation comes from the status and error code only,
+never from server or provider text:
+
+- **No answer, or the stream broke:** "Connection interrupted…". The server may have
+  finished and saved the answer, so Try again first looks for it in the
+  conversation and shows it instead of asking again.
+- **Timeout:** "This request is taking longer than expected…"
+- **Rate limited:** "The assistant is receiving too many requests right now…"
+- **Server or provider error (5xx):** "The assistant is temporarily unavailable…"
+- **Daily limit, or a clinic rule** (e.g. documents switched off): our own message.
+  No Try again, because the same request would fail again.
+- **Anything else:** "Something went wrong while preparing your response…"
+
+**What Try again does:**
+- It sends the same text and the same document ids, once at a time.
+- The user's message is not duplicated, and the thinking words show while it runs.
+- What had arrived of a failed answer stays, marked "Response interrupted"; a retry
+  replaces it rather than appending to it.
+- Dismiss puts the text and files back in the composer. Stop works as before.
+
+**Actions:**
+- Booking, cancelling and rescheduling run only through the confirmation call,
+  which is idempotent on the server: pending-only, a row lock, and the booking key
+  `ai-<message id>`.
+- If that call gets no answer, or a server error, the card shows **Check status**
+  instead of Confirm. It reloads the message's real outcome before anything can be
+  decided again.

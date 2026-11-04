@@ -1,0 +1,28 @@
+# Never send secrets or local state to the image build.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local environments, caches and outputs
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+var/
+*.log
+*.sql
+
+# Not needed at runtime
+tests/
+scripts/
+Dockerfile
+.dockerignore
+.git

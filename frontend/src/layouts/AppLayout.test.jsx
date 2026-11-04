@@ -121,7 +121,7 @@ describe("shell behaviour", () => {
 
   it("the bell shows the real unread count and opens the notifications", async () => {
     getUnreadCount.mockResolvedValue({ data: { unread: 2 } });
-    const note = { id: "n-1", type: "appointment_booked", title: "New appointment", message: "An appointment was booked.", link: "/appointments/a-1", read_at: null, created_at: "2027-04-23T05:00:00Z" };
+    const note = { id: "n-1", type: "appointment_booked", title: "New appointment", message: "An appointment was booked.", link: "/appointments/01a0ed6e-7dcf-7b64-bc44-8d7e5496d463", read_at: null, created_at: "2027-04-23T05:00:00Z" };
     listNotifications.mockResolvedValue({ data: { items: [note], unread: 2 } });
     markNotificationRead.mockResolvedValue({ data: { ...note, read_at: "2027-04-23T06:00:00Z" } });
     renderShell(authAs("John Doe", ["patient"], PERMISSIONS.patient));
@@ -130,7 +130,7 @@ describe("shell behaviour", () => {
     const panel = screen.getByRole("dialog", { name: "Notifications" });
     await userEvent.click(await within(panel).findByRole("button", { name: /New appointment/ }));
     expect(markNotificationRead).toHaveBeenCalledWith("n-1");
-    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/appointments/a-1"));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/appointments/01a0ed6e-7dcf-7b64-bc44-8d7e5496d463"));
   });
 
   it("the bell says when there is nothing", async () => {

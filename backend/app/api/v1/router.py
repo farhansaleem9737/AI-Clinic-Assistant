@@ -10,6 +10,8 @@ from app.api.v1.endpoints import (
     doctor_applications,
     doctors,
     documents,
+    follow_ups,
+    internal,
     patients,
     schedules,
     users,
@@ -30,7 +32,9 @@ api_router.include_router(doctor_applications.router)
 api_router.include_router(patients.router)
 api_router.include_router(documents.router)
 api_router.include_router(schedules.router)
+api_router.include_router(follow_ups.router)
 api_router.include_router(appointments.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(workspace.router)
 api_router.include_router(ai_agent.router)
+api_router.include_router(internal.router)

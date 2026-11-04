@@ -4,6 +4,7 @@ import {
   CalendarDays,
   ChartColumn,
   Check,
+  CircleAlert,
   CircleHelp,
   ClipboardList,
   Copy,
@@ -24,7 +25,7 @@ import {
 import { memo, useEffect, useRef, useState } from "react";
 import avatar from "../../assets/clinic-ai-avatar.png";
 import { getErrorMessage } from "../../services/api";
-import { decideAction, deleteConversation, listConversations } from "../../services/aiService";
+import { decideAction, deleteConversation, getConversation, listConversations } from "../../services/aiService";
 import { ACCEPT, fileSize, suggestionsFor, unavailableReason, usageNote } from "../../utils/assistant";
 import AssistantResults from "./AssistantResults";
 import SafeMarkdown from "./SafeMarkdown";
@@ -76,15 +77,41 @@ function ActionCard({ message, conversationId, onUpdated }) {
   const kind = ACTIONS[action.type] ?? { label: "Confirm", yes: "Confirm", no: "Cancel", busy: "Working…" };
   const [busy, setBusy] = useState(null); // true = confirming, false = declining
   const [error, setError] = useState("");
+  // The answer was lost (no response, server error): the booking may have gone
+  // through. Never offer it again blindly; check what the server has first (D108).
+  const [uncertain, setUncertain] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    try {
+      const saved = (await getConversation(conversationId)).data.messages.find((m) => m.id === message.id);
+      if (saved) onUpdated(saved);
+      setUncertain(false);
+      setError(saved?.action?.status === "pending" ? "It did not go through. You can decide again." : "");
+    } catch {
+      setError("We still couldn't check it. Try again in a moment, or look under My Appointments.");
+    } finally {
+      setBusy(null);
+    }
+  };
   const decide = async (confirm) => {
-    if (busy !== null) return; // one decision only
+    if (busy !== null || uncertain) return; // one decision only
     setBusy(confirm);
     setError("");
     try {
       const res = await decideAction(conversationId, message.id, confirm);
       onUpdated(res.data);
     } catch (err) {
-      setError(getErrorMessage(err, "Could not record your decision"));
+      const status = err?.response?.status;
+      if (err?.response?.data?.error?.code === "ACTION_DECIDED") {
+        await check(); // decided already (e.g. in another tab): show what happened
+        return;
+      }
+      if (!err?.response || status >= 500) {
+        setUncertain(true);
+        setError("We couldn't confirm whether this went through.");
+      } else {
+        setError(getErrorMessage(err, "Could not record your decision"));
+      }
     } finally {
       setBusy(null);
     }
@@ -109,25 +136,60 @@ function ActionCard({ message, conversationId, onUpdated }) {
       )}
       {action.status === "pending" ? (
         <div className="ai-action-buttons">
-          <button type="button" className="small-button" disabled={busy !== null} onClick={() => decide(true)}>
-            {busy === true ? kind.busy : kind.yes}
-          </button>
-          <button type="button" className="secondary small-button" disabled={busy !== null} onClick={() => decide(false)}>
-            {kind.no}
-          </button>
+          {uncertain ? (
+            <button type="button" className="small-button" disabled={busy !== null} onClick={check}>
+              {busy !== null ? "Checking…" : "Check status"}
+            </button>
+          ) : (
+            <>
+              <button type="button" className="small-button" disabled={busy !== null} onClick={() => decide(true)}>
+                {busy === true ? kind.busy : kind.yes}
+              </button>
+              <button type="button" className="secondary small-button" disabled={busy !== null} onClick={() => decide(false)}>
+                {kind.no}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <p className="ai-action-result" role="status">
           <CalendarCheck size={15} aria-hidden="true" /> {actionResult(action)}
         </p>
       )}
-      {error && <p className="field-error">{error}</p>}
+      {error && (
+        <p className="field-error" role="status">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
 // The short medical note the assistant puts first on treatment questions (D104), shown subtly.
 const DISCLAIMER = "AI can make mistakes. Please consult a doctor for medical advice.";
+
+// A question that failed (D108): what happened in one line, Try again when it can help.
+function FailureCard({ failure, sending, onRetry, onDismiss }) {
+  return (
+    <li className="ai-failure" role="alert">
+      <CircleAlert size={18} aria-hidden="true" />
+      <div>
+        <strong>{failure.title}</strong>
+        <p>{failure.message}</p>
+        <div className="ai-failure-actions">
+          {failure.retry && (
+            <button type="button" className="small-button" disabled={sending} onClick={onRetry}>
+              <RotateCw size={14} aria-hidden="true" /> Try again
+            </button>
+          )}
+          <button type="button" className="secondary small-button" onClick={onDismiss}>
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </li>
+  );
+}
 
 // Memoised: while an answer streams, only the streaming message re-renders (and re-parses its Markdown).
 const Message = memo(function Message({ message, conversationId, onUpdated, documents, canBook, ownRecord, onAsk }) {
@@ -157,6 +219,7 @@ const Message = memo(function Message({ message, conversationId, onUpdated, docu
             <SafeMarkdown text={message.content.startsWith(DISCLAIMER) ? message.content.slice(DISCLAIMER.length).trim() : message.content} />
           </>
         )}
+        {message.incomplete && <p className="ai-msg-note">Response interrupted</p>}
         {message.document_ids?.length > 0 && (
           <ul className="ai-msg-files" aria-label="Attached files">
             {message.document_ids.map((id) => (
@@ -168,6 +231,7 @@ const Message = memo(function Message({ message, conversationId, onUpdated, docu
         )}
         {message.results?.length > 0 && <AssistantResults results={message.results} canBook={canBook} ownRecord={ownRecord} onAsk={onAsk} />}
         {message.action && <ActionCard message={message} conversationId={conversationId} onUpdated={onUpdated} />}
+        {message.failed && <p className="ai-msg-note">Not sent</p>}
         {!message.streaming && (
           <div className="ai-msg-meta">
             {message.created_at && <time dateTime={message.created_at}>{time(message.created_at)}</time>}
@@ -299,6 +363,9 @@ export default function AssistantPanel({ assistant, onClose }) {
     removeAttachment,
     retryAttachment,
     send,
+    failure,
+    retry,
+    dismissFailure,
     stop,
     newConversation,
     openConversation,
@@ -318,7 +385,7 @@ export default function AssistantPanel({ assistant, onClose }) {
   const lastLength = messages.at(-1)?.content?.length ?? 0;
   useEffect(() => {
     list.current?.scrollTo?.({ top: list.current.scrollHeight });
-  }, [messages.length, lastLength]);
+  }, [messages.length, lastLength, failure]);
 
   const configured = status?.configured;
   const documentsEnabled = Boolean(status?.documents_enabled);
@@ -408,6 +475,7 @@ export default function AssistantPanel({ assistant, onClose }) {
               {messages.map((m) => (
                 <Message key={m.id} message={m} conversationId={conversationId} onUpdated={updateMessage} documents={documents} canBook={canBook} ownRecord={ownRecord} onAsk={sending ? undefined : ask} />
               ))}
+              {failure && <FailureCard failure={failure} sending={sending} onRetry={retry} onDismiss={dismissFailure} />}
             </ul>
           )}
         </div>

@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Alert from "../components/Alert";
 import AppointmentTabs from "../components/appointments/AppointmentTabs";
+import FollowUpPanel from "../components/appointments/FollowUpPanel";
 import Avatar from "../components/Avatar";
 import Breadcrumb from "../components/Breadcrumb";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -432,6 +433,7 @@ export default function AppointmentDetail() {
           <Link to={`/doctors/${a.doctor.id}`} className="button secondary block">
             View Doctor Profile <ArrowRight size={16} aria-hidden="true" />
           </Link>
+          <FollowUpPanel appointmentId={a.id} doctorId={a.doctor.id} />
         </section>
       </div>
 
