@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://clinic-api.onrender.com/api/:path*"
+      "destination": "https://ai-clinic-assistant-izzz.onrender.com/api/:path*"
     },
     {
       "source": "/((?!api/|assets/).*)",
