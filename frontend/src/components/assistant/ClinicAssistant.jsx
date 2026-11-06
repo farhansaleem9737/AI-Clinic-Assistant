@@ -170,7 +170,15 @@ export default function ClinicAssistant() {
     const startedAt = Date.now();
     const done = (result) => {
       setConversationId(result.conversation.id);
-      setMessages((list) => [...list.filter((m) => m.id !== optimistic.id && m.id !== STREAM_ID), result.user_message, result.assistant_message]);
+      // A typed "yes" decides the earlier proposal: show its new state there too (D115).
+      const decision = result.assistant_message.results?.find((card) => card.kind === "decision");
+      setMessages((list) => [
+        ...list
+          .filter((m) => m.id !== optimistic.id && m.id !== STREAM_ID)
+          .map((m) => (decision && m.id === decision.message_id ? { ...m, action: decision.action } : m)),
+        result.user_message,
+        result.assistant_message,
+      ]);
       files.forEach(dropPreview);
     };
     try {

@@ -30,7 +30,17 @@ export const FEE_RANGES = [
   { value: "200-plus", label: "200+", min: "200" },
 ];
 
-export const EMPTY_FILTERS = { q: "", department: "", specialization: "", min_experience: "", fee: "" };
+// `specializations`: catalog specialization ids (D118), any of them matches.
+// `specialization`: the older free-text filter, still honoured from shared links.
+export const EMPTY_FILTERS = { q: "", department: "", specializations: [], specialization: "", min_experience: "", fee: "" };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const idList = (value) => [...new Set((value ?? "").split(",").map((v) => v.trim()).filter((v) => UUID.test(v)))].slice(0, 20);
+
+/** How many filters are applied (for the mobile "Filters (n)" button). */
+export const activeFilterCount = (filters) =>
+  ["q", "department", "specialization", "min_experience", "fee"].filter((k) => String(filters[k] ?? "").trim()).length +
+  (filters.specializations?.length ?? 0);
 
 const known = (options, value) => (options.some((o) => o.value === value) ? value : "");
 
@@ -41,6 +51,7 @@ export function readDirectoryState(searchParams) {
     filters: {
       q: searchParams.get("q") ?? "",
       department: searchParams.get("department") ?? "",
+      specializations: idList(searchParams.get("specializations")),
       specialization: searchParams.get("specialization") ?? "",
       min_experience: known(EXPERIENCE_OPTIONS, searchParams.get("min_experience") ?? ""),
       fee: known(FEE_RANGES, searchParams.get("fee") ?? ""),
@@ -55,6 +66,10 @@ export function readDirectoryState(searchParams) {
 export function directorySearchParams({ filters, sort, page, view }) {
   const params = {};
   for (const [key, value] of Object.entries(filters)) {
+    if (Array.isArray(value)) {
+      if (value.length) params[key] = value.join(",");
+      continue;
+    }
     const trimmed = typeof value === "string" ? value.trim() : value;
     if (trimmed) params[key] = trimmed;
   }
@@ -69,6 +84,7 @@ export function directoryApiParams({ filters, sort, page }) {
   const params = { page, page_size: PAGE_SIZE, sort };
   if (filters.q.trim()) params.q = filters.q.trim();
   if (filters.department) params.department_id = filters.department;
+  if (filters.specializations?.length) params.specializations = filters.specializations.join(",");
   if (filters.specialization) params.specialization = filters.specialization;
   if (filters.min_experience) params.min_experience = filters.min_experience;
   const range = FEE_RANGES.find((r) => r.value === filters.fee);

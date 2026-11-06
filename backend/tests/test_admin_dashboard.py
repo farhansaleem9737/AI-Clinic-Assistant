@@ -66,7 +66,7 @@ async def test_doctor_applicants_are_users_but_not_doctors(client, clinic):
     before = kpis((await client.get(URL, headers=admin)).json())
     registered = await client.post(
         "/api/v1/auth/register",
-        json={"account_type": "doctor", "name": "Dr Pending", "email": "pending@example.com", "password": "pw-123456"},
+        json={"account_type": "doctor", "name": "Dr Pending", "email": "pending@example.com", "password": "pw-123456", "date_of_birth": "1985-03-02", "gender": "female"},
     )
     assert registered.status_code == 201
     after = kpis((await client.get(URL, headers=admin)).json())

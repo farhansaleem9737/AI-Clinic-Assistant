@@ -1,4 +1,5 @@
 from sqlalchemy import Boolean, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -9,6 +10,12 @@ class Department(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "departments"
 
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # Catalog key (D118), e.g. "cardiology"; set when the department is the
+    # catalog's entry (created by it, or matched by name or alias). NULL for
+    # clinic-specific departments outside the catalog.
+    slug: Mapped[str | None] = mapped_column(String(120), unique=True)
+    # Other names people use ("ENT", "Otolaryngology"), lower case.
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
     description: Mapped[str | None] = mapped_column(String(500))
     # IANA name. Recurring schedules of this department's doctors are expanded
     # in this timezone.

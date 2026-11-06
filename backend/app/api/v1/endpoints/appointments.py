@@ -21,6 +21,8 @@ from app.schemas.appointment import (
     AppointmentStaffDetailRead,
     AppointmentStaffRead,
     AppointmentUpdate,
+    NextAvailable,
+    NextAvailableSlot,
     Reschedule,
     StatusChange,
     StatusHistoryRead,
@@ -83,11 +85,22 @@ def _fields(view: AppointmentView) -> dict:
         can_reschedule=view.can_reschedule,
         created_at=a.created_at,
         updated_at=a.updated_at,
+        duration_minutes=int((a.ends_at - a.starts_at).total_seconds() // 60),
+        token_number=view.token_number,
+        queue_state=view.queue_state,
+        booking_mode=a.booking_mode,
+        queue_position=view.queue_position,
     )
 
 
 def _staff_fields(view: AppointmentView) -> dict:
-    return dict(staff_notes=view.appointment.staff_notes, booked_by_user_id=view.appointment.booked_by_user_id)
+    a = view.appointment
+    return dict(
+        staff_notes=a.staff_notes,
+        booked_by_user_id=a.booked_by_user_id,
+        capacity_exception=(a.capacity_lane or 0) > 0,
+        override_reason=a.override_reason,
+    )
 
 
 def to_response(view: AppointmentView, principal: Principal) -> AppointmentRead:
@@ -174,6 +187,36 @@ async def count_appointments_by_day(
     filters apply; date_from/date_to and scope are ignored."""
     counts = await appointment_service.count_by_day(db, principal, filters, day)
     return AppointmentDayCounts(**counts.__dict__)
+
+
+@router.get("/next-available", response_model=NextAvailable)
+async def next_available(
+    doctor_id: uuid.UUID,
+    on: date = Query(alias="date", description="The doctor's local date"),
+    patient_id: uuid.UUID | None = Query(None, description="Staff: skip times this patient is already booked"),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_any_permission(Perm.appointment_create, Perm.appointment_create_own)),
+):
+    """Automatic token booking (D120): the earliest free time with the doctor
+    on that date and its estimated place in the day. Reserves nothing; book it
+    with POST / and booking_mode "auto"."""
+    patient = None
+    if patient_id is not None or not principal.has(Perm.appointment_create):
+        patient = await appointment_service.resolve_patient(db, principal, patient_id)
+    result = await appointment_service.next_available(
+        db, principal, doctor_id, on, patient_id=patient.id if patient else None
+    )
+    return NextAvailable(
+        doctor_id=result.doctor_id,
+        date=result.day,
+        timezone=result.timezone,
+        slot=NextAvailableSlot(starts_at=result.slot.starts_at, ends_at=result.slot.ends_at) if result.slot else None,
+        queue_position=result.queue_position,
+        consultation_minutes=result.consultation_minutes,
+        booked_count=result.booked_count,
+        free_count=result.free_count,
+        next_date=result.next_date,
+    )
 
 
 @router.post("/", response_model=ResponseModel, status_code=status.HTTP_201_CREATED)

@@ -1,3 +1,5 @@
+import { withoutLinks } from "../../utils/assistant";
+
 // A deliberately small Markdown subset rendered as React elements: paragraphs,
 // bullet and numbered lists, headings, **bold**, *italic* and `code`. Text is
 // never parsed as HTML (no dangerouslySetInnerHTML), so model output cannot
@@ -29,7 +31,7 @@ export default function SafeMarkdown({ text }) {
     if (list) blocks.push(list);
     list = null;
   };
-  (text ?? "").split(/\r?\n/).forEach((raw, index) => {
+  withoutLinks(text).split(/\r?\n/).forEach((raw, index) => {
     const line = raw.trimEnd();
     const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);

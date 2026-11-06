@@ -20,6 +20,7 @@ import {
 } from "../services/scheduleService";
 import { formatMonthDay, isoDateIn, timeZoneLabel } from "../utils/datetime";
 import { doctorName } from "../utils/format";
+import SchedulingPolicyCard from "../components/schedule/SchedulingPolicyCard";
 
 // A refused schedule change as one readable sentence (no patient details: the
 // API sends only the doctor's own dates).
@@ -232,6 +233,13 @@ export default function DoctorSchedule() {
               }}
             />
           </div>
+          {/* D117: the doctor controls how times are offered and how the queue runs. */}
+          <SchedulingPolicyCard
+            key={`policy-${doctorId}`}
+            doctorId={doctorId}
+            canEdit={doctorId === user.doctor_id || (can("schedule:manage_any") && can("settings:manage"))}
+            onSaved={setNotice}
+          />
         </>
       )}
 

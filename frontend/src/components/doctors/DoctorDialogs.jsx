@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getErrorMessage } from "../../services/api";
+import { getDoctorSpecializations, setDoctorSpecializations } from "../../services/catalogService";
 import { createDoctor, deactivateDoctor, getDoctor, getDoctorCareer, updateDoctor } from "../../services/doctorService";
 import { ACCOUNT_FIELDS, experienceLabel, fromDoctor, PROFILE_FIELDS, professionalPayload, validateDoctor } from "../../utils/adminDoctors";
 import { doctorName, formatFee } from "../../utils/format";
@@ -8,6 +9,7 @@ import Alert from "../Alert";
 import Avatar from "../Avatar";
 import ConfirmDialog from "../ConfirmDialog";
 import FormField from "../FormField";
+import SpecializationPicker from "./SpecializationPicker";
 
 function Input({ id, label, error, form, setForm, field, ...rest }) {
   return (
@@ -36,6 +38,39 @@ export function DoctorFormDialog({ doctor, departments, onClose, onSaved }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const p = { form, setForm };
+  // Catalog specializations (D118): of the chosen department only, saved after the profile.
+  const [specIds, setSpecIds] = useState([]);
+  const [savedSpecIds, setSavedSpecIds] = useState([]);
+  const [known, setKnown] = useState({});
+  useEffect(() => {
+    if (creating) return undefined;
+    let live = true;
+    getDoctorSpecializations(doctor.id)
+      .then((res) => {
+        if (!live) return;
+        const ids = res.data.map((x) => x.id);
+        setSpecIds(ids);
+        setSavedSpecIds(ids);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [creating, doctor]);
+  const changeDepartment = (department_id) => {
+    setForm({ ...form, department_id });
+    setSpecIds((ids) => ids.filter((id) => known[id]?.department_ids?.includes(department_id)));
+  };
+  const saveSpecializations = async (doctorId) => {
+    const same = specIds.length === savedSpecIds.length && specIds.every((id) => savedSpecIds.includes(id));
+    if (same) return "";
+    try {
+      await setDoctorSpecializations(doctorId, specIds);
+      return "";
+    } catch (err) {
+      return ` Specializations were not saved: ${getErrorMessage(err)}`;
+    }
+  };
 
   const save = async () => {
     const found = validateDoctor(form, { creating });
@@ -59,10 +94,11 @@ export function DoctorFormDialog({ doctor, departments, onClose, onSaved }) {
             note = ` It could not be set inactive: ${getErrorMessage(err)}`;
           }
         }
+        note += await saveSpecializations(res.data.id);
         onSaved(`Added ${doctorName(res.data)}.${note}`);
       } else {
         const res = await updateDoctor(doctor.id, professional);
-        onSaved(`Saved ${doctorName(res.data)}.`);
+        onSaved(`Saved ${doctorName(res.data)}.${await saveSpecializations(doctor.id)}`);
       }
     } catch (err) {
       const code = err?.response?.data?.error?.code;
@@ -110,7 +146,7 @@ export function DoctorFormDialog({ doctor, departments, onClose, onSaved }) {
             <select
               id="doc-department"
               value={form.department_id}
-              onChange={(e) => setForm({ ...form, department_id: e.target.value })}
+              onChange={(e) => changeDepartment(e.target.value)}
               aria-invalid={errors.department_id ? true : undefined}
             >
               <option value="">Select department</option>
@@ -127,6 +163,21 @@ export function DoctorFormDialog({ doctor, departments, onClose, onSaved }) {
           <Input id="doc-phone" label="Phone (internal)" error={errors.phone} field="phone" maxLength={30} {...p} />
           <Input id="doc-room" label="Room" field="room_number" maxLength={20} {...p} />
           <Input id="doc-languages" label="Languages" field="languages" maxLength={200} placeholder="e.g. English, Urdu" {...p} />
+        </div>
+        <div className="doctor-spec-field">
+          {form.department_id ? (
+            <SpecializationPicker
+              departmentId={form.department_id}
+              selected={specIds}
+              onChange={setSpecIds}
+              onLoaded={(list) => setKnown((k) => ({ ...k, ...Object.fromEntries(list.map((x) => [x.id, x])) }))}
+            />
+          ) : (
+            <p className="muted small">Choose a department to pick catalog specializations.</p>
+          )}
+          <p className="muted small">
+            Only what the doctor's verified training supports. The specialization text above is what profiles show.
+          </p>
         </div>
         <Input id="doc-qualifications" label="Qualifications" field="qualifications" maxLength={500} placeholder="e.g. MBBS, FCPS (Cardiology)" {...p} />
         <FormField id="doc-bio" label="Professional biography">

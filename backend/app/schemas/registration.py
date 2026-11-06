@@ -8,8 +8,9 @@ closed list here, and neither of them grants staff or verified-doctor access.
 
 from typing import Annotated, Any
 
-from pydantic import Discriminator, Tag
+from pydantic import BaseModel, Discriminator, Tag
 
+from app.schemas.common import LoginEmail
 from app.schemas.doctor_application import DoctorRegistration
 from app.schemas.patient import PatientRegistration
 
@@ -28,3 +29,7 @@ RegistrationRequest = Annotated[
         custom_error_message="account_type must be 'patient' or 'doctor'",
     ),
 ]
+
+
+class VerificationCodeRequest(BaseModel):
+    email: LoginEmail

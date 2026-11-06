@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 import Alert from "./Alert";
 
@@ -5,7 +6,21 @@ import Alert from "./Alert";
  * A small modal confirmation. Focus moves into it, Escape cancels, and focus
  * goes back to whatever opened it when it closes.
  */
-export default function ConfirmDialog({ title, children, confirmLabel, cancelLabel = "Cancel", danger, busy, error, onConfirm, onCancel, className = "" }) {
+export default function ConfirmDialog({
+  title,
+  description,
+  showClose = false,
+  children,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  danger,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+  className = "",
+}) {
+  const descriptionId = useId();
   const titleId = useId();
   const dialog = useRef(null);
 
@@ -38,8 +53,26 @@ export default function ConfirmDialog({ title, children, confirmLabel, cancelLab
 
   return (
     <div className="dialog-backdrop">
-      <div ref={dialog} className={`card dialog ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown}>
+      <div
+        ref={dialog}
+        className={`card dialog ${className}`.trim()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        onKeyDown={onKeyDown}
+      >
         <h2 id={titleId}>{title}</h2>
+        {showClose && (
+          <button type="button" className="icon-button dialog-close" aria-label="Close" onClick={onCancel} disabled={busy}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        )}
+        {description && (
+          <p id={descriptionId} className="muted dialog-description">
+            {description}
+          </p>
+        )}
         {children}
         <Alert>{error}</Alert>
         <div className="row dialog-actions">

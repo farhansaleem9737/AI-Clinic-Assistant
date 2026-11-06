@@ -63,6 +63,7 @@ const AFFECTS = {
   "schedule-exceptions": ["schedule", "availability", "dashboard"],
   doctors: ["doctors", "schedule", "availability", "dashboard", "departments", "specializations", "profile"],
   departments: ["departments", "doctors", "specializations", "dashboard"],
+  specializations: ["specializations", "departments", "doctors"],
   patients: ["patients", "profile", "appointments", "dashboard"],
   users: ["users", "doctors", "patients", "dashboard"],
   admin: ["users", "dashboard"],

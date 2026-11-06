@@ -9,6 +9,7 @@ import EmptyState from "../components/EmptyState";
 import NumberedPager from "../components/NumberedPager";
 import DateRangeFilter from "../components/patients/DateRangeFilter";
 import StatusBadge from "../components/StatusBadge";
+import QueuePanel from "../components/queue/QueuePanel";
 import { useAuth } from "../context/useAuth";
 import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
@@ -226,6 +227,9 @@ export default function ReceptionAppointments() {
           </Link>
         )}
       </header>
+
+      {/* D117: today's sessions, the queue, walk-ins and audited overrides. */}
+      {can("appointment:check_in") && <QueuePanel role="staff" canOverride={can("appointment:override")} />}
 
       <div className="card ra-toolbar ra-filter-card">
         <div className="appt-search ra-search">

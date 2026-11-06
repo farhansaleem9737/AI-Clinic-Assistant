@@ -1,30 +1,23 @@
-import { Camera, HeartPulse, Info, Pencil, Phone, UserRound } from "lucide-react";
+import { PhoneCall, UserRound } from "lucide-react";
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import Alert from "../components/Alert";
-import PatientDocuments from "../components/documents/PatientDocuments";
-import EditDetailsDialog from "../components/patient-profile/EditDetailsDialog";
-import InfoCard from "../components/patient-profile/InfoCard";
-import ProfileSummary from "../components/patient-profile/ProfileSummary";
 import PatientFields from "../components/PatientFields";
-import PhotoUploader from "../components/PhotoUploader";
+import ContactSection from "../components/patient-profile/ContactSection";
+import PersonalSection from "../components/patient-profile/PersonalSection";
 import { useAuth } from "../context/useAuth";
 import { useFetch } from "../hooks/useFetch";
 import { getErrorMessage } from "../services/api";
 import { getDashboardSummary } from "../services/dashboardService";
-import {
-  completeMyPatientProfile,
-  getMyPatientProfile,
-  removeMyPatientPhoto,
-  uploadMyPatientPhoto,
-} from "../services/patientService";
-import { formatCalendarDate } from "../utils/datetime";
-import { EMPTY_PATIENT, SEX_LABELS, ageFromDateOfBirth, patientFullName, patientPayload } from "../utils/patient";
+import { completeMyPatientProfile, getMyPatientProfile } from "../services/patientService";
+import { EMPTY_PATIENT, patientPayload } from "../utils/patient";
 
-const TABS = [
-  { id: "personal", label: "Personal Information" },
-  { id: "contact", label: "Contact Information" },
-  { id: "medical", label: "Medical Information" },
-];
+// Two sections at their own addresses (the sidebar links to them, D110/D111);
+// Medical Information is its own page.
+const SECTIONS = {
+  personal: { title: "Personal Information", text: "Your basic details and identity information.", icon: UserRound },
+  contact: { title: "Contact Information", text: "Your contact details to stay connected and receive important updates.", icon: PhoneCall },
+};
 
 // Active only when both the login and the patient record are active. The
 // patient's own profile response deliberately omits `is_active`, so the
@@ -34,120 +27,18 @@ function accountStatus(summary) {
   return { active: summary.account.is_active && summary.patient.profile_active };
 }
 
-function PageHead() {
+function PageHead({ section }) {
+  const { title, text, icon: Icon } = SECTIONS[section];
   return (
-    <header className="page-head">
+    <header className="pp-head">
+      <span className="pp-head-icon" aria-hidden="true">
+        <Icon size={28} />
+      </span>
       <div>
-        <h1>My Profile</h1>
-        <p className="muted">Manage your personal and healthcare information.</p>
+        <h1>{title}</h1>
+        <p className="muted">{text}</p>
       </div>
     </header>
-  );
-}
-
-const SAVED = {
-  personal: "Your personal details were saved",
-  contact: "Your contact details were saved",
-  all: "Your profile was saved",
-};
-
-function EditButton({ label, onClick }) {
-  return (
-    <button type="button" className="secondary small-button" onClick={onClick} aria-label={label}>
-      <Pencil size={15} aria-hidden="true" /> Edit
-    </button>
-  );
-}
-
-function PersonalCard({ profile, onEdit }) {
-  const age = ageFromDateOfBirth(profile.date_of_birth);
-  const born = profile.date_of_birth && formatCalendarDate(profile.date_of_birth);
-  return (
-    <InfoCard
-      title="Personal Information"
-      icon={UserRound}
-      rows={[
-        { label: "Full Name", value: patientFullName(profile) },
-        { label: "Date of Birth", value: born && (age === null ? born : `${born} (${age} years)`) },
-        { label: "Gender", value: SEX_LABELS[profile.sex_at_birth] },
-        { label: "Medical Record Number", value: profile.mrn },
-      ]}
-      action={<EditButton label="Edit personal details" onClick={onEdit} />}
-      footnote="Your medical record number is assigned by the clinic and cannot be changed."
-    />
-  );
-}
-
-function ContactCard({ profile, onEdit }) {
-  return (
-    <InfoCard
-      title="Contact Information"
-      icon={Phone}
-      rows={[
-        { label: "Phone", value: profile.phone },
-        { label: "Email", value: profile.email },
-        { label: "Address", value: profile.address },
-        { label: "Preferred Language", value: profile.preferred_language },
-      ]}
-      action={<EditButton label="Edit contact details" onClick={onEdit} />}
-    />
-  );
-}
-
-function MedicalPanel({ profile, can }) {
-  return (
-    <>
-      <section className="card info-card" aria-labelledby="medical-info-title">
-        <div className="section-head">
-          <HeartPulse className="icon" size={22} aria-hidden="true" />
-          <h3 id="medical-info-title">Medical Information</h3>
-        </div>
-        <p className="muted">
-          Diagnoses, allergies, medications and other clinical records are not available in the app yet. Your
-          reports and other documents are listed below.
-        </p>
-      </section>
-      {can("document:read_own") && (
-        <PatientDocuments
-          patientId={profile.id}
-          canUpload={can("document:upload_own")}
-          retract={can("document:retract_own") ? "own" : undefined}
-        />
-      )}
-    </>
-  );
-}
-
-// Keyboard-operable tabs (arrow keys, Home, End), as on the other pages.
-function ProfileTabs({ active, onChange }) {
-  const onKeyDown = (event) => {
-    const index = TABS.findIndex((t) => t.id === active);
-    const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: TABS.length - 1 }[event.key];
-    if (next === undefined) return;
-    event.preventDefault();
-    const target = TABS[(next + TABS.length) % TABS.length];
-    onChange(target.id);
-    document.getElementById(`profile-tab-${target.id}`)?.focus();
-  };
-
-  return (
-    <div className="card tab-strip" role="tablist" aria-label="Profile sections" onKeyDown={onKeyDown}>
-      {TABS.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role="tab"
-          id={`profile-tab-${t.id}`}
-          aria-selected={active === t.id}
-          aria-controls="profile-tab-panel"
-          tabIndex={active === t.id ? 0 : -1}
-          className={active === t.id ? "active" : ""}
-          onClick={() => onChange(t.id)}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -186,22 +77,23 @@ function CompleteProfile({ onCreated }) {
 
 function LoadingProfile() {
   return (
-    <div role="status" aria-label="Loading your profile">
-      <div className="card skeleton" style={{ height: 180 }} />
-      <div className="card skeleton" style={{ height: 56 }} />
-      <div className="profile-layout">
-        <div className="card skeleton" style={{ height: 260 }} />
-        <div className="card skeleton" style={{ height: 260 }} />
-      </div>
+    <div className="pp-layout" role="status" aria-label="Loading your profile">
+      <div className="card skeleton" style={{ height: 320 }} />
+      <div className="card skeleton" style={{ height: 320 }} />
     </div>
   );
 }
 
+/**
+ * The patient's own profile (D111): Personal Information at /profile and
+ * Contact Information at /profile/contact, from the real record; changes are
+ * saved through PATCH /patients/me and shown once the server has them.
+ */
 export default function MyPatientProfile() {
-  const { fetchCurrentUser, can } = useAuth();
+  const { user, fetchCurrentUser } = useAuth();
+  const { pathname } = useLocation();
+  const section = pathname.startsWith("/profile/contact") ? "contact" : "personal";
   const [attempt, setAttempt] = useState(0);
-  const [tab, setTab] = useState("personal");
-  const [editing, setEditing] = useState(null); // "personal" | "contact" | "all"
   const [notice, setNotice] = useState("");
 
   // Shared with the dashboard's profile card and status (D107).
@@ -219,103 +111,50 @@ export default function MyPatientProfile() {
   const loadError = missing ? "" : loaded.error;
   const status = summary.data ? accountStatus(summary.data) : null;
 
-  const retry = () => setAttempt((n) => n + 1);
-
-  const onCreated = async (created) => {
-    setProfile(created);
+  const onCreated = async (record) => {
+    setProfile(record);
     setCreated(true);
     setNotice("Profile saved");
     await fetchCurrentUser(); // picks up the new patient_id
     setAttempt((n) => n + 1); // and the account status that goes with it
   };
-
-  const onSaved = (updated, section) => {
+  // The top bar shows the account's name and photo: refresh them after a change.
+  const onSaved = (updated, message) => {
     setProfile(updated);
-    setEditing(null);
-    setNotice(SAVED[section]);
+    setNotice(message);
+    fetchCurrentUser().catch(() => {});
   };
 
   if (missing) {
     return (
-      <div className="my-profile">
-        <PageHead />
+      <div className="pp-page">
+        <PageHead section={section} />
         <CompleteProfile onCreated={onCreated} />
       </div>
     );
   }
 
-  if (!profile) {
-    return (
-      <div className="my-profile">
-        <PageHead />
-        {loadError ? (
+  return (
+    <div className="pp-page">
+      <PageHead section={section} />
+      <div aria-live="polite">
+        <Alert kind="success">{notice}</Alert>
+      </div>
+      {!profile ? (
+        loadError ? (
           <div className="card" role="alert">
             <p>{loadError}</p>
-            <button type="button" className="secondary" onClick={retry}>
+            <button type="button" className="secondary" onClick={() => setAttempt((n) => n + 1)}>
               Try again
             </button>
           </div>
         ) : (
           <LoadingProfile />
-        )}
-      </div>
-    );
-  }
-
-  const name = patientFullName(profile);
-  const openEditor = (section) => () => {
-    setNotice("");
-    setEditing(section);
-  };
-
-  return (
-    <div className="my-profile">
-      <PageHead />
-      <Alert kind="success">{notice}</Alert>
-
-      <ProfileSummary profile={profile} status={status} onEdit={openEditor("all")} />
-      <ProfileTabs active={tab} onChange={setTab} />
-
-      <div className="profile-layout">
-        <div className="profile-main" id="profile-tab-panel" role="tabpanel" aria-labelledby={`profile-tab-${tab}`}>
-          {tab === "personal" && (
-            <>
-              <PersonalCard profile={profile} onEdit={openEditor("personal")} />
-              <ContactCard profile={profile} onEdit={openEditor("contact")} />
-            </>
-          )}
-          {tab === "contact" && <ContactCard profile={profile} onEdit={openEditor("contact")} />}
-          {tab === "medical" && <MedicalPanel profile={profile} can={can} />}
-        </div>
-
-        <aside className="profile-side" aria-label="Profile picture and tips">
-          <section className="card photo-card" aria-labelledby="profile-picture-title">
-            <div className="section-head">
-              <Camera className="icon" size={22} aria-hidden="true" />
-              <h3 id="profile-picture-title">Profile Picture</h3>
-            </div>
-            <PhotoUploader
-              layout="stacked"
-              name={name}
-              photoUrl={profile.photo_url}
-              onUpload={async (file) => setProfile((await uploadMyPatientPhoto(file)).data)}
-              onRemove={async () => setProfile((await removeMyPatientPhoto()).data)}
-            />
-          </section>
-          <section className="card reminder-card" aria-labelledby="profile-reminder-title">
-            <Info className="reminder-icon" size={24} aria-hidden="true" />
-            <div>
-              <h3 id="profile-reminder-title">Keep your information up to date</h3>
-              <p className="muted small">
-                Your information helps us provide better care and a smoother appointment experience.
-              </p>
-            </div>
-          </section>
-        </aside>
-      </div>
-
-      {editing && (
-        <EditDetailsDialog profile={profile} section={editing} onSaved={onSaved} onClose={() => setEditing(null)} />
+        )
+      ) : section === "personal" ? (
+        <PersonalSection profile={profile} status={status} memberSince={user?.created_at} onSaved={onSaved} onNotice={setNotice} />
+      ) : (
+        <ContactSection profile={profile} signInEmail={user?.email} onSaved={onSaved} />
       )}
     </div>
   );

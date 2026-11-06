@@ -6,6 +6,7 @@ import Avatar from "../components/Avatar";
 import Breadcrumb from "../components/Breadcrumb";
 import BookingPanel from "../components/doctors/BookingPanel";
 import ProfileTabs from "../components/doctors/ProfileTabs";
+import { AboutDialog, CareerDialog } from "../components/doctors/SectionEditDialogs";
 import { useAuth } from "../context/useAuth";
 import { useFetch } from "../hooks/useFetch";
 import { HOME_PATH } from "../routes/navigation";
@@ -36,6 +37,8 @@ export default function DoctorDetail() {
     refresh: attempt,
   });
   const bookingHeading = useRef(null);
+  const [editing, setEditing] = useState(null); // "about" | "experience" | "education"
+  const [notice, setNotice] = useState("");
 
   // "Change time" on the confirmation step links back to /doctors/:id#book.
   useEffect(() => {
@@ -65,6 +68,15 @@ export default function DoctorDetail() {
   const name = doctorName(doctor);
   const badge = STATUS[doctor.availability.status] ?? STATUS.unavailable;
   const mayBook = !user || can("appointment:create") || can("appointment:create_own");
+  // The doctor themself, or an administrator, may edit About / Experience / Education.
+  const own = !!user?.doctor_id && user.doctor_id === doctor.id && can("doctor:update_own");
+  const mayEdit = own || can("doctor:update");
+  const closeEdit = () => setEditing(null);
+  // The save refreshes this page's data (writes to /doctors/... invalidate it).
+  const saved = (message) => {
+    setEditing(null);
+    setNotice(message);
+  };
 
   return (
     <div className="doctor-profile">
@@ -75,6 +87,8 @@ export default function DoctorDetail() {
           { label: name },
         ]}
       />
+
+      <Alert kind="success">{notice}</Alert>
 
       <section className="card doctor-summary" aria-label="Summary">
         <div className="doctor-portrait">
@@ -135,9 +149,25 @@ export default function DoctorDetail() {
       </section>
 
       <div className="doctor-profile-grid">
-        <ProfileTabs doctor={doctor} name={name} />
+        <ProfileTabs
+          doctor={doctor}
+          name={name}
+          onEdit={
+            mayEdit
+              ? (section) => {
+                  setNotice("");
+                  setEditing(section);
+                }
+              : undefined
+          }
+        />
         <BookingPanel doctor={doctor} headingRef={bookingHeading} />
       </div>
+
+      {editing === "about" && <AboutDialog doctor={doctor} own={own} onClose={closeEdit} onSaved={saved} />}
+      {(editing === "experience" || editing === "education") && (
+        <CareerDialog doctorId={doctor.id} own={own} section={editing} onClose={closeEdit} onSaved={saved} />
+      )}
     </div>
   );
 }

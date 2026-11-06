@@ -124,15 +124,24 @@ Vercel Hobby is for non-commercial use; plan on Pro for a real clinic.
 
 ## 7. Phase D (optional): appointment reminders and emails
 
-The run endpoint exists only when a caller is configured. On Render use the shared secret:
+Without a scheduled run no reminders are created (in-app or email), and queued emails wait
+for the next event. The scheduler is the GitHub Actions workflow
+`.github/workflows/reminders.yml` (free for this public repository): every 15 minutes,
+06:00–22:59 Pakistan time, it calls the run endpoint with the shared secret.
 
-1. Generate one: `python -c "import secrets; print(secrets.token_urlsafe(32))"` and add it in
-   Render as `REMINDERS_CRON_SECRET`.
-2. Call it every 10 minutes from any scheduler, e.g. a Render **Cron Job** (paid, small
-   per-minute cost) running
-   `curl -fsS -X POST -H "X-Reminders-Secret: $REMINDERS_CRON_SECRET" https://<RENDER_HOST>/api/v1/internal/reminders/run`,
-   or a free external cron service / GitHub Actions schedule with the same request.
-   On the free plan each call wakes the service.
+1. Render → clinic-api → Environment: copy the generated `REMINDERS_CRON_SECRET`
+   (from `render.yaml`; for a service created before it was added, generate one with
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"` and add it).
+2. GitHub → repository → Settings → Secrets and variables → Actions → add:
+   - `REMINDERS_URL` = `https://<RENDER_HOST>/api/v1/internal/reminders/run`
+   - `REMINDERS_CRON_SECRET` = the same value as on Render
+3. GitHub → Actions → **Reminders** → *Run workflow* once. The log ends with the counts,
+   e.g. `{"appointments_checked":…,"reminders_created":…,"emails_sent":…}`.
+
+Reminder **emails** (24 h and 1 h before, to the patient) also need SMTP on Render
+(`EMAIL_BACKEND=smtp`, `EMAIL_FROM`, `SMTP_*`, docs/EMAIL.md). Without SMTP only the in-app
+reminders are created. GitHub may start scheduled runs a few minutes late; a late run still
+sends the reminder that is due. On the free plan each call wakes the service and Neon.
 
 ## 8. Security notes
 

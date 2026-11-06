@@ -200,13 +200,22 @@ async def get_user(db: AsyncSession, user_id: uuid.UUID) -> UserWithRoles:
 
 
 async def create_account(
-    db: AsyncSession, principal: Principal, *, name: str, email: str, password: str, roles: list[str]
+    db: AsyncSession,
+    principal: Principal,
+    *,
+    name: str,
+    email: str,
+    password: str,
+    roles: list[str],
+    date_of_birth: date | None = None,
+    gender: str | None = None,
 ) -> UserWithRoles:
     """Admin-created account (staff, or a patient registered at the desk)."""
     if roles and not principal.has(Perm.user_assign_role):
         raise PermissionDeniedError("Assigning roles requires the user:assign_role permission")
     _refuse_admin_grant(roles)
     user = await auth_service.create_user(db, name=name, email=email, password=password)
+    user.date_of_birth, user.gender = date_of_birth, gender
     await rbac_service.grant_roles(db, user.id, roles, granted_by=principal.user_id)
     await db.commit()
     logger.info("user_created", extra={"user_id": str(user.id), "by": str(principal.user_id), "roles": roles})

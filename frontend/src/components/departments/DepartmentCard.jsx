@@ -64,6 +64,11 @@ export default function DepartmentCard({ department: d, doctorsTo, emptyDescript
       </div>
       {status && <p className={`dept-card-description${d.description ? "" : " muted"}`}>{d.description || emptyDescription}</p>}
       <DoctorAvatarGroup count={d.doctor_count} preview={d.doctors_preview} />
+      {typeof d.specialization_count === "number" && (
+        <p className="muted small dept-card-specs">
+          {d.specialization_count} specialization{d.specialization_count === 1 ? "" : "s"}
+        </p>
+      )}
       <Link to={doctorsTo} className="button dept-view-doctors" aria-label={`View doctors in ${d.name}`}>
         View Doctors <ArrowRight size={18} aria-hidden="true" />
       </Link>

@@ -9,10 +9,13 @@ import {
   ChevronRight,
   CircleX,
   Clock,
+  Hash,
   MapPin,
   Phone,
   Stethoscope,
   Zap,
+  Ticket,
+  TriangleAlert,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -35,7 +38,7 @@ import {
   rescheduleAppointment,
   updateAppointment,
 } from "../services/appointmentService";
-import { ACTION_LABELS, CANCELLATION_REASONS, STATUS_LABELS } from "../utils/appointments";
+import { ACTION_LABELS, CANCELLATION_REASONS, STATUS_LABELS, appointmentReference } from "../utils/appointments";
 import { formatDateTime, formatLongDate, formatTime } from "../utils/datetime";
 import { doctorName } from "../utils/format";
 import { appointmentLocation, canAddToCalendar, downloadAppointmentIcs } from "../utils/ics";
@@ -293,9 +296,50 @@ export default function AppointmentDetail() {
             <Clock size={20} aria-hidden="true" />
             <span>
               {formatTime(a.starts_at, tz)} – {formatTime(a.ends_at, tz)}
-              <small>Clinic time ({tz})</small>
+              <small>
+                Clinic time ({tz}){a.duration_minutes ? ` · ${a.duration_minutes} min` : ""}
+              </small>
             </span>
           </li>
+          {/* D117: the reserved time is fixed; the actual start depends on the day's queue. */}
+          {a.token_number ? (
+            <li>
+              <Ticket size={20} aria-hidden="true" />
+              <span>
+                Token #{a.token_number}
+                <small>Your queue number today{a.queue_state ? ` · ${a.queue_state.replace("_", " ")}` : ""}</small>
+              </span>
+            </li>
+          ) : (
+            ["scheduled", "confirmed"].includes(a.status) && (
+              <li>
+                <Ticket size={20} aria-hidden="true" />
+                <span>
+                  {a.queue_position ? `Queue no. #${a.queue_position} (estimated)` : "Check in at reception when you arrive"}
+                  <small>
+                    {a.queue_position ? "Check in at reception when you arrive to get your token. " : "You get a token then; "}
+                    You are seen at or after your booked time.
+                  </small>
+                </span>
+              </li>
+            )
+          )}
+          <li>
+            <Hash size={20} aria-hidden="true" />
+            <span>
+              Reference {appointmentReference(a.id)}
+              <small>{a.booking_mode === "auto" ? "Automatic token: the next available time" : a.booking_mode === "custom" ? "Custom time" : "Booked appointment"}</small>
+            </span>
+          </li>
+          {a.capacity_exception && (
+            <li>
+              <TriangleAlert size={20} aria-hidden="true" />
+              <span>
+                Double booking
+                <small>{a.override_reason}</small>
+              </span>
+            </li>
+          )}
           {roomAndDepartment && (
             <li>
               <MapPin size={20} aria-hidden="true" />

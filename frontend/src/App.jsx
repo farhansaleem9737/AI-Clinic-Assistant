@@ -1,5 +1,8 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Suspense } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
+import ErrorBoundary from "./components/ErrorBoundary";
+import PageFallback from "./components/PageFallback";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AuthLayout from "./layouts/AuthLayout";
 import DirectoryLayout from "./layouts/DirectoryLayout";
@@ -13,13 +16,24 @@ import { PAGES, PROTECTED_ROUTES } from "./routes/pages";
 // the layouts are in the main bundle. Each layout shows a page skeleton while a
 // page's code downloads; a failed download is retried and can be tried again.
 const LAZY = { ...Object.fromEntries(Object.entries(PAGES).map(([name, load]) => [name, lazyPage(load)])), Dashboard };
-const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, LegalDocument, NotFound, Register } = LAZY;
+const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, Landing, LegalDocument, NotFound, Register } = LAZY;
 
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          {/* The public home page; it has its own header and footer. */}
+          <Route
+            path="/"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={<PageFallback />}>
+                  <Landing />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
           {/* Signed-out pages: full-screen, without the app shell. */}
           <Route element={<AuthLayout variant="login" />}>
             <Route path="/login" element={<Login />} />
@@ -31,6 +45,7 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/terms" element={<LegalDocument document="terms" />} />
             <Route path="/privacy" element={<LegalDocument document="privacy" />} />
+            <Route path="/ai-disclaimer" element={<LegalDocument document="ai" />} />
           </Route>
           {/* One branch for every page in the app shell, so signed-in users keep
               the same shell (and assistant) on every route. The directory pages
@@ -53,7 +68,6 @@ function App() {
                 />
               );
             })}
-            <Route path="/" element={<Navigate to="/doctors" replace />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

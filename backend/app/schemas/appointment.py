@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
@@ -16,6 +17,25 @@ class AppointmentCreate(BaseModel):
     patient_id: uuid.UUID | None = None
     # The patient's own words, optional. At most 500 characters.
     reason: str | None = Field(default=None, max_length=500)
+    # D120: "auto" = the time came from GET /appointments/next-available (the
+    # clinic's earliest free time, shown to the user before confirming);
+    # "custom" = a free time the user chose. Both go through the same check.
+    booking_mode: Literal["auto", "custom"] = "custom"
+
+    # Staff overrides (appointment:override, D117). Any of them takes the audited
+    # override path; patients and the assistant can never use them.
+    # A length other than the doctor's consultation length.
+    duration_minutes: int | None = Field(default=None, ge=5, le=240)
+    # Any 5-minute start within the doctor's working hours, not only a listed slot.
+    custom_time: bool = False
+    # Book into a time that is already taken, within the doctor's overbooking limit.
+    double_booking: bool = False
+    # Why: required for a double booking; recorded for every override.
+    override_reason: str | None = Field(default=None, max_length=500)
+
+    @property
+    def is_override(self) -> bool:
+        return self.duration_minutes is not None or self.custom_time or self.double_booking
 
     @field_validator("reason")
     @classmethod
@@ -98,6 +118,37 @@ class AppointmentRead(BaseModel):
     can_reschedule: bool
     created_at: datetime
     updated_at: datetime
+    # D117: the booked length, and the day's queue token once checked in.
+    duration_minutes: int = 0
+    token_number: int | None = None
+    queue_state: str | None = None
+    # D120: how the time was chosen (null before D120), and the estimated place
+    # in the doctor's day: the n-th active appointment by time. It can change
+    # when an earlier booking is cancelled or moved; the arrival token above
+    # (issued at check-in) never does.
+    booking_mode: str | None = None
+    queue_position: int | None = None
+
+
+class NextAvailableSlot(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+
+
+class NextAvailable(BaseModel):
+    """The earliest free time with a doctor on a date (D120). Nothing is held:
+    the booking re-checks it, and a conflict names the next one instead."""
+
+    doctor_id: uuid.UUID
+    date: date
+    timezone: str
+    slot: NextAvailableSlot | None
+    queue_position: int | None = None
+    consultation_minutes: int
+    booked_count: int
+    free_count: int
+    # When the date has nothing free: the next date (within the booking window) that does.
+    next_date: date | None = None
 
 
 class AppointmentStaffRead(AppointmentRead):
@@ -105,6 +156,9 @@ class AppointmentStaffRead(AppointmentRead):
 
     staff_notes: str | None
     booked_by_user_id: uuid.UUID
+    # An authorized double booking (capacity lane above 0) and why staff overrode the rules.
+    capacity_exception: bool = False
+    override_reason: str | None = None
 
 
 class AppointmentPatientProfile(BaseModel):

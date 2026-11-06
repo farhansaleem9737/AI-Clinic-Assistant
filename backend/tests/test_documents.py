@@ -65,6 +65,19 @@ async def test_download_link_is_short_lived_and_has_no_phi_in_the_name(client, s
     assert signed["content_type"] == "application/pdf"
 
 
+async def test_a_preview_link_opens_in_the_browser_and_only_for_the_owner(client, storage, clinic, cast):
+    doc = (await upload(client, cast.alice, clinic.patient_a)).json()
+    preview = await client.get(url(clinic.patient_a, doc["id"], "/download?inline=true"), headers=cast.alice)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
+    download = await client.get(url(clinic.patient_a, doc["id"], "/download"), headers=cast.alice)
+    assert download.status_code == 200
+    assert [p["inline"] for p in storage.presigned] == [True, False]  # preview shows it, download saves it
+    assert {p["content_type"] for p in storage.presigned} == {"application/pdf"}
+    # Someone else's preview does not exist for them.
+    assert (await client.get(url(clinic.patient_a, doc["id"], "/download?inline=true"), headers=cast.bob)).status_code == 404
+    assert len(storage.presigned) == 2
+
+
 @pytest.mark.parametrize("who", ["bob", "dr_b"])
 async def test_unrelated_users_get_404_everywhere(client, storage, clinic, cast, who):
     doc = (await upload(client, cast.alice, clinic.patient_a)).json()

@@ -6,6 +6,7 @@ import Avatar from "../components/Avatar";
 import Breadcrumb from "../components/Breadcrumb";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PatientDocuments from "../components/documents/PatientDocuments";
+import { PatientHealthRecords } from "../components/medical/HealthRecords";
 import InfoCard from "../components/patient-profile/InfoCard";
 import EditPatientDialog from "../components/patients/EditPatientDialog";
 import PatientAppointmentsCard from "../components/patients/PatientAppointmentsCard";
@@ -104,9 +105,10 @@ export default function PatientDetail() {
   const [statusBusy, setStatusBusy] = useState(false);
   const editing = searchParams.get("edit") === "1" && can("patient:update");
   const medicalRef = useRef(null);
-  // Medical information here means the clinical documents, which only a
-  // treating clinician may read (document:read_assigned); the API enforces it.
-  const clinical = can("document:read_assigned");
+  // Medical information (documents; allergies, diagnoses, medications) is for
+  // a treating clinician only (document/health_record:read_assigned); the API
+  // enforces it per patient.
+  const clinical = can("document:read_assigned") || can("health_record:read_assigned");
 
   useEffect(() => {
     let cancelled = false;
@@ -305,12 +307,15 @@ export default function PatientDetail() {
       )}
 
       {clinical && (
-        <div ref={medicalRef} id="pd-medical" className="pd-section">
-          <PatientDocuments
-            patientId={patient.id}
-            canUpload={can("document:upload_assigned")}
-            retract={can("document:retract_assigned") ? "any" : undefined}
-          />
+        <div ref={medicalRef} id="pd-medical" className="pd-section pd-medical">
+          {can("health_record:read_assigned") && <PatientHealthRecords patientId={patient.id} />}
+          {can("document:read_assigned") && (
+            <PatientDocuments
+              patientId={patient.id}
+              canUpload={can("document:upload_assigned")}
+              retract={can("document:retract_assigned") ? "any" : undefined}
+            />
+          )}
         </div>
       )}
 

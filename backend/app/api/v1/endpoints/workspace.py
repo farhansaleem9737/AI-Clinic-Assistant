@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_principal, require_permission
+from app.core.config import settings
+from app.core.exceptions import BusinessRuleError
 from app.core.permissions import Perm, Principal
+from app.core.rate_limit import rate_limit
+from app.core.storage import Storage, get_optional_storage
 from app.db.session import get_db
 from app.models.notification import Notification
 from app.schemas.settings import (
@@ -18,27 +22,30 @@ from app.schemas.settings import (
     NotificationPreferencesUpdate,
     NotificationRead,
     SearchAppointment,
+    SearchDepartment,
     SearchDoctor,
     SearchPatient,
     SearchResults,
     SearchUser,
     UnreadCount,
 )
+from app.services.search_text import titled_name
 from app.services import (
     appointment_service,
     doctor_service,
+    file_service,
     notification_service,
     patient_service,
+    search_service,
     settings_service,
     user_service,
 )
 from app.services.appointment_service import AppointmentFilters, AppointmentSort
 from app.services.doctor_service import DoctorFilters
 from app.services.pagination import PageParams
+from app.services.search_service import SEARCH_LIMIT
 
 router = APIRouter(tags=["workspace"])
-
-SEARCH_LIMIT = 5
 
 
 def to_notification(n: Notification) -> NotificationRead:
@@ -116,20 +123,32 @@ async def read_all_notifications(
 # ---- global search ----------------------------------------------------------------------
 
 
-@router.get("/search", response_model=SearchResults)
+@router.get(
+    "/search",
+    response_model=SearchResults,
+    dependencies=[Depends(rate_limit("global_search", lambda: settings.search_requests_per_minute))],
+)
 async def search(
     q: str = Query(min_length=2, max_length=100, description="At least two characters"),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
+    storage: Storage | None = Depends(get_optional_storage),
 ):
-    """Up to five of each kind the caller may see. Every section goes through
-    the same service (and visibility rules) as its own list page; nothing
-    clinical is returned — names, MRNs, dates and statuses only."""
-    term = q.strip()
+    """Up to five of each kind the caller may see (`search_service.categories`
+    decides which kinds). Every section goes through the same service and
+    visibility rule as its own list page; nothing clinical is returned — names,
+    MRNs, dates and statuses only. A category the caller may not search is
+    `null`, whatever the request says. One session, so the sections run one
+    after another (an AsyncSession is not safe for concurrent queries)."""
+    term = " ".join(q.split())
+    if len(term) < 2:
+        raise BusinessRuleError("Type at least two characters", code="QUERY_TOO_SHORT")
     page = PageParams(page=1, page_size=SEARCH_LIMIT)
-    results = SearchResults(query=term)
+    allowed = search_service.categories(principal)
+    results = SearchResults(query=term, categories=[c.value for c in allowed])
+    Category = search_service.Category
 
-    if principal.has_any(Perm.patient_read_any, Perm.patient_read_assigned):
+    if Category.patients in allowed:
         patients, _ = await patient_service.list_patients(db, principal, page, q=term)
         results.patients = [SearchPatient(id=p.id, name=f"{p.first_name} {p.last_name}", mrn=p.mrn) for p in patients]
 
@@ -137,13 +156,20 @@ async def search(
     results.doctors = [
         SearchDoctor(
             id=row.doctor.id,
-            name=f"{row.doctor.title} {row.name}" if row.doctor.title else row.name,
+            name=titled_name(row.doctor.title, row.name),
             specialization=row.doctor.specialization,
+            department_name=row.department_name,
+            photo_url=file_service.photo_url(storage, row.doctor.photo),
         )
         for row in doctors
     ]
 
-    if principal.has_any(Perm.appointment_read_own, Perm.appointment_read_assigned, Perm.appointment_read_any):
+    results.departments = [
+        SearchDepartment(id=d.id, name=d.name, description=d.description, icon=d.icon, color=d.color)
+        for d in await search_service.departments(db, term, SEARCH_LIMIT)
+    ]
+
+    if Category.appointments in allowed:
         views, _ = await appointment_service.list_appointments(
             db, principal, page, AppointmentFilters(q=term, sort=AppointmentSort.time_desc)
         )
@@ -159,7 +185,7 @@ async def search(
             for v in views
         ]
 
-    if principal.has(Perm.user_read):
+    if Category.users in allowed:
         users, _ = await user_service.list_users(db, page, q=term)
         results.users = [SearchUser(id=u.user.id, name=u.user.name, email=u.user.email, roles=u.roles) for u in users]
     return results

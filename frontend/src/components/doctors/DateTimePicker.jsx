@@ -6,6 +6,8 @@ import { getPublicAvailability } from "../../services/doctorService";
 import { addMonths, longDate, monthBounds, monthLabel } from "../../utils/calendar";
 import { formatSlotTime, isoDateIn, timeZoneLabel } from "../../utils/datetime";
 import Alert from "../Alert";
+import AutoTokenPanel from "../booking/AutoTokenPanel";
+import TokenRequest from "../queue/TokenRequest";
 import BookingCalendar from "./BookingCalendar";
 
 /**
@@ -24,13 +26,21 @@ import BookingCalendar from "./BookingCalendar";
  * `layout="panel"` (default) is the compact doctor-profile panel;
  * `layout="cards"` is the booking wizard's "Select a date" and "Available
  * times" cards. Both show unavailable times greyed out.
+ *
+ * The wizard (cards) books by Automatic Token by default (D120): the server
+ * assigns the earliest free time on the chosen date; "Choose custom time"
+ * shows the same day's times to pick from. A chosen slot carries `mode`
+ * ("auto" | "custom"). `patientId`: staff booking for a patient.
  */
-export default function DateTimePicker({ doctorId, selected, onSelect, refreshKey = 0, draftKey = null, layout = "panel" }) {
+export default function DateTimePicker({ doctorId, selected, onSelect, refreshKey = 0, draftKey = null, layout = "panel", patientId = null }) {
   // Open on the already-chosen time (e.g. coming back from the confirm step).
   const initialDate = selected?.timezone ? isoDateIn(selected.starts_at, selected.timezone) : null;
   const [month, setMonth] = useDraft(draftKey && `${draftKey}:month`, () => (initialDate ?? isoDateIn(new Date())).slice(0, 7));
   const [pickedDate, setPickedDate] = useDraft(draftKey && `${draftKey}:picked`, initialDate);
   const [attempt, setAttempt] = useState(0); // bumped by "Try again"
+  const [pickedHour, setPickedHour] = useState(null); // Date -> Hour -> Time (D117)
+  const [mode, setMode] = useDraft(draftKey && `${draftKey}:mode`, "auto");
+  const auto = layout === "cards" && mode === "auto";
 
   const { first, last } = monthBounds(month);
   const { data, loading, error } = useFetch(
@@ -66,7 +76,18 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
   };
   const choose = (s) => {
     setPickedDate(date);
-    onSelect({ ...s, timezone });
+    onSelect({ ...s, timezone, mode: "custom" });
+  };
+  const switchMode = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    onSelect(null); // the other way chooses its own time
+  };
+  // "See <next date>" from the automatic panel, possibly in another month.
+  const pickDate = (iso) => {
+    setMonth(iso.slice(0, 7));
+    setPickedDate(iso);
+    onSelect(null);
   };
   const retry = (
     <div className="booking-error">
@@ -88,6 +109,7 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
       onMonthChange={changeMonth}
       onSelect={(d) => {
         setPickedDate(d);
+        setPickedHour(null);
         onSelect(null);
       }}
     />
@@ -100,6 +122,17 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
         ...(byDate[date].unavailable ?? []).map((s) => ({ ...s, free: false })),
       ].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))
     : [];
+
+  // The day's times by clock hour: pick an hour, then a time within it.
+  const hourOf = (s) => new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hourCycle: "h23" }).format(new Date(s.starts_at));
+  const hours = [...new Set(board.map(hourOf))];
+  const freeIn = (h) => board.filter((s) => s.free && hourOf(s) === h).length;
+  const hour =
+    pickedHour && hours.includes(pickedHour)
+      ? pickedHour
+      : (slot && hourOf(slot)) || hours.find((h) => freeIn(h) > 0) || hours[0];
+  const hourLabel = (h) => new Intl.DateTimeFormat("en-US", { hour: "numeric" }).format(new Date(2000, 0, 1, Number(h)));
+  const fifo = current?.scheduling_mode === "fifo";
 
   const emptyMonthMessage = (
     <div className="booking-empty">
@@ -147,9 +180,13 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
           <div className="card-title">
             <Clock className="icon" size={26} aria-hidden="true" />
             <div>
-              <h3 id="pick-time-title">Available times</h3>
+              <h3 id="pick-time-title">{fifo ? "Get a token" : auto ? "Your appointment time" : "Available times"}</h3>
               <p className="muted">
-                {date ? (
+                {fifo ? (
+                  "Seen in arrival order."
+                ) : auto ? (
+                  "We'll assign the next available appointment time."
+                ) : date ? (
                   <>
                     Select a time slot for <span className="accent-text">{longDate(date)}</span>.
                   </>
@@ -159,17 +196,70 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
               </p>
             </div>
           </div>
+          {!fifo && (
+            <div className="booking-mode" role="radiogroup" aria-label="How to choose the time">
+              <label className={auto ? "booking-mode-option selected" : "booking-mode-option"}>
+                <input type="radio" name="booking-mode" value="auto" checked={auto} onChange={() => switchMode("auto")} />
+                <span>
+                  <strong>Automatic token</strong>
+                  <small>Next available time</small>
+                </span>
+              </label>
+              <label className={!auto ? "booking-mode-option selected" : "booking-mode-option"}>
+                <input type="radio" name="booking-mode" value="custom" checked={!auto} onChange={() => switchMode("custom")} />
+                <span>
+                  <strong>Choose custom time</strong>
+                  <small>Pick from the free times</small>
+                </span>
+              </label>
+            </div>
+          )}
           {error ? null : loading ? (
             <p className="muted small" role="status">
               Loading available times…
             </p>
+          ) : fifo ? (
+            <TokenRequest doctorId={doctorId} today={today} lastDay={current.bookable_until} />
           ) : emptyMonth ? (
             emptyMonthMessage
+          ) : auto ? (
+            date ? (
+              <AutoTokenPanel
+                doctorId={doctorId}
+                date={date}
+                patientId={patientId}
+                selected={selected}
+                onSelect={onSelect}
+                onPickDate={pickDate}
+                refreshKey={`${attempt}:${refreshKey}`}
+              />
+            ) : (
+              <p className="muted">Select a date to get the next available time.</p>
+            )
           ) : board.length === 0 ? (
             <p className="muted">No appointment times are available for this date.</p>
           ) : (
+            <>
+            {hours.length > 1 && (
+              <div className="hour-grid" role="group" aria-label="Hour">
+                {hours.map((h) => (
+                  <button
+                    type="button"
+                    key={h}
+                    className={h === hour ? "hour-chip selected" : "hour-chip"}
+                    aria-pressed={h === hour}
+                    aria-label={`${hourLabel(h)}, ${freeIn(h) === 0 ? "no free times" : `${freeIn(h)} free`}`}
+                    disabled={freeIn(h) === 0}
+                    onClick={() => setPickedHour(h)}
+                  >
+                    {hourLabel(h)}
+                    <small>{freeIn(h) === 0 ? "Full" : `${freeIn(h)} free`}</small>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="time-grid" role="group" aria-label={`Times on ${longDate(date)}`}>
-              {board.map((s) =>
+              {board.filter((s) => hourOf(s) === hour).map((s) =>
                 s.free ? (
                   <button
                     type="button"
@@ -194,8 +284,10 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
                 )
               )}
             </div>
+            {current?.consultation_minutes && <p className="muted small">{current.consultation_minutes}-minute appointments.</p>}
+            </>
           )}
-          {timezone && (
+          {timezone && !fifo && (
             <p className="timezone-note">
               <Info size={18} aria-hidden="true" />
               <span>

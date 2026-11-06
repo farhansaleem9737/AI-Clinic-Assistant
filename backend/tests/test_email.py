@@ -227,16 +227,28 @@ async def test_preferences_and_inactive_accounts_are_respected(client, clinic, d
     assert await outbox(db_session) == []
 
 
-async def test_reminder_emails_for_the_24_hour_reminder_once(client, clinic, db_session):
+async def test_reminder_emails_for_each_reminder_once(client, clinic, db_session):
     alice = await clinic.headers_for(clinic.patient_a.user_id)
     appt = await book(client, clinic, alice, days=2)
     starts = datetime.fromisoformat(appt["starts_at"].replace("Z", "+00:00"))
     await reminder_service.run(db_session, now=starts - timedelta(hours=23))
     await reminder_service.run(db_session, now=starts - timedelta(hours=22))  # repeated run
+    await reminder_service.run(db_session, now=starts - timedelta(minutes=50))  # the 1-hour one
+    await reminder_service.run(db_session, now=starts - timedelta(minutes=40))  # repeated run
+    reminders = [m for m in await outbox(db_session) if m.kind == "appointment_reminder"]
+    assert len(reminders) == 2 and all(m.subject.startswith("Reminder: your appointment on") for m in reminders)
+    assert all(m.expires_at == starts for m in reminders)
+
+
+async def test_reminder_emails_only_for_the_configured_offsets(client, clinic, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "email_reminder_offsets_minutes", [1440])
+    alice = await clinic.headers_for(clinic.patient_a.user_id)
+    appt = await book(client, clinic, alice, days=2)
+    starts = datetime.fromisoformat(appt["starts_at"].replace("Z", "+00:00"))
+    await reminder_service.run(db_session, now=starts - timedelta(hours=23))
     await reminder_service.run(db_session, now=starts - timedelta(minutes=50))  # the 1-hour one: in-app only
     reminders = [m for m in await outbox(db_session) if m.kind == "appointment_reminder"]
-    assert len(reminders) == 1 and reminders[0].subject.startswith("Reminder: your appointment on")
-    assert reminders[0].expires_at == starts
+    assert len(reminders) == 1
 
 
 async def test_nothing_is_queued_when_email_is_switched_off(client, clinic, db_session, monkeypatch):

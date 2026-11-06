@@ -33,6 +33,24 @@ from app.models.user import User
 MAX_RANGE_DAYS = 31
 
 
+@dataclass(frozen=True)
+class Timing:
+    """How a doctor's working time is cut into appointments (D117): each lasts
+    `minutes`, and the next starts `minutes + buffer` later. From the doctor's
+    scheduling policy; without one, each weekly template's own slot length."""
+
+    minutes: int
+    buffer: int = 0
+
+    @property
+    def step(self) -> int:
+        return self.minutes + self.buffer
+
+
+# The grid custom staff times are checked against (any 5-minute start, D117).
+FINE_GRID = Timing(5)
+
+
 @dataclass(frozen=True, order=True)
 class Slot:
     starts_at: datetime
@@ -45,18 +63,21 @@ class Slot:
 # ---- pure functions (no I/O) -------------------------------------------------
 
 
-def slice_window(start: datetime, end: datetime, minutes: int) -> list[Slot]:
-    """Cut [start, end) into consecutive slots; a trailing partial slot is dropped."""
-    step = timedelta(minutes=minutes)
+def slice_window(start: datetime, end: datetime, minutes: int, step: int | None = None) -> list[Slot]:
+    """Cut [start, end) into slots of `minutes`, one every `step` minutes (default:
+    back to back); a trailing slot that would not fit is dropped. A 15-minute
+    consultation from 11:00 gives 11:00, 11:15, 11:30, 11:45; a 20-minute one
+    11:00, 11:20, 11:40."""
+    length, stride = timedelta(minutes=minutes), timedelta(minutes=step or minutes)
     slots, cursor = [], start
-    while cursor + step <= end:
-        slots.append(Slot(cursor.astimezone(UTC), (cursor + step).astimezone(UTC)))
-        cursor += step
+    while cursor + length <= end:
+        slots.append(Slot(cursor.astimezone(UTC), (cursor + length).astimezone(UTC)))
+        cursor += stride
     return slots
 
 
 def expand_templates(
-    templates: Iterable[ScheduleTemplate], tz: ZoneInfo, date_from: date, date_to: date
+    templates: Iterable[ScheduleTemplate], tz: ZoneInfo, date_from: date, date_to: date, timing: Timing | None = None
 ) -> list[Slot]:
     """Materialise template slots for each local calendar date in [date_from, date_to].
 
@@ -71,7 +92,8 @@ def expand_templates(
                 continue
             start = datetime.combine(day, t.start_time, tzinfo=tz)
             end = datetime.combine(day, t.end_time, tzinfo=tz)
-            slots.extend(slice_window(start, end, t.slot_minutes))
+            minutes, step = (timing.minutes, timing.step) if timing else (t.slot_minutes, t.slot_minutes)
+            slots.extend(slice_window(start, end, minutes, step))
         day += timedelta(days=1)
     return slots
 
@@ -107,6 +129,7 @@ def working_slots(
     tz: ZoneInfo,
     date_from: date,
     date_to: date,
+    timing: Timing | None = None,
 ) -> list[Slot]:
     """Every slot the doctor works in [date_from, date_to], before bookings.
 
@@ -118,18 +141,41 @@ def working_slots(
     exceptions = list(exceptions)
     custom = [e for e in exceptions if e.kind is ExceptionKind.custom_hours]
     overridden = {e.starts_at.astimezone(tz).date() for e in custom}
-    slots = [s for s in expand_templates(templates, tz, date_from, date_to) if s.starts_at.astimezone(tz).date() not in overridden]
+    slots = [
+        s for s in expand_templates(templates, tz, date_from, date_to, timing) if s.starts_at.astimezone(tz).date() not in overridden
+    ]
     for e in exceptions:
         start, end = e.starts_at.astimezone(tz), e.ends_at.astimezone(tz)
         if e.kind is ExceptionKind.extra_availability:
-            slots.extend(slice_window(start, end, settings.default_slot_minutes))
+            minutes = timing.minutes if timing else settings.default_slot_minutes
+            slots.extend(slice_window(start, end, minutes, timing.step if timing else None))
         elif e.kind is ExceptionKind.custom_hours:
-            slots.extend(slice_window(start, end, slot_minutes_on(templates, start.date())))
+            minutes = timing.minutes if timing else slot_minutes_on(templates, start.date())
+            slots.extend(slice_window(start, end, minutes, timing.step if timing else None))
     blocking = [(e.starts_at, e.ends_at) for e in exceptions if e.kind.is_unavailable]
     return remove_busy(slots, blocking)
 
 
+def working_windows(
+    templates: Sequence[ScheduleTemplate], exceptions: Iterable[ScheduleException], tz: ZoneInfo, day: date
+) -> tuple[tuple[datetime, datetime], ...]:
+    """The exact working time of one local date (after leave and blocks), as
+    (start, end) instants: what a staff custom time must fall within."""
+    return _ranges(working_slots(templates, exceptions, tz, day, day, FINE_GRID))
+
+
 # ---- database-backed -----------------------------------------------------------
+
+
+async def scheduling_policy(db: AsyncSession, doctor_id: uuid.UUID):
+    """The doctor's saved policy, or None (legacy: the templates' slot lengths)."""
+    from app.models.scheduling import SchedulingPolicy
+
+    return await db.get(SchedulingPolicy, doctor_id)
+
+
+def timing_of(policy) -> Timing | None:
+    return Timing(policy.consultation_minutes, policy.buffer_minutes) if policy is not None else None
 
 
 @dataclass(frozen=True)
@@ -246,7 +292,7 @@ async def slot_board(
     window_end = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=tz)
     templates, exceptions = await _schedule_rules(db, doctor_id, date_from, date_to, window_start, window_end)
 
-    slots = working_slots(templates, exceptions, tz, date_from, date_to)
+    slots = working_slots(templates, exceptions, tz, date_from, date_to, timing_of(await scheduling_policy(db, doctor_id)))
     booked = await _busy_appointments(db, doctor_id, window_start, window_end, exclude_appointment_id)
 
     earliest = now + min_lead
@@ -320,12 +366,13 @@ def _gaps(ranges: tuple[tuple[datetime, datetime], ...]) -> list[tuple[datetime,
     return [(ranges[i][1], ranges[i + 1][0]) for i in range(len(ranges) - 1) if ranges[i][1] < ranges[i + 1][0]]
 
 
-def _ranges(slots: Iterable[Slot]) -> tuple[tuple[datetime, datetime], ...]:
-    """Consecutive slots joined into (start, end) instants."""
+def _ranges(slots: Iterable[Slot], gap: int = 0) -> tuple[tuple[datetime, datetime], ...]:
+    """Consecutive slots joined into (start, end) instants; a buffer of up to `gap`
+    minutes between two slots does not split them."""
     merged: list[list[datetime]] = []
     for slot in sorted(slots):
-        if merged and merged[-1][1] == slot.starts_at:
-            merged[-1][1] = slot.ends_at
+        if merged and merged[-1][1] <= slot.starts_at <= merged[-1][1] + timedelta(minutes=gap):
+            merged[-1][1] = max(merged[-1][1], slot.ends_at)
         else:
             merged.append([slot.starts_at, slot.ends_at])
     return tuple((a, b) for a, b in merged)
@@ -352,7 +399,8 @@ async def day_schedule(
     templates, exceptions = await _schedule_rules(db, doctor_id, week_start, week_end, window_start, window_end)
     blocking = [e for e in exceptions if e.kind.is_unavailable]
     # Scheduled = the hours before leave and blocks; working = what remains.
-    scheduled = working_slots(templates, [e for e in exceptions if not e.kind.is_unavailable], tz, week_start, week_end)
+    timing = timing_of(await scheduling_policy(db, doctor_id))
+    scheduled = working_slots(templates, [e for e in exceptions if not e.kind.is_unavailable], tz, week_start, week_end, timing)
     booked = await _busy_appointments(db, doctor_id, window_start, window_end, None)
     earliest = now + min_lead
     latest = now + timedelta(days=settings.booking_max_advance_days)
@@ -398,8 +446,8 @@ async def day_schedule(
 
     day_slots = by_day.get(day, [])
     board = [BoardSlot(s.starts_at, s.ends_at, status_of(s)) for s in day_slots]
-    ranges = _ranges(day_slots)
-    minutes = slot_minutes_on(templates, day)
+    ranges = _ranges(day_slots, gap=timing.buffer if timing else 0)
+    minutes = timing.minutes if timing else slot_minutes_on(templates, day)
     for gap_start, gap_end in _gaps(ranges):
         board += [BoardSlot(s.starts_at, s.ends_at, SlotStatus.break_) for s in slice_window(gap_start, gap_end, minutes)]
     board.sort(key=lambda b: b.starts_at)
@@ -448,9 +496,9 @@ class DoctorAvailability:
     today_hours: tuple[tuple[time, time], ...] = ()
 
 
-def merge_hours(slots: Iterable[Slot], tz: ZoneInfo) -> tuple[tuple[time, time], ...]:
+def merge_hours(slots: Iterable[Slot], tz: ZoneInfo, gap: int = 0) -> tuple[tuple[time, time], ...]:
     """Consecutive slots joined into local (start, end) ranges."""
-    return tuple((s.astimezone(tz).time(), e.astimezone(tz).time()) for s, e in _ranges(slots))
+    return tuple((s.astimezone(tz).time(), e.astimezone(tz).time()) for s, e in _ranges(slots, gap))
 
 
 async def availability_status(
@@ -524,11 +572,15 @@ async def availability_status(
     ):
         booked[doctor_id].append((starts_at, ends_at))
 
+    from app.models.scheduling import SchedulingPolicy
+
+    policies = {p.doctor_id: p for p in await db.scalars(select(SchedulingPolicy).where(SchedulingPolicy.doctor_id.in_(timezones)))}
     for doctor_id, tz_name in timezones.items():
         tz = ZoneInfo(tz_name)
-        slots = working_slots(templates[doctor_id], exceptions[doctor_id], tz, first_day, last_day)
+        timing = timing_of(policies.get(doctor_id))
+        slots = working_slots(templates[doctor_id], exceptions[doctor_id], tz, first_day, last_day, timing)
         today = now.astimezone(tz).date()
-        hours = merge_hours((s for s in slots if s.starts_at.astimezone(tz).date() == today), tz)
+        hours = merge_hours((s for s in slots if s.starts_at.astimezone(tz).date() == today), tz, timing.buffer if timing else 0)
         working = [s for s in slots if earliest <= s.starts_at <= horizon]
         free = remove_busy(working, booked[doctor_id])
         if free:

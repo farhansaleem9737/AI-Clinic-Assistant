@@ -100,6 +100,16 @@ class SearchDoctor(BaseModel):
     id: uuid.UUID
     name: str
     specialization: str
+    department_name: str | None = None
+    photo_url: str | None = None
+
+
+class SearchDepartment(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
 
 
 class SearchAppointment(BaseModel):
@@ -123,7 +133,10 @@ class SearchResults(BaseModel):
     within it, only records they may open."""
 
     query: str
+    # The sections this caller may search, in display order (D119).
+    categories: list[str] = []
     patients: list[SearchPatient] | None = None
     doctors: list[SearchDoctor] | None = None
+    departments: list[SearchDepartment] | None = None
     appointments: list[SearchAppointment] | None = None
     users: list[SearchUser] | None = None

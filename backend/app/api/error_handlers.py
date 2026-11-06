@@ -25,6 +25,7 @@ from app.core.exceptions import (
     PermissionDeniedError,
     RateLimitedError,
     StorageUnavailableError,
+    EmailUnavailableError,
     FileTooLargeError,
     UnsupportedFileError
 )
@@ -42,6 +43,7 @@ _STATUS_BY_EXCEPTION: dict[type[DomainError], int] = {
     RateLimitedError: status.HTTP_429_TOO_MANY_REQUESTS,
     AiUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     StorageUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    EmailUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     UnsupportedFileError:status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
 }

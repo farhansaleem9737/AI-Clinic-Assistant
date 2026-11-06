@@ -19,7 +19,7 @@ from app.schemas.department import (
     DepartmentSummaryRead,
     DepartmentUpdate,
 )
-from app.services import department_service, file_service
+from app.services import catalog_service, department_service, file_service
 from app.services.department_service import DepartmentSort, DepartmentWithDoctors
 from app.services.pagination import PageParams
 
@@ -39,6 +39,7 @@ async def public_list_departments(
     admin list, restricted to active departments: a doctor counts when their
     profile and login are active, and the department is active by definition."""
     rows, total = await department_service.manage_list(db, params, q=q, is_active=True)
+    specs = await catalog_service.specialization_counts(db, [r.department.id for r in rows])
     items = [
         DepartmentPublicCard(
             id=r.department.id,
@@ -48,6 +49,7 @@ async def public_list_departments(
             color=r.department.color,
             doctor_count=r.doctor_count,
             doctors_preview=[_doctor(d, storage) for d in r.preview],
+            specialization_count=specs.get(r.department.id, 0),
         )
         for r in rows
     ]
@@ -63,11 +65,13 @@ def _doctor(row, storage: Storage | None) -> dict:
     return {"id": row.id, "name": row.name, "title": row.title, "photo_url": file_service.photo_url_for_key(storage, row.photo_key)}
 
 
-def _item(row: DepartmentWithDoctors, storage: Storage | None) -> DepartmentListItem:
+def _item(row: DepartmentWithDoctors, storage: Storage | None, specs: dict | None = None) -> DepartmentListItem:
     return DepartmentListItem(
         **DepartmentResponse.model_validate(row.department).model_dump(),
         doctor_count=row.doctor_count,
         doctors_preview=[_doctor(d, storage) for d in row.preview],
+        specialization_count=(specs or {}).get(row.department.id, 0),
+        slug=row.department.slug,
     )
 
 
@@ -85,7 +89,8 @@ async def list_departments(
     if is_active is None and not include_inactive:
         is_active = True
     rows, total = await department_service.manage_list(db, params, q=q, is_active=is_active, sort=sort)
-    return Page(items=[_item(r, storage) for r in rows], total=total, page=params.page, page_size=params.page_size)
+    specs = await catalog_service.specialization_counts(db, [r.department.id for r in rows])
+    return Page(items=[_item(r, storage, specs) for r in rows], total=total, page=params.page, page_size=params.page_size)
 
 
 @router.get("/summary", response_model=DepartmentSummaryRead)
@@ -117,8 +122,9 @@ async def get_department(
     """With every doctor profile in the department and the count of upcoming
     appointments (shown before deactivating)."""
     row = await department_service.get_detail(db, department_id)
+    specs = await catalog_service.specialization_counts(db, [department_id])
     return DepartmentDetail(
-        **_item(row, storage).model_dump(),
+        **_item(row, storage, specs).model_dump(),
         doctors=[
             {**_doctor(d, storage), "specialization": d.specialization, "is_active": d.is_active} for d in row.doctors
         ],

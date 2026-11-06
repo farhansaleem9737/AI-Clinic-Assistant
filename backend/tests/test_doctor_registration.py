@@ -27,7 +27,7 @@ PASSWORD = "pw-123456"
 
 
 def doctor(email: str, **extra) -> dict:
-    return {"account_type": "doctor", "name": "Sara Malik", "email": email, "password": PASSWORD, **extra}
+    return {"account_type": "doctor", "name": "Sara Malik", "email": email, "password": PASSWORD, "date_of_birth": "1985-03-02", "gender": "female", **extra}
 
 
 def pdf(name="pmdc-certificate.pdf", data=PDF_BYTES):

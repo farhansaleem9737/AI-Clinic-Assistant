@@ -12,12 +12,14 @@ import {
   listDepartments,
   updateDepartment,
 } from "../services/departmentService";
+import { createSpecialization, listSpecializations } from "../services/catalogService";
 import { listDoctors, updateDoctor } from "../services/doctorService";
 import { getClinicSettings } from "../services/workspaceService";
 import { departmentLook, timezoneLabel } from "../utils/departments";
 import AdminDepartments from "./AdminDepartments";
 
 vi.mock("../services/departmentService");
+vi.mock("../services/catalogService");
 vi.mock("../services/doctorService");
 vi.mock("../services/workspaceService");
 
@@ -150,8 +152,56 @@ describe("Departments list", () => {
       "View Department",
       "Edit Department",
       "Manage Doctors",
+      "Manage Specializations",
       "Activate Department",
     ]);
+  });
+});
+
+describe("Specializations (D118)", () => {
+  const spec = (id, name, extra = {}) => ({
+    id, name, slug: id, department_ids: [CARDIO.id], doctor_count: 1, description: null, aliases: [], is_active: true, ...extra,
+  });
+
+  it("lists the department's specializations and adds one to it", async () => {
+    const u = userEvent.setup();
+    listSpecializations.mockResolvedValue({
+      data: [spec("s-1", "Heart Failure", { doctor_count: 2, aliases: ["heart failure specialist"] }), spec("s-2", "Cardiac Imaging", { is_active: false, doctor_count: 0 })],
+    });
+    createSpecialization.mockResolvedValue({ data: spec("s-3", "Cardio-Oncology") });
+    renderPage();
+    await u.click(within(await rowOf("Cardiology")).getByRole("button", { name: "Actions for Cardiology" }));
+    await u.click(screen.getByRole("menuitem", { name: "Manage Specializations" }));
+    const dialog = screen.getByRole("dialog", { name: "Specializations in Cardiology" });
+    const list = await within(dialog).findByRole("list", { name: "Specializations" });
+    expect(listSpecializations).toHaveBeenCalledWith({ department_id: CARDIO.id, is_active: undefined });
+    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      expect.stringContaining("Heart Failure"),
+      expect.stringContaining("Retired"),
+    ]);
+    expect(list).toHaveTextContent("2 doctors");
+
+    await u.click(within(dialog).getByRole("button", { name: /Add specialization/ }));
+    const form = within(dialog).getByRole("form", { name: "New specialization" });
+    await u.type(within(form).getByLabelText("Name"), "Cardio-Oncology");
+    await u.type(within(form).getByLabelText(/Other names/), "cardio oncologist, onco cardiology");
+    await u.click(within(form).getByRole("button", { name: "Add specialization" }));
+    await waitFor(() =>
+      expect(createSpecialization).toHaveBeenCalledWith({
+        name: "Cardio-Oncology",
+        description: null,
+        aliases: ["cardio oncologist", "onco cardiology"],
+        department_ids: [CARDIO.id],
+        is_active: true,
+      })
+    );
+    expect(await within(dialog).findByText("Added Cardio-Oncology.")).toBeInTheDocument();
+  });
+
+  it("shows how many specializations each department has", async () => {
+    listDepartments.mockResolvedValue(page([{ ...CARDIO, specialization_count: 7 }, PEDS, EMPTY], 30));
+    renderPage();
+    expect(within(await rowOf("Cardiology")).getByText("7 specializations")).toBeInTheDocument();
   });
 });
 

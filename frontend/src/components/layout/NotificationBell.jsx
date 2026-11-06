@@ -25,6 +25,8 @@ const PREFERENCES = [
   ["follow_ups", "Follow-up reminders", "When a recorded follow-up visit is due"],
   ["emails", "Also by email", "The ones switched on above, to your account's email address"],
 ];
+const ALL_OFF = Object.fromEntries(PREFERENCES.map(([key]) => [key, false]));
+const ALL_ON = Object.fromEntries(PREFERENCES.map(([key]) => [key, true]));
 
 function Preferences({ onBack }) {
   const [prefs, setPrefs] = useState(null);
@@ -38,12 +40,13 @@ function Preferences({ onBack }) {
       live = false;
     };
   }, []);
-  const change = async (key, value) => {
+  const allOff = Boolean(prefs) && PREFERENCES.every(([key]) => !prefs[key]);
+  const change = async (changes) => {
     const before = prefs;
-    setPrefs({ ...prefs, [key]: value });
+    setPrefs({ ...prefs, ...changes });
     setError("");
     try {
-      setPrefs((await updateNotificationPreferences({ [key]: value })).data);
+      setPrefs((await updateNotificationPreferences(changes)).data);
     } catch (err) {
       setPrefs(before);
       setError(getErrorMessage(err, "Could not save your notification settings"));
@@ -58,9 +61,16 @@ function Preferences({ onBack }) {
       </div>
       <fieldset className="bell-prefs" disabled={!prefs}>
         <legend>Notify me about</legend>
+        <label className="bell-prefs-all">
+          <input type="checkbox" checked={allOff} onChange={(e) => change(e.target.checked ? ALL_OFF : ALL_ON)} />
+          <span>
+            Turn off all notifications
+            <small className="muted">No optional notifications or emails; untick to turn them all back on</small>
+          </span>
+        </label>
         {PREFERENCES.map(([key, label, hint]) => (
           <label key={key}>
-            <input type="checkbox" checked={Boolean(prefs?.[key])} onChange={(e) => change(key, e.target.checked)} />
+            <input type="checkbox" checked={Boolean(prefs?.[key])} onChange={(e) => change({ [key]: e.target.checked })} />
             <span>
               {label}
               <small className="muted">{hint}</small>

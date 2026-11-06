@@ -10,7 +10,7 @@ from app.api.deps.uploads import read_photo
 from app.core.permissions import Perm, Principal
 from app.core.storage import Storage, get_optional_storage, get_storage
 from app.db.session import get_db
-from app.models.patient import Patient
+from app.models.patient import Patient, mask_identifier
 from app.schemas.common import Page
 from app.schemas.patient import (
     LinkAccount,
@@ -51,6 +51,12 @@ def to_self(p: Patient, storage: Storage | None) -> PatientRead:
         emergency_contact_relationship=p.emergency_contact_relationship,
         emergency_contact_phone=p.emergency_contact_phone,
         preferred_contact_method=p.preferred_contact_method,
+        blood_group=p.blood_group,
+        marital_status=p.marital_status,
+        national_id_masked=mask_identifier(p.national_id),
+        city=p.city,
+        province=p.province,
+        country=p.country,
         has_account=p.user_id is not None,
         photo_url=file_service.photo_url(storage, p.photo),
         created_at=p.created_at,

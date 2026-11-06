@@ -8,15 +8,23 @@ from app.api.error_handlers import error_response
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.permissions import Principal
+from app.core.rate_limit import rate_limit
 from app.core.security import generate_csrf_token
 from app.core.storage import Storage, get_optional_storage
 from app.db.session import get_db
 from app.schemas.patient import PatientRegistration
-from app.schemas.registration import RegistrationRequest
-from app.schemas.user import AccessTokenResponse, MeResponse, UserLogin, UserResponse
+from app.schemas.registration import RegistrationRequest, VerificationCodeRequest
+from app.schemas.user import AccessTokenResponse, MeResponse, PasswordChange, PasswordChangeStatus, UserLogin, UserResponse
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.services import auth_service, doctor_application_service, file_service, patient_service, rbac_service
+from app.services import (
+    auth_service,
+    doctor_application_service,
+    email_verification_service,
+    file_service,
+    patient_service,
+    rbac_service,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -79,13 +87,28 @@ def _access_response(access_token: str) -> AccessTokenResponse:
     return AccessTokenResponse(access_token=access_token, expires_in=settings.access_token_expire_minutes * 60)
 
 
+@router.post(
+    "/register/verification-code",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("verification_code", lambda: settings.verification_code_requests_per_minute))],
+)
+async def send_verification_code(body: VerificationCodeRequest, db: AsyncSession = Depends(get_db)):
+    """Email a six-digit code that /register needs, proving the address is the user's.
+    409 EMAIL_TAKEN for an address with an account; 429 while a recent code is still fresh."""
+    await email_verification_service.send_code(db, body.email)
+
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegistrationRequest, db: AsyncSession = Depends(get_db)):
     """Self-registration as a patient (login + patient profile) or as a
     doctor applicant (login + pending application, no clinical access until
     an administrator approves it, D77). `account_type` defaults to "patient";
     any other value is rejected. Any "role" in the body is ignored; staff
-    accounts are created by an admin. No session is issued here."""
+    accounts are created by an admin. No session is issued here. With
+    EMAIL_VERIFICATION_REQUIRED, `verification_code` must be the code emailed
+    by /register/verification-code; it is used up by the registration."""
+    if settings.email_verification_required:
+        await email_verification_service.consume(db, body.email, body.verification_code)
     if isinstance(body, PatientRegistration):
         user = await patient_service.register_self(db, body)
     else:
@@ -140,6 +163,42 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
         verify_csrf(request)
         await auth_service.logout(db, raw)
     _clear_session_cookies(response)
+
+
+# The password of the signed-in user (D116). Both endpoints read this browser's own
+# session from the refresh cookie (sent only to /auth/*), so they also need the CSRF header.
+_password_attempts = Depends(rate_limit("password_change", lambda: settings.password_change_attempts_per_minute))
+
+
+@router.get("/password", response_model=PasswordChangeStatus)
+async def password_change_status(
+    request: Request, principal: Principal = Depends(get_current_principal), db: AsyncSession = Depends(get_db)
+):
+    """Whether changing the password needs the current one (it does unless this
+    session signed in within PASSWORD_CHANGE_RECENT_AUTH_MINUTES)."""
+    raw = request.cookies.get(settings.refresh_cookie_name)
+    return PasswordChangeStatus(
+        current_password_required=await auth_service.password_change_needs_current(db, principal.user_id, raw)
+    )
+
+
+@router.post("/password", response_model=AccessTokenResponse, dependencies=[_password_attempts])
+async def change_password(
+    body: PasswordChange,
+    request: Request,
+    response: Response,
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the signed-in user's password. Every other session ends; this
+    browser receives a new session (cookies and access token) and stays signed in."""
+    verify_csrf(request)
+    tokens = await auth_service.change_password(
+        db, principal.user_id, request.cookies.get(settings.refresh_cookie_name),
+        new_password=body.new_password, current_password=body.current_password, client=_client_info(request),
+    )
+    _set_session_cookies(response, tokens.refresh_token, persistent=tokens.persistent)
+    return _access_response(tokens.access_token)
 
 
 @router.get("/me", response_model=MeResponse)

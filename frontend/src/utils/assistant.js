@@ -234,3 +234,11 @@ export function describeFailure(err) {
   }
   return failure("unknown", "Something went wrong while preparing your response. Please try again.");
 }
+
+// Markdown links keep only their text, and absolute URLs are dropped: the cards
+// under an answer carry the app's own links (older answers may contain
+// http://localhost:5173/... from before the server removed them).
+export const withoutLinks = (text) =>
+  (text ?? "")
+    .replace(/\[([^\]]+)\]\([^()\s]+\)/g, "$1")
+    .replace(/\s*\(?<?https?:\/\/[^\s)>]+>?\)?/g, "");

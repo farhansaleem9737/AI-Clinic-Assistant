@@ -61,7 +61,7 @@ async def test_a_cancellation_notifies_everyone_but_whoever_cancelled(client, cl
 async def test_doctor_applications_notify_the_reviewers(client, clinic):
     registered = await client.post(
         "/api/v1/auth/register",
-        json={"account_type": "doctor", "name": "Dr New Applicant", "email": "new.applicant@example.com", "password": "pw-123456"},
+        json={"account_type": "doctor", "name": "Dr New Applicant", "email": "new.applicant@example.com", "password": "pw-123456", "date_of_birth": "1985-03-02", "gender": "female"},
     )
     assert registered.status_code == 201
     admin = await clinic.headers_for(clinic.admin.id)
@@ -100,40 +100,72 @@ async def test_notifications_need_a_session(client):
 # ---- global search ----------------------------------------------------------------------
 
 
-async def test_reception_searches_patients_doctors_and_appointments_but_not_users(client, clinic):
+async def test_patients_search_only_doctors_and_departments(client, clinic, make_department):
+    await make_department("Cardiology")
+    await make_department("Cardiac Archive", is_active=False)  # hidden: inactive
+    alice = await clinic.headers_for(clinic.patient_a.user_id)
+    await book(client, clinic, alice)
+    bob = await clinic.headers_for(clinic.patient_b.user_id)
+
+    body = (await client.get(SEARCH, params={"q": "alpha"}, headers=bob)).json()
+    assert body["categories"] == ["doctors", "departments"]
+    assert [d["name"] for d in body["doctors"]] == ["Doctor Alpha"]
+    # Not even their own appointments or profile: those have their own pages.
+    assert body["patients"] is None and body["appointments"] is None and body["users"] is None
+
+    cardio = (await client.get(SEARCH, params={"q": "cardi"}, headers=bob)).json()
+    assert [d["name"] for d in cardio["departments"]] == ["Cardiology"]
+    # Searching another patient's name finds nothing to open.
+    alice_search = (await client.get(SEARCH, params={"q": "alice"}, headers=bob)).json()
+    assert alice_search["patients"] is None and alice_search["appointments"] is None
+
+
+async def test_reception_searches_patients_doctors_and_departments(client, clinic):
     alice = await clinic.headers_for(clinic.patient_a.user_id)
     await book(client, clinic, alice)
     reception = await clinic.headers_for(clinic.receptionist.id)
     body = (await client.get(SEARCH, params={"q": "alice"}, headers=reception)).json()
+    assert body["categories"] == ["patients", "doctors", "departments"]
     assert [p["name"].split()[0] for p in body["patients"]] == ["Alice"]
-    assert body["patients"][0]["mrn"].startswith("MRN")
-    assert len(body["appointments"]) == 1 and body["appointments"][0]["doctor_name"] == "Doctor Alpha"
-    assert body["users"] is None  # needs user:read
+    assert set(body["patients"][0]) == {"id", "name", "mrn"}  # no contact details
+    assert body["appointments"] is None and body["users"] is None
     doctors = (await client.get(SEARCH, params={"q": "alpha"}, headers=reception)).json()["doctors"]
     assert [d["name"] for d in doctors] == ["Doctor Alpha"]
 
 
-async def test_patients_only_find_their_own_records(client, clinic):
-    bob = await clinic.headers_for(clinic.patient_b.user_id)
+async def test_doctors_find_only_their_own_patients(client, clinic):
+    alice = await clinic.headers_for(clinic.patient_a.user_id)
+    await book(client, clinic, alice)  # Alice sees Doctor Alpha; Bob sees nobody
+    dr_a = await clinic.headers_for(clinic.doctor_a.user_id)
+    dr_b = await clinic.headers_for(clinic.doctor_b.user_id)
+
+    mine = (await client.get(SEARCH, params={"q": "alice"}, headers=dr_a)).json()
+    assert mine["categories"] == ["patients", "doctors", "departments"]
+    assert [p["name"].split()[0] for p in mine["patients"]] == ["Alice"]
+    assert mine["appointments"] is None and mine["users"] is None
+    assert (await client.get(SEARCH, params={"q": "alice"}, headers=dr_b)).json()["patients"] == []
+    assert (await client.get(SEARCH, params={"q": "bob"}, headers=dr_a)).json()["patients"] == []
+
+
+async def test_admins_also_find_users_and_appointments_without_secrets(client, clinic):
     alice = await clinic.headers_for(clinic.patient_a.user_id)
     await book(client, clinic, alice)
-    body = (await client.get(SEARCH, params={"q": "alpha"}, headers=bob)).json()
-    assert body["patients"] is None and body["users"] is None
-    assert body["appointments"] == []  # Alice's appointment with Dr Alpha is invisible to Bob
-    assert [d["name"] for d in body["doctors"]] == ["Doctor Alpha"]
-
-
-async def test_admins_also_find_users_without_secrets(client, clinic):
     admin = await clinic.headers_for(clinic.admin.id)
     response = await client.get(SEARCH, params={"q": "receptionist"}, headers=admin)
-    users = response.json()["users"]
-    assert users and users[0]["roles"] == ["receptionist"]
+    body = response.json()
+    assert body["categories"] == ["patients", "doctors", "departments", "appointments", "users"]
+    assert body["users"] and body["users"][0]["roles"] == ["receptionist"]
     assert "password" not in response.text
+    found = (await client.get(SEARCH, params={"q": "alice"}, headers=admin)).json()
+    assert len(found["appointments"]) == 1 and found["appointments"][0]["doctor_name"] == "Doctor Alpha"
 
 
-async def test_search_needs_two_characters(client, auth_headers):
+async def test_wildcards_are_literal_and_short_queries_are_refused(client, clinic, auth_headers):
+    bob = await clinic.headers_for(clinic.patient_b.user_id)
+    assert (await client.get(SEARCH, params={"q": "%%"}, headers=bob)).json()["departments"] == []
     headers = await auth_headers(RoleCode.receptionist)
     assert (await client.get(SEARCH, params={"q": "a"}, headers=headers)).status_code == 422
+    assert (await client.get(SEARCH, params={"q": " a "}, headers=headers)).status_code in (400, 422)
     assert (await client.get(SEARCH, params={"q": "ab"})).status_code == 401
 
 

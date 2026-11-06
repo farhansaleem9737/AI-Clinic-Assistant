@@ -11,7 +11,8 @@ export const markAllNotificationsRead = () => api.post("/notifications/read-all"
 export const getNotificationPreferences = () => api.get("/notifications/preferences");
 export const updateNotificationPreferences = (changes) => api.put("/notifications/preferences", changes);
 
-export const globalSearch = (q) => api.get("/search", { params: { q } });
+// `config.signal` cancels a request a newer query has replaced.
+export const globalSearch = (q, config = {}) => api.get("/search", { ...config, params: { q } });
 
 export const getClinicSettings = () => api.get("/settings/clinic");
 export const updateClinicSettings = (data) => api.put("/settings/clinic", data);

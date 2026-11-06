@@ -1,12 +1,12 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.doctor_application import ApplicationStatus, CredentialType
-from app.schemas.common import LoginEmail, clean_name
+from app.schemas.common import Gender, LoginEmail, VerificationCode, adult_birth_date, clean_name
 from app.schemas.doctor import FEE_FIELD
 
 _TEXT_FIELDS = (
@@ -59,8 +59,14 @@ class DoctorRegistration(ProfessionalDetails):
     name: str = Field(min_length=1, max_length=100)
     email: LoginEmail
     password: str = Field(min_length=8, max_length=128)
+    # Doctors must be adults.
+    date_of_birth: date
+    gender: Gender
+    # Required when EMAIL_VERIFICATION_REQUIRED is on (the default).
+    verification_code: VerificationCode | None = None
 
     _name = field_validator("name")(clean_name)
+    _dob = field_validator("date_of_birth")(adult_birth_date)
 
 
 class DoctorApplicationUpdate(ProfessionalDetails):

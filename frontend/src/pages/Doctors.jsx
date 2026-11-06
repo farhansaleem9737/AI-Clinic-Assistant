@@ -1,5 +1,5 @@
-import { LayoutGrid, List, SearchX } from "lucide-react";
-import { useEffect, useState } from "react";
+import { LayoutGrid, List, SearchX, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import heroImage from "../assets/doctor-hero.svg";
 import Alert from "../components/Alert";
@@ -9,15 +9,58 @@ import EmptyState from "../components/EmptyState";
 import Pagination from "../components/Pagination";
 import { useFetch } from "../hooks/useFetch";
 import { getPublicDepartments } from "../services/departmentService";
-import { getPublicDoctors, getPublicSpecializations } from "../services/doctorService";
+import { getCatalogSpecializations } from "../services/catalogService";
+import { getPublicDoctors } from "../services/doctorService";
 import {
   directoryApiParams,
   directorySearchParams,
   EMPTY_FILTERS,
+  EXPERIENCE_OPTIONS,
+  FEE_RANGES,
   PAGE_SIZE,
   readDirectoryState,
   SORT_OPTIONS,
 } from "../utils/doctors";
+
+// The applied filters as removable chips, so it is clear what narrows the list.
+function ActiveFilters({ filters, departments, specNames, onChange, onClear }) {
+  const chips = [];
+  const drop = (changes) => onChange({ ...filters, ...changes });
+  if (filters.q.trim()) chips.push({ key: "q", label: `“${filters.q.trim()}”`, remove: () => drop({ q: "" }) });
+  if (filters.department) {
+    const name = departments.find((d) => d.id === filters.department)?.name ?? "Department";
+    chips.push({ key: "department", label: name, remove: () => drop({ department: "" }) });
+  }
+  for (const id of filters.specializations) {
+    chips.push({
+      key: id,
+      label: specNames[id] ?? "Specialization",
+      remove: () => drop({ specializations: filters.specializations.filter((x) => x !== id) }),
+    });
+  }
+  if (filters.specialization) chips.push({ key: "spec-text", label: filters.specialization, remove: () => drop({ specialization: "" }) });
+  if (filters.min_experience) {
+    const label = EXPERIENCE_OPTIONS.find((o) => o.value === filters.min_experience)?.label;
+    chips.push({ key: "exp", label: `${label} experience`, remove: () => drop({ min_experience: "" }) });
+  }
+  if (filters.fee) {
+    const label = FEE_RANGES.find((o) => o.value === filters.fee)?.label;
+    chips.push({ key: "fee", label: `Fee ${label}`, remove: () => drop({ fee: "" }) });
+  }
+  if (!chips.length) return null;
+  return (
+    <div className="active-filters" aria-label="Applied filters">
+      {chips.map((c) => (
+        <button key={c.key} type="button" className="filter-chip" onClick={c.remove} aria-label={`Remove filter ${c.label}`}>
+          {c.label} <X size={14} aria-hidden="true" />
+        </button>
+      ))}
+      <button type="button" className="link-button small" onClick={onClear}>
+        Clear all
+      </button>
+    </div>
+  );
+}
 
 /**
  * Public doctors directory. The URL is the state: search, filters, sort,
@@ -41,7 +84,14 @@ export default function Doctors() {
     refresh: attempt,
   });
   const departments = useFetch(getPublicDepartments, [], { query: "departments/public" });
-  const specializations = useFetch(getPublicSpecializations, [], { query: "specializations/public" });
+  // Names for specializations chosen in a shared link (the picker adds the ones it loads).
+  const [specNames, setSpecNames] = useState({});
+  const catalog = useFetch(() => getCatalogSpecializations(), [""], {
+    query: "specializations/catalog",
+    enabled: state.filters.specializations.some((id) => !specNames[id]),
+  });
+  const remember = useCallback((list) => setSpecNames((n) => ({ ...n, ...Object.fromEntries(list.map((x) => [x.id, x.name])) })), []);
+  const names = { ...Object.fromEntries((catalog.data ?? []).map((x) => [x.id, x.name])), ...specNames };
 
   const update = (changes) => setSearchParams(directorySearchParams({ ...state, ...changes }));
   const doctors = data?.items ?? [];
@@ -64,8 +114,15 @@ export default function Doctors() {
         key={filtersKey}
         applied={state.filters}
         departments={departments.data?.items ?? []}
-        specializations={specializations.data ?? []}
         onApply={(filters) => update({ filters, page: 1 })}
+        onClear={() => update({ filters: EMPTY_FILTERS, page: 1 })}
+        onSpecializationsLoaded={remember}
+      />
+      <ActiveFilters
+        filters={state.filters}
+        departments={departments.data?.items ?? []}
+        specNames={names}
+        onChange={(filters) => update({ filters, page: 1 })}
         onClear={() => update({ filters: EMPTY_FILTERS, page: 1 })}
       />
 

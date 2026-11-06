@@ -61,6 +61,12 @@ class RateLimitedError(DomainError):
     code = "RATE_LIMITED"
 
 
+class EmailUnavailableError(DomainError):
+    """An email that must go out now (e.g. a verification code) was not sent. Retrying later may work."""
+
+    code = "EMAIL_NOT_SENT"
+
+
 class StorageUnavailableError(DomainError):
     """file storage is not configured, or R2 did not answer. Retrying later may work. """
 

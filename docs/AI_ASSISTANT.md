@@ -145,6 +145,29 @@ Cancelled and missed appointments are labelled as not having taken place. Follow
 "show that doctor's profile") use the appointments just shown. With `AI_PHI_ALLOWED=false` the model sees only ids and
 statuses; the answer itself is written by the server from the database.
 
+### Follow-ups and multi-turn booking (D115)
+
+- **Everyday words.** `search_doctors` maps lay words, other forms of a specialty and close misspellings
+  ("heart doctors", "skin", "children's", "cardiolgist") to specialty stems (`services/ai/specialties.py`)
+  and adds those doctors to the literal matches. Every result still comes from the directory.
+- **What was shown is remembered.** Doctor lists and free times are saved as cards on the answer. On the next
+  message the agent rebuilds the last list (ids, in display order) from those cards, and the model sees each
+  earlier answer with a numbered note of the doctors (with `doctor_id`) and times it showed. Nothing extra is
+  stored; conversations stay per user.
+- **References.** `pick_from_previous` resolves "the first / second / last one", "the most / least experienced",
+  "the cheapest", "the earliest available", a name, or a time ("5:30 pm") against that list, re-reading the
+  records first. Ties and missing lists are reported, never guessed. Picking a doctor returns their fresh next
+  free times; picking a time prepares the booking proposal.
+- **Times of day.** `get_doctor_availability` takes `part_of_day` (morning < 12:00, afternoon 12-17,
+  evening from 17:00).
+- **Typed confirmation.** When the previous answer is a pending proposal, a clear "yes" / "confirm" or
+  "no" / "cancel" reply is decided by the server through the same path as the buttons (permissions, slot,
+  idempotency key), with no model call. Anything less clear goes to the model.
+- **Failures.** A request that ends without an answer shows no cards or proposal from the attempt, and asks a
+  specific question when doctors are on screen.
+- **Links.** Answers never contain URLs: markdown links keep their text and absolute URLs are removed (server
+  and renderer). Cards link with relative app routes.
+
 ## 4. Privacy and safety
 
 - **Free tiers and patient data.** Google may use free-tier content to improve its

@@ -68,7 +68,7 @@ describe("rendering", () => {
     expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Better Care.Smarter Tomorrow.");
     expect(email()).toHaveAttribute("type", "email");
-    expect(email()).toHaveAttribute("autocomplete", "email");
+    expect(email()).toHaveAttribute("autocomplete", "username");
     expect(password()).toHaveAttribute("autocomplete", "current-password");
     expect(screen.getByRole("checkbox", { name: "Remember me" })).toBeChecked();
     expect(screen.getByRole("link", { name: "Forgot password?" })).toHaveAttribute("href", "/forgot-password");

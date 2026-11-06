@@ -59,7 +59,7 @@ async def test_public_registration_ignores_every_privilege_field(client, db_sess
     shape = (
         {"first_name": "Mal", "last_name": "Lory", "date_of_birth": "1990-05-17"}
         if account_type == "patient"
-        else {"account_type": "doctor", "name": "Mallory"}
+        else {"account_type": "doctor", "name": "Mallory", "date_of_birth": "1985-03-02", "gender": "male"}
     )
     body = {
         **shape,

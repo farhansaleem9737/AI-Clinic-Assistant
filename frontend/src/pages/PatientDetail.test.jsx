@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
 import { changeAppointmentStatus, countAppointments, listAppointments } from "../services/appointmentService";
 import { listDocuments } from "../services/documentService";
+import { addHealthRecord, getHealthRecords } from "../services/healthRecordService";
 import { getPatient, updatePatient } from "../services/patientService";
 import { authAs, PERMISSIONS } from "../test/fixtures";
 import PatientDetail from "./PatientDetail";
@@ -13,6 +14,7 @@ vi.mock("../context/useAuth");
 vi.mock("../services/patientService");
 vi.mock("../services/appointmentService");
 vi.mock("../services/documentService", async (importOriginal) => ({ ...(await importOriginal()), listDocuments: vi.fn() }));
+vi.mock("../services/healthRecordService");
 
 const RECEPTION = [...PERMISSIONS.receptionist, "patient:update"];
 const JOHN = {
@@ -231,5 +233,41 @@ describe("Patient details", () => {
     expect(within(tabs).getByRole("link", { name: "Medical Information" })).toBeInTheDocument();
     expect(screen.queryByText("Medical Information", { selector: ".pd-locked" })).not.toBeInTheDocument();
     await waitFor(() => expect(listDocuments).toHaveBeenCalledWith("p-1"));
+  });
+
+  it("the treating doctor sees the clinical record, allergies first, and records a diagnosis", async () => {
+    const user = userEvent.setup();
+    listDocuments.mockResolvedValue({ data: [] });
+    getHealthRecords.mockResolvedValue({
+      data: {
+        allergies: [
+          { id: "a1", substance: "Penicillin", reaction: "Rash", severity: "severe", source: "patient", recorded_by: null, recorded_by_me: false, can_edit: true, created_at: "2026-10-30T09:00:00Z", updated_at: "2026-10-30T09:00:00Z" },
+        ],
+        diagnoses: [],
+        medications: [],
+        can_add_allergies: true,
+        can_add_diagnoses: true,
+        can_add_medications: true,
+      },
+    });
+    addHealthRecord.mockResolvedValue({ data: { id: "x1", condition: "Asthma" } });
+    renderPage("/patients/p-1", [...PERMISSIONS.doctor, "document:read_assigned", "health_record:read_assigned", "health_record:write_assigned"]);
+    const card = await screen.findByRole("region", { name: "Clinical Record" });
+    const sections = await within(card).findAllByRole("heading", { level: 3 });
+    expect(sections.map((h) => h.textContent.trim())).toEqual(["Allergies (1)", "Diagnoses (0)", "Medications (0)"]);
+    expect(within(card).getByText("Penicillin").closest("li")).toHaveTextContent("Reported by the patient");
+    await user.click(within(card).getByRole("button", { name: /Add diagnosis/ }));
+    const dialog = screen.getByRole("dialog", { name: "Add a diagnosis" });
+    await user.type(within(dialog).getByRole("textbox", { name: /Condition/ }), "Asthma");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(addHealthRecord).toHaveBeenCalledWith("p-1", "diagnoses", { condition: "Asthma", status: "active", diagnosed_on: null, notes: null });
+    expect(await within(card).findByText("“Asthma” was added.")).toBeInTheDocument();
+  });
+
+  it("reception gets no clinical record", async () => {
+    renderPage();
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByRole("region", { name: "Clinical Record" })).not.toBeInTheDocument();
+    expect(getHealthRecords).not.toHaveBeenCalled();
   });
 });

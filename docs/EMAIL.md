@@ -5,11 +5,12 @@
 | Event | Recipient | How |
 |---|---|---|
 | Administrator invitation | the invited address | sent at once; the admin sees the result |
+| Registration verification code (6 digits, 10 min, 5 tries) | the address being registered | sent at once; the form shows if it failed |
 | Appointment booked (online or by staff) | the patient's account | outbox |
 | Confirmed by the clinic | the patient | outbox |
 | Rescheduled | the patient | outbox |
 | Cancelled | the patient | outbox |
-| Appointment reminder, 24 h before | the patient | outbox |
+| Appointment reminder, 24 h and 1 h before | the patient | outbox |
 | Follow-up due | the patient | outbox |
 | Doctor application approved / not approved | the applicant | outbox |
 
@@ -81,7 +82,7 @@ outbox run: claim due rows with FOR UPDATE SKIP LOCKED → commit → SMTP (no t
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | provider credentials | **secret**: Secret Manager |
 | `SMTP_TIMEOUT_SECONDS` | `10` | |
 | `FRONTEND_BASE_URL` | `https://your-app.vercel.app` | used in every link |
-| `EMAIL_REMINDER_OFFSETS_MINUTES` | `1440` | must be among `REMINDER_OFFSETS_MINUTES` |
+| `EMAIL_REMINDER_OFFSETS_MINUTES` | `1440,60` | must be among `REMINDER_OFFSETS_MINUTES` |
 | `EMAIL_MAX_ATTEMPTS` | `6` | |
 | `EMAIL_SEND_AFTER_COMMIT` | `true` | false: only the scheduled run sends |
 

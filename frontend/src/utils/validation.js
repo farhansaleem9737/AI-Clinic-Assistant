@@ -32,3 +32,31 @@ export function todayIso() {
 export function errorProps(id, error) {
   return error ? { "aria-invalid": true, "aria-describedby": `${id}-error` } : {};
 }
+
+// Date-of-birth rules shared with the backend: not in the future, at most
+// 120 years ago, and for doctors and staff at least 18 years ago.
+export const MAX_AGE_YEARS = 120;
+export const ADULT_AGE_YEARS = 18;
+
+// The ISO date `years` years before today (29 February falls back to the 28th).
+export function isoYearsAgo(years) {
+  const [y, m, d] = todayIso().split("-").map(Number);
+  const day = m === 2 && d === 29 ? 28 : d;
+  return `${y - years}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export function birthDateError(value, { minAge = 0 } = {}) {
+  if (!value) return "Enter your date of birth.";
+  if (value > todayIso()) return "Date of birth cannot be in the future.";
+  if (value < isoYearsAgo(MAX_AGE_YEARS)) return "Enter a valid date of birth.";
+  if (minAge && value > isoYearsAgo(minAge)) return `You must be at least ${minAge} years old.`;
+  return "";
+}
+
+// Shown in every gender select; the values are the backend's.
+export const GENDER_OPTIONS = [
+  { value: "female", label: "Female" },
+  { value: "male", label: "Male" },
+  { value: "intersex", label: "Intersex" },
+  { value: "unknown", label: "Prefer not to say" },
+];

@@ -60,7 +60,7 @@ function DoctorSummary({ doctor }) {
  * was just taken); `refreshKey` reloads the times. `draftKey` keeps the
  * month and date being looked at while the user visits other pages.
  */
-export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKey, draftKey, onBack, onContinue }) {
+export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKey, draftKey, onBack, onContinue, patientId = null }) {
   return (
     <>
       <h2 id="booking-step-title" className="sr-only">
@@ -76,11 +76,12 @@ export default function DateTimeStep({ doctor, slot, onSelect, notice, refreshKe
         refreshKey={refreshKey}
         draftKey={draftKey}
         layout="cards"
+        patientId={patientId}
       />
 
       <div className="card booking-footer-card">
         <p className="sr-only" aria-live="polite">
-          {slot ? "A time is selected. Continue to confirm." : "Choose a date, then a time."}
+          {slot ? "A time is selected. Continue to confirm." : "Choose a date; the next available time is assigned, or choose a custom time."}
         </p>
         <div className="booking-actions plain">
           <button type="button" className="secondary" onClick={onBack}>

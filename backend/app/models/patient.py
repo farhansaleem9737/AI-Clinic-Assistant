@@ -37,6 +37,15 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "preferred_contact_method IS NULL OR preferred_contact_method IN ('phone', 'sms', 'email')",
             name="contact_method_known",
         ),
+        CheckConstraint(
+            "blood_group IS NULL OR blood_group IN ('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-')",
+            name="blood_group_known",
+        ),
+        CheckConstraint(
+            "marital_status IS NULL OR marital_status IN ('single', 'married', 'divorced', 'widowed')",
+            name="marital_status_known",
+        ),
+        CheckConstraint("country IS NULL OR country ~ '^[A-Z]{2}$'", name="country_iso2"),
     )
     # Fetch the server-generated MRN (and other defaults) with RETURNING on insert.
     __mapper_args__ = {"eager_defaults": True}
@@ -65,6 +74,16 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     emergency_contact_relationship: Mapped[str | None] = mapped_column(String(50))
     emergency_contact_phone: Mapped[str | None] = mapped_column(String(30))
     preferred_contact_method: Mapped[str | None] = mapped_column(String(10))
+    # Personal details the patient gives themselves (D111). The blood group is
+    # self-reported, not a lab result.
+    blood_group: Mapped[str | None] = mapped_column(String(3))
+    marital_status: Mapped[str | None] = mapped_column(String(10))
+    # Sensitive: never logged or audited by value, and returned only masked.
+    national_id: Mapped[str | None] = mapped_column(String(30))
+    # The address in parts: `address` is the street / area.
+    city: Mapped[str | None] = mapped_column(String(100))
+    province: Mapped[str | None] = mapped_column(String(100))
+    country: Mapped[str | None] = mapped_column(String(2))  # ISO 3166-1 alpha-2, e.g. "PK"
 
     registered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL")
@@ -84,3 +103,17 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
+
+
+def mask_identifier(value: str | None) -> str | None:
+    """"•••••-•••••67-1": every letter or digit but the last three hidden, separators kept."""
+    if not value:
+        return None
+    kept, out = 0, []
+    for ch in reversed(value):
+        if ch.isalnum():
+            out.append(ch if kept < 3 else "•")
+            kept += 1
+        else:
+            out.append(ch)
+    return "".join(reversed(out))

@@ -303,8 +303,24 @@ describe("Add User", () => {
     await u.type(within(dialog).getByLabelText("Email"), "emily@clinic.example");
     await u.type(within(dialog).getByLabelText("Temporary password"), "Temp-pass-123");
     await u.type(within(dialog).getByLabelText("Confirm password"), "Temp-pass-123");
+    // Receptionists must be at least 18.
+    const minor = `${new Date().getFullYear() - 16}-01-01`;
+    await u.type(within(dialog).getByLabelText("Date of birth"), minor);
     await u.click(within(dialog).getByRole("button", { name: "Create user" }));
-    expect(createUser).toHaveBeenCalledWith({ name: "Emily Carter", email: "emily@clinic.example", password: "Temp-pass-123", roles: ["receptionist"] });
+    expect(within(dialog).getByText("Receptionists must be at least 18 years old.")).toBeInTheDocument();
+    expect(createUser).not.toHaveBeenCalled();
+    await u.clear(within(dialog).getByLabelText("Date of birth"));
+    await u.type(within(dialog).getByLabelText("Date of birth"), "1994-02-10");
+    await u.selectOptions(within(dialog).getByLabelText("Gender"), "female");
+    await u.click(within(dialog).getByRole("button", { name: "Create user" }));
+    expect(createUser).toHaveBeenCalledWith({
+      name: "Emily Carter",
+      email: "emily@clinic.example",
+      password: "Temp-pass-123",
+      roles: ["receptionist"],
+      date_of_birth: "1994-02-10",
+      gender: "female",
+    });
     expect(await screen.findByText("Created Emily Carter (emily@clinic.example).")).toBeInTheDocument();
   });
 

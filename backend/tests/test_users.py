@@ -26,7 +26,7 @@ async def test_non_admin_roles_are_403(client, auth_headers, role):
 
 
 async def test_admin_creates_staff_account_that_can_log_in(client, admin):
-    body = {"name": "Rita Reception", "email": "rita@example.com", "password": "pw-12345678", "roles": ["receptionist"]}
+    body = {"name": "Rita Reception", "email": "rita@example.com", "password": "pw-12345678", "roles": ["receptionist"], "date_of_birth": "1990-01-01"}
     created = await client.post(USERS, json=body, headers=admin)
     assert created.status_code == 201
     assert created.json()["roles"] == ["receptionist"]

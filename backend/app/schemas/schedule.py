@@ -113,6 +113,11 @@ class PublicAvailabilityRead(BaseModel):
     # Last local date that can be booked at all (maximum advance booking).
     bookable_until: date
     days: list[AvailableDay]
+    # How this doctor sees patients (D117): "fifo" means no times are booked,
+    # patients ask for a token for the day instead.
+    scheduling_mode: str = "hybrid"
+    consultation_minutes: int | None = None
+    accepts_walk_ins: bool = True
 
 
 # ---- the doctor's "My Schedule" page (D78) ------------------------------------------

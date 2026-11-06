@@ -1,9 +1,12 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
-from app.schemas.common import LoginEmail
+from app.schemas.common import Gender, LoginEmail, adult_birth_date, check_birth_date
+
+# Roles whose holders must be at least 18 years old.
+ADULT_ROLES = {"doctor", "receptionist"}
 
 
 class UserResponse(BaseModel):
@@ -55,6 +58,22 @@ class UserLogin(BaseModel):
     remember_me: bool = False
 
 
+class PasswordChange(BaseModel):
+    """The signed-in user's new password (D116). `current_password` is needed
+    unless the session was signed in to moments ago (the server decides)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_password: str = Field(min_length=8, max_length=128)
+    current_password: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class PasswordChangeStatus(BaseModel):
+    current_password_required: bool
+    min_length: int = 8
+    max_length: int = 128
+
+
 class AccessTokenResponse(BaseModel):
     """The refresh token never appears in a body: it travels only in an
     HttpOnly cookie that JavaScript cannot read."""
@@ -71,6 +90,19 @@ class AccountCreate(BaseModel):
     email: LoginEmail
     password: str = Field(min_length=8, max_length=128)
     roles: list[str] = Field(min_length=1)
+    date_of_birth: date | None = None
+    gender: Gender | None = None
+
+    @model_validator(mode="after")
+    def staff_are_adults(self):
+        # Clinical and front-desk staff must be at least 18; other dates still need to be plausible.
+        if self.date_of_birth is not None:
+            check_birth_date(self.date_of_birth)
+        if set(self.roles) & ADULT_ROLES:
+            if self.date_of_birth is None:
+                raise ValueError("Date of birth is required for doctors and receptionists")
+            adult_birth_date(self.date_of_birth)
+        return self
 
 
 class UserUpdate(BaseModel):

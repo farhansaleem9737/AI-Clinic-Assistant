@@ -57,3 +57,12 @@ export const CONFIRM_ACTIONS = {
   no_show: { title: "Mark as no-show?", label: "Mark as no-show", danger: true },
   completed: { title: "Mark as completed?", label: "Mark completed" },
 };
+
+/**
+ * A short, permanent reference for an appointment (D120): the end of its id,
+ * which never changes. Unlike the queue position, it is never renumbered.
+ */
+export const appointmentReference = (id) => `APT-${String(id).replace(/-/g, "").slice(-8).toUpperCase()}`;
+
+/** "15 minutes" from an appointment or slot's start and end. */
+export const durationMinutes = (slot) => Math.round((Date.parse(slot.ends_at) - Date.parse(slot.starts_at)) / 60000);

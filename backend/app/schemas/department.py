@@ -100,6 +100,8 @@ class DepartmentPublicCard(DepartmentPublic):
     color: str | None = None
     doctor_count: int
     doctors_preview: list["DoctorPreview"]
+    # Active catalog specializations under it (D118).
+    specialization_count: int = 0
 
 
 class DepartmentListItem(DepartmentResponse):
@@ -108,6 +110,9 @@ class DepartmentListItem(DepartmentResponse):
     doctor_count: int
     # Up to three of those same doctors, by name, for the avatar stack.
     doctors_preview: list[DoctorPreview]
+    # Active catalog specializations under it, and its catalog key (D118).
+    specialization_count: int = 0
+    slug: str | None = None
 
 
 class DepartmentDoctor(DoctorPreview):

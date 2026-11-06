@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { getErrorMessage } from "../../services/api";
 import { createUser, getUser, setUserRoles, updateUser } from "../../services/userService";
 import { avatarRole, byRank, joinedOn, roleStyle } from "../../utils/adminUsers";
-import { EMAIL_PATTERN } from "../../utils/validation";
+import { ADULT_AGE_YEARS, birthDateError, EMAIL_PATTERN, GENDER_OPTIONS, isoYearsAgo, MAX_AGE_YEARS } from "../../utils/validation";
 import Alert from "../Alert";
 import Avatar from "../Avatar";
 import ConfirmDialog from "../ConfirmDialog";
@@ -178,7 +178,7 @@ export function AddUserDialog({ can, onClose, onCreated, onPatient, onAdmin, onD
       (t.value === "admin" && can("admin_invitation:manage"))
   );
   const [type, setType] = useState(allowed[0]?.value ?? "");
-  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", active: "true" });
+  const [form, setForm] = useState({ name: "", email: "", dob: "", gender: "", password: "", confirm: "", active: "true" });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -191,6 +191,9 @@ export function AddUserDialog({ can, onClose, onCreated, onPatient, onAdmin, onD
     const found = {};
     if (!form.name.trim()) found.name = "Enter the full name.";
     if (!EMAIL_PATTERN.test(form.email.trim())) found.email = "Enter a valid email address.";
+    // Receptionists must be adults (the backend checks the same).
+    const dobError = birthDateError(form.dob, { minAge: ADULT_AGE_YEARS }).replace("You must", "Receptionists must");
+    if (dobError) found.dob = dobError;
     if (form.password.length < 8) found.password = "Use at least 8 characters.";
     if (form.confirm !== form.password) found.confirm = "The passwords do not match.";
     setErrors(found);
@@ -198,7 +201,14 @@ export function AddUserDialog({ can, onClose, onCreated, onPatient, onAdmin, onD
     setBusy(true);
     setError("");
     try {
-      const res = await createUser({ name: form.name.trim(), email: form.email.trim(), password: form.password, roles: [type] });
+      const res = await createUser({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        roles: [type],
+        date_of_birth: form.dob,
+        ...(form.gender && { gender: form.gender }),
+      });
       onCreated(res.data, form.active === "true");
     } catch (err) {
       setError(getErrorMessage(err, "Could not create the account"));
@@ -227,6 +237,26 @@ export function AddUserDialog({ can, onClose, onCreated, onPatient, onAdmin, onD
           </FormField>
           <FormField id="add-user-email" label="Email" error={errors.email}>
             <input id="add-user-email" type="email" autoComplete="off" value={form.email} onChange={set("email")} />
+          </FormField>
+          <FormField id="add-user-dob" label="Date of birth" error={errors.dob}>
+            <input
+              id="add-user-dob"
+              type="date"
+              min={isoYearsAgo(MAX_AGE_YEARS)}
+              max={isoYearsAgo(ADULT_AGE_YEARS)}
+              value={form.dob}
+              onChange={set("dob")}
+            />
+          </FormField>
+          <FormField id="add-user-gender" label="Gender">
+            <select id="add-user-gender" value={form.gender} onChange={set("gender")}>
+              <option value="">Select gender</option>
+              {GENDER_OPTIONS.map(({ value, label }) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </FormField>
           <FormField id="add-user-password" label="Temporary password" error={errors.password}>
             <input id="add-user-password" type="password" autoComplete="new-password" value={form.password} onChange={set("password")} />

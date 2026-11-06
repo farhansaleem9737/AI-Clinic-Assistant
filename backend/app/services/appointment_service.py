@@ -10,12 +10,12 @@ Every rule lives here, not in the router:
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, Select, func, or_, select, text
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -35,12 +35,23 @@ from app.models.appointment import (
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.scheduling import QueueEntry, SchedulingMode
 from app.models.stored_file import StoredFile
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreate, AppointmentUpdate, Reschedule, StatusChange
-from app.services import access, appointment_state, availability_service, email_outbox_service, notification_service
+from app.services import (
+    access,
+    appointment_state,
+    audit_service,
+    availability_service,
+    email_outbox_service,
+    notification_service,
+    scheduling_service,
+)
+from app.services.audit_service import AuditAction
 from app.services.appointment_state import Context
 from app.services.pagination import PageParams, paginate
+from app.services.search_text import NameMatch, contains_pattern
 
 logger = logging.getLogger(__name__)
 S = AppointmentStatus
@@ -71,6 +82,10 @@ class AppointmentView:
     # The same for the patient's photo.
     patient_photo_key: str | None = None
     patient_sex: str | None = None
+    token_number: int | None = None
+    queue_state: str | None = None
+    # D120: the n-th active appointment of the doctor's local day, by time.
+    queue_position: int | None = None
 
 
 class AppointmentScope(StrEnum):
@@ -146,6 +161,8 @@ def _view_query(doctor_user=None) -> Select:
             _Successor.id,
             StoredFile.object_key,
             _PatientPhoto.object_key,
+            QueueEntry.token_number,
+            QueueEntry.state,
         )
         .join(Doctor, Doctor.id == Appointment.doctor_id)
         .join(doctor_user, doctor_user.id == Doctor.user_id)
@@ -154,6 +171,7 @@ def _view_query(doctor_user=None) -> Select:
         .outerjoin(_Successor, _Successor.rescheduled_from_id == Appointment.id)
         .outerjoin(StoredFile, StoredFile.id == Doctor.photo_file_id)
         .outerjoin(_PatientPhoto, _PatientPhoto.id == Patient.photo_file_id)
+        .outerjoin(QueueEntry, QueueEntry.appointment_id == Appointment.id)
     )
 
 
@@ -161,6 +179,7 @@ def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
     (
         appt, doctor_name, title, room, specialization, experience, license_number,
         dept_id, dept_name, tz, mrn, first, last, dob, sex, successor_id, photo_key, patient_photo_key,
+        token, queue_state,
     ) = row
     ctx = Context(principal=principal, appointment=appt, now=now, timezone=ZoneInfo(tz))
     allowed, can_reschedule = appointment_state.allowed_actions(ctx)
@@ -185,6 +204,8 @@ def _to_view(row, principal: Principal, now: datetime) -> AppointmentView:
         doctor_photo_key=photo_key,
         patient_photo_key=patient_photo_key,
         patient_sex=sex.value if sex is not None else None,
+        token_number=token,
+        queue_state=queue_state.value if queue_state is not None else None,
     )
 
 
@@ -199,7 +220,12 @@ async def get_view(db: AsyncSession, principal: Principal, appointment_id: uuid.
     ).one_or_none()
     if row is None:
         raise NotFoundError("Appointment not found")
-    return _to_view(row, principal, clock.utcnow())
+    view = _to_view(row, principal, clock.utcnow())
+    a = view.appointment
+    if a.status in ACTIVE_STATUSES:
+        position = await queue_position(db, a.doctor_id, a.starts_at, ZoneInfo(view.timezone), appointment_id=a.id)
+        view = replace(view, queue_position=position)
+    return view
 
 
 @dataclass(frozen=True)
@@ -274,15 +300,20 @@ def _filtered(
     if with_dates and filters.date_to:
         query = query.where(Appointment.starts_at < _local_day_start(filters.date_to + timedelta(days=1), tz))
     if filters.q and filters.q.strip():
-        pattern = f"%{filters.q.strip()}%"
-        fields = [doctor_user.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern)]
+        pattern = contains_pattern(filters.q)
+        like = lambda column: column.ilike(pattern, escape="\\")  # noqa: E731
+        # The doctor's name however it is typed ("dr sarah khan"; D114).
+        doctor_name = NameMatch(doctor_user.name, filters.q)
+        fields = [like(doctor_user.name), like(Doctor.specialization), like(Department.name)]
+        if doctor_name.usable:
+            fields.append(doctor_name.condition())
         if principal.has_any(Perm.appointment_read_any, Perm.appointment_read_assigned):
             # Doctors and staff look for patients: name, MRN or the reason
             # for the visit. Only within appointments they can already see.
             fields += [
-                (Patient.first_name + " " + Patient.last_name).ilike(pattern),
-                Patient.mrn.ilike(pattern),
-                Appointment.reason.ilike(pattern),
+                like(Patient.first_name + " " + Patient.last_name),
+                like(Patient.mrn),
+                like(Appointment.reason),
             ]
         query = query.where(or_(*fields))
     return query
@@ -417,6 +448,137 @@ async def history(db: AsyncSession, principal: Principal, appointment_id: uuid.U
     return list(result.all())
 
 
+# ---- the day's order and the next free time (D120) ---------------------------------
+
+
+def _local_day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    return datetime.combine(day, time.min, tzinfo=tz), datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
+
+
+async def queue_position(
+    db: AsyncSession, doctor_id: uuid.UUID, starts_at: datetime, tz: ZoneInfo, *, appointment_id: uuid.UUID | None = None
+) -> int:
+    """The estimated place in the doctor's local day: 1 + the active
+    appointments that start earlier (ties, i.e. double bookings, by creation:
+    ids are time-ordered). Derived, never stored, so a cancellation or a move
+    earlier in the day moves everyone after it up. One indexed count
+    (doctor_id, starts_at) over one day."""
+    start, end = _local_day_bounds(starts_at.astimezone(tz).date(), tz)
+    earlier = Appointment.starts_at < starts_at
+    if appointment_id is not None:
+        earlier = or_(earlier, and_(Appointment.starts_at == starts_at, Appointment.id < appointment_id))
+    ahead = await db.scalar(
+        select(func.count())
+        .select_from(Appointment)
+        .where(
+            Appointment.doctor_id == doctor_id,
+            Appointment.status.in_(ACTIVE_STATUSES),
+            Appointment.starts_at >= start,
+            Appointment.starts_at < end,
+            earlier,
+        )
+    )
+    return int(ahead or 0) + 1
+
+
+@dataclass(frozen=True)
+class NextAvailableResult:
+    doctor_id: uuid.UUID
+    day: date
+    timezone: str
+    slot: availability_service.Slot | None
+    queue_position: int | None
+    consultation_minutes: int
+    booked_count: int
+    free_count: int
+    next_date: date | None
+
+    def as_details(self) -> dict:
+        return {
+            "date": self.day.isoformat(),
+            "starts_at": self.slot.starts_at.isoformat() if self.slot else None,
+            "ends_at": self.slot.ends_at.isoformat() if self.slot else None,
+            "queue_position": self.queue_position,
+            "next_date": self.next_date.isoformat() if self.next_date else None,
+        }
+
+
+async def next_available(
+    db: AsyncSession,
+    principal: Principal,
+    doctor_id: uuid.UUID,
+    day: date,
+    *,
+    patient_id: uuid.UUID | None = None,
+) -> NextAvailableResult:
+    """Automatic token booking (D120): the earliest free time with the doctor
+    on ``day``, from the same engine and rules as every other booking (working
+    hours, breaks/leave, the doctor's consultation length, existing bookings,
+    notice, horizon). Times the patient is already booked elsewhere are
+    skipped. Nothing is reserved; the booking re-checks the time.
+
+    Computed from the actual free intervals, not "bookings + 1", so cancelled,
+    moved and custom-time bookings are all accounted for."""
+    policy = await scheduling_service.effective_policy(db, doctor_id)
+    if policy.mode is SchedulingMode.fifo and not principal.has(Perm.appointment_create):
+        raise BusinessRuleError(
+            "This doctor sees patients in arrival order: ask for a token for the day instead", code="FIFO_ONLY"
+        )
+    lead = booking_lead(principal)
+    now = clock.utcnow()
+    bookable, free, _ = await availability_service.slot_board(db, doctor_id, day, day, now=now, min_lead=lead)
+    tz = bookable.timezone
+    start, end = _local_day_bounds(day, tz)
+
+    if patient_id is not None and free:
+        own = (
+            await db.execute(
+                select(Appointment.starts_at, Appointment.ends_at).where(
+                    Appointment.patient_id == patient_id,
+                    Appointment.status.in_(ACTIVE_STATUSES),
+                    Appointment.starts_at < end,
+                    Appointment.ends_at > start,
+                )
+            )
+        ).all()
+        free = [s for s in free if not any(a < s.ends_at and s.starts_at < b for a, b in own)]
+
+    booked = await db.scalar(
+        select(func.count())
+        .select_from(Appointment)
+        .where(
+            Appointment.doctor_id == doctor_id,
+            Appointment.status.in_(ACTIVE_STATUSES),
+            Appointment.starts_at >= start,
+            Appointment.starts_at < end,
+        )
+    )
+    slot = free[0] if free else None
+    position = await queue_position(db, doctor_id, slot.starts_at, tz) if slot else None
+
+    next_date = None
+    if slot is None:
+        last = min(day + timedelta(days=availability_service.MAX_RANGE_DAYS - 1), availability_service.bookable_until(now, tz))
+        if last > day:
+            _, later = await availability_service.available_slots(
+                db, doctor_id, day + timedelta(days=1), last, now=now, min_lead=lead
+            )
+            next_date = later[0].starts_at.astimezone(tz).date() if later else None
+
+    minutes = int((slot.ends_at - slot.starts_at).total_seconds() // 60) if slot else policy.consultation_minutes
+    return NextAvailableResult(
+        doctor_id=doctor_id,
+        day=day,
+        timezone=str(tz),
+        slot=slot,
+        queue_position=position,
+        consultation_minutes=minutes,
+        booked_count=int(booked or 0),
+        free_count=len(free),
+        next_date=next_date,
+    )
+
+
 # ---- booking ------------------------------------------------------------------------
 
 
@@ -459,7 +621,68 @@ async def _find_free_slot(
     raise ConflictError("That time is not available", code="SLOT_UNAVAILABLE")
 
 
-async def _resolve_patient(db: AsyncSession, principal: Principal, requested: uuid.UUID | None) -> Patient:
+def _ensure_may_override(principal: Principal, policy) -> None:
+    """Only staff with appointment:override, and a receptionist only when the doctor allows it (D117)."""
+    if not principal.has(Perm.appointment_override):
+        raise PermissionDeniedError("You are not allowed to book outside the normal rules")
+    receptionist_only = "receptionist" in principal.roles and "admin" not in principal.roles
+    if receptionist_only and not policy.allow_receptionist_overrides:
+        raise PermissionDeniedError("This doctor does not allow front-desk overrides", code="OVERRIDES_NOT_ALLOWED")
+
+
+async def _override_slot(db: AsyncSession, data: AppointmentCreate, policy) -> tuple[availability_service.Slot, int]:
+    """The interval and capacity lane for a staff override: inside the doctor's
+    working hours, never in the past, and either free (lane 0) or an authorized
+    double booking in the lowest free lane up to the doctor's limit (D117).
+    The overlap constraint per lane stays the final guarantee."""
+    bookable = await availability_service.bookable_doctor(db, data.doctor_id)
+    tz = bookable.timezone
+    starts_at = data.starts_at
+    day = starts_at.astimezone(tz).date()
+    window = (datetime.combine(day, time.min, tzinfo=tz), datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz))
+    templates, exceptions = await availability_service._schedule_rules(db, data.doctor_id, day, day, *window)
+    timing = availability_service.timing_of(await availability_service.scheduling_policy(db, data.doctor_id))
+    minutes = data.duration_minutes or (timing.minutes if timing else availability_service.slot_minutes_on(templates, day))
+    slot = availability_service.Slot(starts_at, starts_at + timedelta(minutes=minutes))
+    now = clock.utcnow()
+    if starts_at < now - timedelta(minutes=5) or starts_at > now + timedelta(days=settings.booking_max_advance_days):
+        raise BusinessRuleError("Choose a time from now within the booking horizon", code="TIME_OUT_OF_RANGE")
+    if data.custom_time:
+        if starts_at.astimezone(tz).minute % 5 or starts_at.second or starts_at.microsecond:
+            raise BusinessRuleError("Custom times are on 5-minute marks", code="INVALID_CUSTOM_TIME")
+    else:
+        listed = availability_service.working_slots(templates, exceptions, tz, day, day, timing)
+        if not any(s.starts_at == starts_at for s in listed):
+            raise ConflictError("That is not one of the doctor's appointment times", code="SLOT_UNAVAILABLE")
+    windows = availability_service.working_windows(templates, exceptions, tz, day)
+    if not any(a <= slot.starts_at and slot.ends_at <= b for a, b in windows):
+        raise ConflictError("That time is outside the doctor's working hours", code="OUTSIDE_WORKING_HOURS")
+
+    async def lane_taken(lane: int) -> bool:
+        return await db.scalar(
+            select(Appointment.id).where(
+                Appointment.doctor_id == data.doctor_id, Appointment.capacity_lane == lane,
+                Appointment.status.in_(ACTIVE_STATUSES), Appointment.starts_at < slot.ends_at, Appointment.ends_at > slot.starts_at,
+            ).limit(1)
+        ) is not None
+
+    if not await lane_taken(0):
+        return slot, 0
+    if not data.double_booking:
+        raise ConflictError("That time is already booked", code="SLOT_TAKEN")
+    if not data.override_reason or len(data.override_reason.strip()) < 3:
+        raise BusinessRuleError("Give a reason for the double booking", code="OVERRIDE_REASON_REQUIRED")
+    if policy.max_overbook == 0:
+        raise ConflictError("This doctor does not accept double bookings", code="OVERBOOKING_DISABLED")
+    for lane in range(1, policy.max_overbook + 1):
+        if not await lane_taken(lane):
+            return slot, lane
+    raise ConflictError(
+        f"The doctor's limit of {policy.max_overbook} extra patient(s) at that time is reached", code="OVERBOOK_CAPACITY_REACHED"
+    )
+
+
+async def resolve_patient(db: AsyncSession, principal: Principal, requested: uuid.UUID | None) -> Patient:
     if principal.has(Perm.appointment_create):
         if requested is None:
             raise BusinessRuleError("patient_id is required", code="PATIENT_REQUIRED")
@@ -553,6 +776,7 @@ def _new_appointment(
     staff_notes: str | None = None,
     idempotency_key: str | None = None,
     rescheduled_from_id: uuid.UUID | None = None,
+    booking_mode: str | None = None,
 ) -> Appointment:
     """Add a new booking (not yet flushed). Its history is written by
     ``_record_booking`` once the insert has succeeded."""
@@ -567,6 +791,7 @@ def _new_appointment(
         booked_by_user_id=principal.user_id,
         idempotency_key=idempotency_key,
         rescheduled_from_id=rescheduled_from_id,
+        booking_mode=booking_mode,
         # Evaluated in the INSERT itself: the department at the moment of booking.
         department_id=select(Doctor.department_id).where(Doctor.id == doctor_id).scalar_subquery(),
     )
@@ -600,9 +825,35 @@ async def book(
                 )
             return await get_view(db, principal, existing.id), True
 
-    patient = await _resolve_patient(db, principal, data.patient_id)
+    patient = await resolve_patient(db, principal, data.patient_id)
+    policy = await scheduling_service.effective_policy(db, data.doctor_id)
+    if data.is_override:
+        _ensure_may_override(principal, policy)
+    elif policy.mode is SchedulingMode.fifo and not principal.has(Perm.appointment_create):
+        raise BusinessRuleError(
+            "This doctor sees patients in arrival order: ask for a token for the day instead", code="FIFO_ONLY"
+        )
     await _serialize_bookings(db, data.doctor_id, patient.id)
-    slot = await _find_free_slot(db, principal, data.doctor_id, data.starts_at)
+    lane = 0
+    if data.is_override:
+        slot, lane = await _override_slot(db, data, policy)
+    else:
+        try:
+            slot = await _find_free_slot(db, principal, data.doctor_id, data.starts_at)
+        except ConflictError as exc:
+            if data.booking_mode != "auto":
+                raise
+            # Taken between the preview and the confirmation: never book another
+            # time silently; name the next one so the user can confirm it (D120).
+            bookable = await availability_service.bookable_doctor(db, data.doctor_id)
+            nxt = await next_available(
+                db, principal, data.doctor_id, data.starts_at.astimezone(bookable.timezone).date(), patient_id=patient.id
+            )
+            raise ConflictError(
+                "That time was just taken. Please review the next available time.",
+                code=exc.code,
+                details={"next_available": nxt.as_details()},
+            ) from exc
     await _ensure_patient_free(db, patient.id, slot)
 
     appt = _new_appointment(
@@ -613,9 +864,23 @@ async def book(
         slot=slot,
         reason=data.reason,
         idempotency_key=idempotency_key,
+        booking_mode="override" if data.is_override else data.booking_mode,
     )
+    if data.is_override:
+        appt.capacity_lane = lane
+        appt.override_reason = data.override_reason
     await _flush_or_conflict(db)
     _record_booking(db, appt, principal)
+    if data.is_override:
+        audit_service.record(
+            db, AuditAction.appointment_override_booked, actor_id=principal.user_id, target_type="appointment",
+            target_id=appt.id,
+            details={
+                "doctor_id": str(appt.doctor_id), "double_booking": lane > 0, "capacity_lane": lane,
+                "custom_time": data.custom_time, "duration_minutes": int((slot.ends_at - slot.starts_at).total_seconds() // 60),
+                "reason": data.override_reason,
+            },
+        )
     await _notify_doctor_of_booking(db, appt, principal)
     await _notify_patient_of_booking(db, appt, principal)
     # The patient's receipt by email, however it was booked (D109).
@@ -774,6 +1039,11 @@ async def change_status(
     appointment_state.authorize_transition(ctx, change.status)
 
     previous = appt.status
+    # The day's queue follows the appointment (D117): check-in issues a token, and only
+    # one consultation per doctor can be in progress.
+    from app.services import queue_service
+
+    await queue_service.on_appointment_status(db, appt, change.status, principal)
     if change.status is S.cancelled:
         _cancel(ctx, change.cancellation_reason, change.note)
         await _notify_cancellation(db, ctx)
@@ -814,6 +1084,9 @@ async def reschedule(
     await _ensure_patient_free(db, old.patient_id, slot, exclude_id=old.id)
 
     previous = old.status
+    from app.services import queue_service
+
+    await queue_service.on_appointment_status(db, old, S.cancelled, principal)
     _cancel(ctx, CancellationReason.rescheduled, data.note)
     _record(db, old, previous, S.cancelled, principal.user_id, data.note or "Rescheduled")
     # Release the old slot before claiming the new one, or the overlap
@@ -829,6 +1102,7 @@ async def reschedule(
         reason=old.reason,
         staff_notes=old.staff_notes,
         rescheduled_from_id=old.id,
+        booking_mode="custom",  # a time the user chose (D120)
     )
     await _flush_or_conflict(db)
     _record_booking(db, new, principal)

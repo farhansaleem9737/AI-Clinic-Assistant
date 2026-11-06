@@ -135,10 +135,12 @@ async def test_user_is_rolled_back_when_patient_creation_fails(client, db_sessio
     def broken_patient(**kwargs):
         raise RuntimeError("patient insert failed")
 
-    monkeypatch.setattr(patient_service, "Patient", broken_patient)
-    with pytest.raises(RuntimeError):
-        await client.post(REGISTER, json=payload("orphan@example.com"))
-    monkeypatch.undo()
+    # A local patch: monkeypatch.undo() would also undo conftest's
+    # email_verification_required=False and the retry below would get 400.
+    with monkeypatch.context() as patch:
+        patch.setattr(patient_service, "Patient", broken_patient)
+        with pytest.raises(RuntimeError):
+            await client.post(REGISTER, json=payload("orphan@example.com"))
 
     assert await db_session.scalar(select(User).where(User.email == "orphan@example.com")) is None
     # The address is still free: the same person can register once the fault is fixed.

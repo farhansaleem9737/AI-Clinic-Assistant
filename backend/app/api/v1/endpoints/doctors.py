@@ -2,6 +2,7 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
+from fastapi.exceptions import RequestValidationError
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,7 @@ from app.schemas.doctor import (
     DoctorUpdate,
 )
 from app.schemas.schedule import AvailableDay, PublicAvailabilityRead, SlotRead, WorkingInterval
-from app.services import appointment_service, availability_service, doctor_service, file_service
+from app.services import appointment_service, availability_service, doctor_service, file_service, scheduling_service
 from app.services.doctor_service import DoctorFilters, DoctorRow, DoctorSort
 from app.services.pagination import PageParams
 
@@ -47,8 +48,24 @@ def doctor_filters(
     fee_max: Decimal | None = Query(None, ge=0),
     is_active: bool | None = Query(None, description="Staff listing only"),
     sort: DoctorSort = DoctorSort.name_asc,
+    specializations: str | None = Query(
+        None, max_length=800, description="Catalog specialization ids, comma-separated: doctors with any of them (D118)"
+    ),
 ) -> DoctorFilters:
-    return DoctorFilters(department_id, specialization, q, min_experience, fee_min, fee_max, is_active, sort)
+    ids: list[uuid.UUID] = []
+    for part in (specializations or "").split(","):
+        if part.strip():
+            try:
+                ids.append(uuid.UUID(part.strip()))
+            except ValueError:
+                raise RequestValidationError(
+                    [{"loc": ("query", "specializations"), "msg": "Not a list of specialization ids", "type": "value_error"}]
+                ) from None
+    if len(ids) > 20:
+        raise RequestValidationError([{"loc": ("query", "specializations"), "msg": "At most 20 specializations", "type": "value_error"}])
+    return DoctorFilters(
+        department_id, specialization, q, min_experience, fee_min, fee_max, is_active, sort, specialization_ids=tuple(dict.fromkeys(ids))
+    )
 
 
 def to_public(row: DoctorRow, storage: Storage | None) -> DoctorPublic:
@@ -149,10 +166,14 @@ async def public_doctor_availability(
     )
     tz = bookable.timezone
     taken = availability_service.by_local_date(unavailable, tz)
+    policy = await scheduling_service.effective_policy(db, doctor_id)
     return PublicAvailabilityRead(
         doctor_id=doctor_id,
         timezone=tz.key,
         bookable_until=availability_service.bookable_until(now, tz),
+        scheduling_mode=policy.mode.value,
+        consultation_minutes=policy.consultation_minutes if policy.configured else None,
+        accepts_walk_ins=policy.walk_ins_open,
         days=[
             AvailableDay(
                 date=day,

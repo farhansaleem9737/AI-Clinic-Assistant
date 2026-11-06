@@ -22,8 +22,10 @@ export const PAGES = {
   DoctorSchedules: () => import("../pages/DoctorSchedules"),
   ForgotPassword: () => import("../pages/ForgotPassword"),
   Help: () => import("../pages/Help"),
+  Landing: () => import("../pages/Landing"),
   LegalDocument: () => import("../pages/LegalDocument"),
   MyDoctorProfile: () => import("../pages/MyDoctorProfile"),
+  MedicalInformation: () => import("../pages/MedicalInformation"),
   MyPatientProfile: () => import("../pages/MyPatientProfile"),
   NotFound: () => import("../pages/NotFound"),
   PatientDetail: () => import("../pages/PatientDetail"),
@@ -46,6 +48,9 @@ export const PROTECTED_ROUTES = [
   { path: "/doctor/profile", page: "MyDoctorProfile", permission: "doctor:update_own" },
   { path: "/doctor/application", page: "DoctorApplication", permission: "doctor_application:manage_own" },
   { path: "/profile", page: "MyPatientProfile", permission: "patient:read_own" },
+  { path: "/profile/contact", page: "MyPatientProfile", permission: "patient:read_own" },
+  // The patient's own documents and clinical information (D110).
+  { path: "/profile/medical-information", page: "MedicalInformation", permission: "patient:read_own" },
   { path: "/patients", page: "Patients", permission: "patient:read_any" },
   { path: "/patients/:id", page: "PatientDetail", anyOf: ["patient:read_any", "patient:read_assigned"] },
   // The administrator's dashboard (D85/D86); the backend checks the same permissions.

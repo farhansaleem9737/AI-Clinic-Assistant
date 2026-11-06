@@ -59,7 +59,8 @@ class Storage(Protocol):
     async def delete(self, key: str) -> None: ...
 
     def presigned_get_url(
-    self, key: str, *, expires_in: int, download_name: str | None = None, content_type: str | None = None
+    self, key: str, *, expires_in: int, download_name: str | None = None, content_type: str | None = None,
+    inline: bool = False,
     ) -> str: ...
 
 
@@ -109,12 +110,15 @@ class R2Storage:
         await self._call("delete_object", Bucket=self.bucket, Key=key)
 
     def  presigned_get_url(
-            self, key: str, *, expires_in: int, download_name: str | None = None, content_type: str | None = None   
+            self, key: str, *, expires_in: int, download_name: str | None = None, content_type: str | None = None,
+            inline: bool = False,
     ) -> str:
         params: dict[str, Any] = {"Bucket": self.bucket, "Key": key}
         if download_name:
-            # The browser saves the file instead of rendering it from R2
-            params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
+            # attachment: the browser saves the file. inline (a preview): it
+            # shows it; only server-checked PDF, JPEG and PNG files are stored.
+            disposition = "inline" if inline else "attachment"
+            params["ResponseContentDisposition"] = f'{disposition}; filename="{download_name}"'
         if content_type:
             params["ResponseContentType"]=content_type
         return self._client.generate_presigned_url("get_object",Params=params, ExpiresIn=expires_in)

@@ -106,6 +106,9 @@ def isolated_side_channels(tmp_path, monkeypatch):
     # Notification emails stay queued until a test runs the outbox itself (D109):
     # no sending in the background against the test transaction.
     monkeypatch.setattr(settings, "email_send_after_commit", False)
+    # Registration tests send no verification code unless they test it
+    # (tests/test_email_verification.py turns it back on).
+    monkeypatch.setattr(settings, "email_verification_required", False)
     yield tmp_path / "outbox"
     limiter.reset()
 

@@ -13,13 +13,15 @@ from app.models.stored_file import FileCategory
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import Principal, RoleCode
 from app.models.department import Department
+from app.models.catalog import DoctorSpecialization
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.user import User
 from app.schemas.doctor import DoctorCareerUpdate, DoctorCreate, DoctorSelfUpdate, DoctorUpdate
 from app.services.audit_service import AuditAction, record
-from app.services import appointment_service, auth_service, availability_service, rbac_service, file_service
+from app.services import appointment_service, auth_service, availability_service, catalog_service, rbac_service, file_service
 from app.services.availability_service import AvailabilityStatus, DoctorAvailability
 from app.services.pagination import PageParams, paginate
+from app.services.search_text import NameMatch, contains_pattern
 from app.services.file_validation import CheckedFile
 
 
@@ -82,6 +84,10 @@ class DoctorFilters:
     fee_max: Decimal | None = None
     is_active: bool | None = None
     sort: DoctorSort = DoctorSort.name_asc
+    # Catalog filters (D118): doctors linked to any of these specializations,
+    # and doctors whose primary department is any of these.
+    specialization_ids: tuple[uuid.UUID, ...] = ()
+    department_ids: tuple[uuid.UUID, ...] = ()
 
 
 def _base_query() -> Select:
@@ -112,28 +118,61 @@ async def _rows(db: AsyncSession, rows) -> list[DoctorRow]:
 async def list_doctors(
     db: AsyncSession, params: PageParams, filters: DoctorFilters, *, public: bool
 ) -> tuple[list[DoctorRow], int]:
-    query = _base_query().order_by(*_ORDER_BY[filters.sort], Doctor.id)
+    """One page of doctors. A free-text `q` matches the name however it is
+    written ("dr sarah khan", "Dr.Sarah Khan", "khan sarah"; see
+    search_text), the specialization or the department, and for staff also
+    the email or phone. With the default name sort, best name matches come
+    first. Only if nothing matches is a typo-tolerant name search tried
+    ("sara khan", "sarah kahn"), ranked by similarity."""
+    query = _base_query()
     if public:
         query = _visible_publicly(query)
     elif filters.is_active is not None:
         query = query.where(Doctor.is_active.is_(filters.is_active))
     if filters.department_id:
         query = query.where(Doctor.department_id == filters.department_id)
-    if filters.specialization:
-        query = query.where(Doctor.specialization.ilike(f"%{filters.specialization.strip()}%"))
-    if filters.q and filters.q.strip():
-        pattern = f"%{filters.q.strip()}%"
-        matches = [User.name.ilike(pattern), Doctor.specialization.ilike(pattern), Department.name.ilike(pattern)]
-        if not public:
-            # Staff may also find a doctor by contact details; the directory never exposes them.
-            matches += [User.email.ilike(pattern), Doctor.phone.ilike(pattern)]
-        query = query.where(or_(*matches))
+    if filters.department_ids:
+        query = query.where(Doctor.department_id.in_(filters.department_ids))
+    if filters.specialization_ids:
+        linked = select(DoctorSpecialization.doctor_id).where(DoctorSpecialization.specialization_id.in_(filters.specialization_ids))
+        query = query.where(Doctor.id.in_(linked))
+    if filters.specialization and filters.specialization.strip():
+        query = query.where(Doctor.specialization.ilike(contains_pattern(filters.specialization), escape="\\"))
     if filters.min_experience is not None:
         query = query.where(Doctor.years_of_experience >= filters.min_experience)
     if filters.fee_min is not None:
         query = query.where(Doctor.consultation_fee >= filters.fee_min)
     if filters.fee_max is not None:
         query = query.where(Doctor.consultation_fee <= filters.fee_max)
+
+    order = (*_ORDER_BY[filters.sort], Doctor.id)
+    text = " ".join((filters.q or "").split())
+    if not text:
+        return await _page(db, query.order_by(*order), params)
+
+    name = NameMatch(User.name, text)
+    pattern = contains_pattern(text)
+    # The plain name match is kept too, so nothing found before is lost.
+    others = [
+        User.name.ilike(pattern, escape="\\"),
+        Doctor.specialization.ilike(pattern, escape="\\"),
+        Department.name.ilike(pattern, escape="\\"),
+    ]
+    if not public:
+        # Staff may also find a doctor by contact details; the directory never exposes them.
+        others += [User.email.ilike(pattern, escape="\\"), Doctor.phone.ilike(pattern, escape="\\")]
+    matches = [name.condition(), *others] if name.usable else others
+    # Relevance leads only under the default sort; an explicit sort is kept.
+    ranked = (name.rank(), *order) if name.usable and filters.sort == DoctorSort.name_asc else order
+    rows, total = await _page(db, query.where(or_(*matches)).order_by(*ranked), params)
+    if total or not name.fuzzy_usable:
+        return rows, total
+    # Nothing matched: try the name with typos tolerated (pg_trgm).
+    fuzzy = query.where(name.fuzzy_condition()).order_by(name.similarity().desc(), *order)
+    return await _page(db, fuzzy, params)
+
+
+async def _page(db: AsyncSession, query: Select, params: PageParams) -> tuple[list[DoctorRow], int]:
     rows, total = await paginate(db, query, params)
     return await _rows(db, rows), total
 
@@ -302,6 +341,8 @@ async def update_doctor(
             record(db, AuditAction.doctor_department_changed, actor_id=principal.user_id if principal else None,
                    target_type="doctor", target_id=doctor.id,
                    details={"from": str(doctor.department_id), "to": str(changes["department_id"])})
+            # Catalog specializations that the new department does not have go (D118).
+            await catalog_service.drop_links_outside_department(db, doctor.id, changes["department_id"])
     if "license_number" in changes:
         await ensure_license_free(db, changes["license_number"], exclude_id=doctor.id)
     for required in ("department_id", "specialization", "years_of_experience"):

@@ -16,6 +16,8 @@ creates its own data and deletes it afterwards.
 
 import asyncio
 import os
+
+import pytest
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -42,7 +44,11 @@ from tests.conftest import TEST_PASSWORD_HASH
 RACERS = 2
 
 
-async def test_parallel_bookings_for_one_slot_yield_exactly_one_appointment():
+@pytest.mark.parametrize("mode", ["custom", "auto"])
+async def test_parallel_bookings_for_one_slot_yield_exactly_one_appointment(mode):
+    """Custom time, and automatic token booking (D120: both patients were shown
+    the same earliest time): one wins; the other gets a conflict that names the
+    next free time instead of being booked into it silently."""
     engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
     tag = os.urandom(3).hex()
     tz = ZoneInfo("Asia/Karachi")
@@ -76,7 +82,8 @@ async def test_parallel_bookings_for_one_slot_yield_exactly_one_appointment():
         await setup.commit()
 
     starts_at = datetime.combine(today + timedelta(days=3), time(9), tzinfo=tz).astimezone(ZoneInfo("UTC"))
-    request = AppointmentCreate(doctor_id=doctor.id, starts_at=starts_at)
+    request = AppointmentCreate(doctor_id=doctor.id, starts_at=starts_at, booking_mode=mode)
+    offered = []
 
     arrived = 0
     both_here = asyncio.Event()
@@ -100,6 +107,7 @@ async def test_parallel_bookings_for_one_slot_yield_exactly_one_appointment():
                 await appointment_service.book(session, principal, request, None)
                 return "booked"
             except ConflictError as exc:
+                offered.append(exc.details.get("next_available"))
                 return exc.code
 
     appointment_service._ensure_patient_free = gate
@@ -123,3 +131,8 @@ async def test_parallel_bookings_for_one_slot_yield_exactly_one_appointment():
         await engine.dispose()
 
     assert sorted(results) == ["SLOT_UNAVAILABLE", "booked"], results
+    if mode == "auto":
+        [nxt] = offered
+        assert datetime.fromisoformat(nxt["starts_at"]) == starts_at + timedelta(minutes=30) and nxt["queue_position"] == 2
+    else:
+        assert offered == [None]

@@ -1,0 +1,44 @@
+# Scheduled reminder run (D108, D109; docs/NOTIFICATIONS.md).
+# Calls POST /api/v1/internal/reminders/run on the Render backend, which creates the
+# due appointment and follow-up reminders (in-app and email) and sends the email outbox.
+# The run is idempotent, so a late, repeated or retried call never sends anything twice.
+#
+# Setup (GitHub → Settings → Secrets and variables → Actions → New repository secret):
+#   REMINDERS_URL          https://<RENDER_HOST>/api/v1/internal/reminders/run
+#   REMINDERS_CRON_SECRET  the value Render generated for REMINDERS_CRON_SECRET
+# Until both are set the job skips itself.
+name: Reminders
+
+on:
+  schedule:
+    # Every 15 minutes, 06:00–22:59 clinic time (Asia/Karachi = UTC+5; cron runs in UTC).
+    # GitHub may start a scheduled run a few minutes late; a late run still sends the
+    # reminder that is due. Each run wakes the free Render service and Neon.
+    - cron: "*/15 1-17 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: reminders
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Run reminders and send emails
+        env:
+          REMINDERS_URL: ${{ secrets.REMINDERS_URL }}
+          REMINDERS_CRON_SECRET: ${{ secrets.REMINDERS_CRON_SECRET }}
+        run: |
+          if [ -z "$REMINDERS_URL" ] || [ -z "$REMINDERS_CRON_SECRET" ]; then
+            echo "::notice::REMINDERS_URL / REMINDERS_CRON_SECRET not set; skipping."
+            exit 0
+          fi
+          # A sleeping free Render service takes about a minute to wake: allow for it and retry.
+          curl --fail-with-body --silent --show-error \
+            --max-time 150 --retry 3 --retry-delay 20 --retry-all-errors \
+            -X POST -H "X-Reminders-Secret: $REMINDERS_CRON_SECRET" "$REMINDERS_URL"
+          echo

@@ -34,6 +34,7 @@ from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
 from app.models.patient import Patient
 from app.models.schedule import ExceptionKind, ScheduleException, ScheduleTemplate
+from app.models.scheduling import SchedulingMode, SchedulingPolicy
 from app.models.user import User
 from app.services import rbac_service
 
@@ -231,6 +232,22 @@ async def seed() -> None:
         for doctor in idle.all():
             _weekly_hours(db, doctor, "full", today)
             print(f"  + Mon-Fri 09:00-17:00 for doctor {doctor.id}")
+
+        # Demo doctors book in 15-minute appointments (D120): 9:00-17:00 gives 32
+        # times a day. Only fictional demo doctors, and only when they have no
+        # policy yet; real doctors' schedules and settings are never touched.
+        print("Scheduling policies for demo doctors that have none")
+        unset = await db.scalars(
+            select(Doctor)
+            .join(User, User.id == Doctor.user_id)
+            .where(
+                User.email.like("%@clinic-demo.example"),
+                ~Doctor.id.in_(select(SchedulingPolicy.doctor_id)),
+            )
+        )
+        for doctor in unset.all():
+            db.add(SchedulingPolicy(doctor_id=doctor.id, mode=SchedulingMode.hybrid, consultation_minutes=15))
+            print(f"  + 15-minute appointments for doctor {doctor.id}")
 
         await db.commit()
 

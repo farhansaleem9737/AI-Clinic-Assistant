@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
-import { bookAppointment } from "../services/appointmentService";
+import { bookAppointment, getNextAvailable } from "../services/appointmentService";
 import { getPublicDepartments } from "../services/departmentService";
 import { getPublicAvailability, getPublicDoctor, getPublicDoctors, getPublicSpecializations } from "../services/doctorService";
 import { getPatient, listPatients } from "../services/patientService";
@@ -32,7 +32,7 @@ const free = (slots, unavailable = []) => ({
 });
 // Another date in the same month as DAY, so both show on the opening calendar.
 const OTHER_DAY = DAY.endsWith("-01") ? `${DAY.slice(0, 8)}02` : `${DAY.slice(0, 8)}01`;
-const slot = (startsAt) => ({ starts_at: startsAt, ends_at: startsAt.replace(/T(\d\d):(\d\d)/, (_, h, m) => `T${h}:${Number(m) + 30}`) });
+const slot = (startsAt) => ({ starts_at: startsAt, ends_at: new Date(Date.parse(startsAt) + 30 * 60000).toISOString().replace(".000Z", "Z") });
 const doctorsPage = (items) => ({ data: { items, total: items.length, page: 1, page_size: 9 } });
 
 const SARAH = publicDoctor({ photo_url: null });
@@ -58,6 +58,17 @@ function renderBooking(auth, query = "") {
 }
 
 const patient = () => authAs("John Doe", ["patient"], PERMISSIONS.patient);
+// These tests pick times themselves: "Choose custom time" (D120; Automatic token is the default).
+async function customTime(user) {
+  const radio = await screen.findByRole("radio", { name: /Choose custom time/ });
+  if (!radio.checked) await user.click(radio);
+}
+const nextFree = (startsAt, extra = {}) => ({
+  data: {
+    doctor_id: "doc-1", date: DAY, timezone: TZ, slot: startsAt ? slot(startsAt) : null, queue_position: startsAt ? 3 : null,
+    consultation_minutes: 30, booked_count: 2, free_count: startsAt ? 5 : 0, next_date: null, ...extra,
+  },
+});
 const lastDoctorQuery = () => getPublicDoctors.mock.calls.at(-1)[0];
 
 beforeEach(() => {
@@ -70,6 +81,7 @@ beforeEach(() => {
   });
   getPublicAvailability.mockResolvedValue(free([slot(SLOT), slot(LATER)]));
   getAvailability.mockResolvedValue({ data: { timezone: TZ, slots: [] } });
+  getNextAvailable.mockResolvedValue(nextFree(SLOT));
 });
 
 describe("step 1: select a doctor", () => {
@@ -152,6 +164,7 @@ describe("steps 2 and 3", () => {
     await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
     expect(await screen.findByRole("heading", { name: "Select Date & Time" })).toBeInTheDocument();
+    await customTime(user);
     await user.click(await screen.findByRole("button", { name: formatSlotTime(SLOT, TZ) }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
     expect(await screen.findByRole("heading", { name: "Confirm your appointment" })).toBeInTheDocument();
@@ -194,7 +207,7 @@ describe("steps 2 and 3", () => {
     await user.type(screen.getByRole("textbox", { name: "Reason for Appointment" }), "Chest pain");
     await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
     expect(bookAppointment).toHaveBeenCalledWith(
-      { doctor_id: "doc-1", starts_at: SLOT, reason: "Chest pain" },
+      { doctor_id: "doc-1", starts_at: SLOT, reason: "Chest pain", booking_mode: "custom" },
       expect.any(String) // idempotency key
     );
     expect(bookAppointment.mock.calls[0][0]).not.toHaveProperty("patient_id");
@@ -323,6 +336,7 @@ describe("steps 2 and 3", () => {
     renderBooking(patient());
     await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await customTime(user);
     await screen.findByRole("button", { name: formatSlotTime(SLOT, TZ) });
     expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
   });
@@ -374,6 +388,7 @@ describe("step 2: date and time", () => {
     await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
     await screen.findByRole("heading", { name: "Select Date & Time" });
+    await customTime(user);
   }
 
   it("marks step 1 complete, step 2 current and step 3 upcoming", async () => {
@@ -406,8 +421,10 @@ describe("step 2: date and time", () => {
     await openStep2(user);
 
     const times = await screen.findByRole("group", { name: `Times on ${longDate(DAY)}` });
-    const taken = within(times).getByRole("button", { name: `${formatSlotTime(`${DAY}T11:00:00Z`, TZ)}, unavailable` });
-    expect(taken).toBeDisabled();
+    // Date -> Hour -> Time (D117): the 4 PM hour has no free time, so its chip is disabled.
+    const hours = screen.getByRole("group", { name: "Hour" });
+    expect(within(hours).getByRole("button", { name: "4 PM, no free times" })).toBeDisabled();
+    expect(within(hours).getByRole("button", { name: /^3 PM, \d+ free$/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(longDate(DAY))).toHaveClass("accent-text");
     expect(screen.getByText(/Selected time zone: \(GMT\+05:00\)/)).toBeInTheDocument();
     for (const key of ["Selected date", "Available", "Unavailable"]) {
@@ -478,8 +495,99 @@ describe("step 2: date and time", () => {
     await user.click(await screen.findByRole("radio", { name: /James Lee/ }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
     await screen.findByRole("heading", { name: "Select Date & Time" });
-    expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
     expect(getPublicAvailability).toHaveBeenLastCalledWith("doc-2", expect.any(String), expect.any(String));
+    // The new doctor's own earliest time is assigned (automatic is the default per doctor), never Sarah's.
+    await waitFor(() => expect(getNextAvailable).toHaveBeenLastCalledWith("doc-2", expect.any(String), null));
+  });
+});
+
+describe("automatic token booking (the default)", () => {
+  async function toStep2(user) {
+    await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await screen.findByRole("heading", { name: "Select Date & Time" });
+    const auto = await screen.findByRole("radio", { name: /Automatic token/ });
+    if (!auto.checked) await user.click(auto);
+  }
+
+  it("assigns the server's earliest time with its queue number, then books it as automatic", async () => {
+    const user = userEvent.setup();
+    bookAppointment.mockResolvedValue({
+      data: appointment({ id: "0190aaaa-bbbb-7ccc-8ddd-0000feedbeef", starts_at: SLOT, timezone: TZ, booking_mode: "auto", queue_position: 3, duration_minutes: 30 }),
+    });
+    renderBooking(patient());
+    await toStep2(user);
+    expect(screen.getByText("We'll assign the next available appointment time.")).toBeInTheDocument();
+    expect(await screen.findByText("Your assigned time")).toBeInTheDocument();
+    expect(getNextAvailable).toHaveBeenLastCalledWith("doc-1", DAY, null);
+    expect(screen.getByText("#3")).toBeInTheDocument();
+    // No time to pick: the assigned one is already chosen.
+    expect(screen.queryByRole("group", { name: /^Times on/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+
+    const details = await screen.findByRole("region", { name: "Appointment Details" });
+    expect(details).toHaveTextContent("Estimated start time");
+    expect(details).toHaveTextContent("Automatic token: the next available time");
+    expect(details).toHaveTextContent("Queue no.#3");
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(bookAppointment).toHaveBeenCalledWith(
+      { doctor_id: "doc-1", starts_at: SLOT, reason: null, booking_mode: "auto" },
+      expect.any(String)
+    );
+    expect(await screen.findByRole("heading", { name: "Your appointment is booked" })).toBeInTheDocument();
+    expect(screen.getByText("APT-FEEDBEEF")).toBeInTheDocument(); // the permanent reference, from the id
+    expect(screen.getByText(/This was the next available time/)).toBeInTheDocument();
+  });
+
+  it("a time taken meanwhile names the next one for review instead of booking it", async () => {
+    const user = userEvent.setup();
+    bookAppointment.mockRejectedValue({
+      response: { status: 409, data: { error: { code: "SLOT_UNAVAILABLE", message: "That time was just taken.", details: { next_available: { starts_at: LATER, queue_position: 4 } } } } },
+    });
+    renderBooking(patient());
+    await toStep2(user);
+    await screen.findByText("Your assigned time");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await screen.findByRole("region", { name: "Appointment Details" });
+    getNextAvailable.mockResolvedValue(nextFree(LATER, { queue_position: 4 }));
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+
+    expect(await screen.findByText(`Sorry, that time was just taken. The next available time is ${formatSlotTime(LATER, TZ)}: please review it and confirm again.`)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select Date & Time" })).toBeInTheDocument();
+    expect(await screen.findByText("#4")).toBeInTheDocument();
+    expect(bookAppointment).toHaveBeenCalledTimes(1); // nothing else was booked
+  });
+
+  it("a full date offers the next date with free times", async () => {
+    const user = userEvent.setup();
+    getNextAvailable.mockResolvedValue(nextFree(null, { next_date: OTHER_DAY }));
+    getPublicAvailability.mockResolvedValue({
+      data: {
+        doctor_id: "doc-1", timezone: TZ, bookable_until: "2099-12-31",
+        days: [
+          { date: DAY, slots: [], unavailable: [slot(SLOT)] },
+          { date: OTHER_DAY, slots: [slot(`${OTHER_DAY}T09:00:00Z`)], unavailable: [] },
+        ],
+      },
+    });
+    renderBooking(patient());
+    await toStep2(user);
+    expect(await screen.findByText(`There are no free times on ${longDate(DAY)}.`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
+    getNextAvailable.mockResolvedValue(nextFree(`${OTHER_DAY}T09:00:00Z`));
+    await user.click(screen.getByRole("button", { name: `See ${longDate(OTHER_DAY)}` }));
+    await waitFor(() => expect(getNextAvailable).toHaveBeenLastCalledWith("doc-1", OTHER_DAY, null));
+  });
+
+  it("the front desk's automatic booking skips the chosen patient's own appointments", async () => {
+    const user = userEvent.setup();
+    getPatient.mockResolvedValue({ data: { id: "p-1", first_name: "John", last_name: "Doe", mrn: "MRN00000001", date_of_birth: "1990-01-01", is_active: true } });
+    renderBooking(authAs("Rita", ["receptionist"], PERMISSIONS.receptionist), "patient=p-1");
+    await screen.findByRole("region", { name: "Patient: John Doe" });
+    await toStep2(user);
+    await waitFor(() => expect(getNextAvailable).toHaveBeenLastCalledWith("doc-1", DAY, "p-1"));
   });
 });
 
@@ -627,13 +735,14 @@ describe("staff booking on behalf of a patient", () => {
     await screen.findByRole("region", { name: "Patient: John Doe" });
     await user.click(await screen.findByRole("radio", { name: /Sarah Khan/ }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await customTime(user);
     await user.click(await screen.findByRole("button", { name: formatSlotTime(SLOT, TZ) }));
     await user.click(screen.getByRole("button", { name: /Continue/ }));
 
     expect(await screen.findByText(/Booking on behalf of/, { selector: ".on-behalf-note" })).toHaveTextContent("John Doe (MRN MRN00000001)");
     await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
     expect(bookAppointment).toHaveBeenCalledWith(
-      { doctor_id: "doc-1", starts_at: SLOT, reason: null, patient_id: "p-1" },
+      { doctor_id: "doc-1", starts_at: SLOT, reason: null, patient_id: "p-1", booking_mode: "custom" },
       expect.any(String)
     );
     expect(await screen.findByRole("heading", { name: "Appointment booked for John Doe" })).toBeInTheDocument();

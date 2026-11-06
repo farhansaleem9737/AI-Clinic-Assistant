@@ -4,13 +4,15 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
 import { getPublicDepartments } from "../services/departmentService";
-import { getPublicDoctors, getPublicSpecializations } from "../services/doctorService";
+import { getCatalogSpecializations } from "../services/catalogService";
+import { getPublicDoctors } from "../services/doctorService";
 import { anonymous, authAs, doctorsPage, PERMISSIONS, publicDoctor } from "../test/fixtures";
 import Doctors from "./Doctors";
 
 vi.mock("../context/useAuth");
 vi.mock("../services/doctorService");
 vi.mock("../services/departmentService");
+vi.mock("../services/catalogService");
 
 const sarah = publicDoctor();
 const robert = publicDoctor({
@@ -31,6 +33,20 @@ const emily = publicDoctor({
   availability: { status: "busy", next_available: null },
 });
 const DEFAULTS = { page: 1, page_size: 6, sort: "name_asc" };
+
+// Catalog specializations (D118) as the API returns them, per department.
+const EP = "00000000-0000-7000-8000-00000000e001";
+const HF = "00000000-0000-7000-8000-00000000e002";
+const PEDCARD = "00000000-0000-7000-8000-00000000e003";
+const SPORTS = "00000000-0000-7000-8000-00000000e004";
+const spec = (id, name, department_ids, doctor_count = 1) => ({ id, name, slug: name.toLowerCase(), department_ids, doctor_count });
+const CARDIOLOGY_SPECS = [
+  spec(EP, "Cardiac Electrophysiology", ["dep-1"], 2),
+  spec(HF, "Heart Failure", ["dep-1"], 0),
+  spec(PEDCARD, "Pediatric Cardiology", ["dep-1", "dep-3"]),
+];
+const ORTHO_SPECS = [spec(SPORTS, "Sports Medicine", ["dep-2"])];
+const SPECS_BY_DEPARTMENT = { "dep-1": CARDIOLOGY_SPECS, "dep-2": ORTHO_SPECS, "": [...CARDIOLOGY_SPECS, ...ORTHO_SPECS] };
 const apiError = (message) => ({ response: { data: { error: { code: "X", message } } } });
 
 function Where() {
@@ -72,7 +88,7 @@ beforeEach(() => {
       ],
     },
   });
-  getPublicSpecializations.mockResolvedValue({ data: ["Cardiologist", "Orthopedic Surgeon"] });
+  getCatalogSpecializations.mockImplementation((departmentId) => Promise.resolve({ data: SPECS_BY_DEPARTMENT[departmentId ?? ""] }));
 });
 
 describe("doctor cards", () => {
@@ -146,10 +162,75 @@ describe("search and filters", () => {
     expect(screen.getByRole("button", { name: "List view" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("fills the department and specialization options from the API", async () => {
+  it("fills the department options from the API and loads no specializations until asked", async () => {
     renderDirectory();
     expect(await screen.findByRole("option", { name: "Orthopedics" })).toBeInTheDocument();
-    expect(await screen.findByRole("option", { name: "Orthopedic Surgeon" })).toBeInTheDocument();
+    expect(screen.getByText("Choose a department to see its specializations.")).toBeInTheDocument();
+    expect(getCatalogSpecializations).not.toHaveBeenCalled();
+  });
+
+  it("choosing Cardiology shows only Cardiology's specializations, from the API", async () => {
+    const user = userEvent.setup();
+    renderDirectory();
+    await screen.findByRole("option", { name: "Cardiology" });
+    await user.selectOptions(screen.getByLabelText("Department"), "dep-1");
+    const picker = await screen.findByRole("group", { name: "Specialization" });
+    await within(picker).findByRole("button", { name: /Cardiac Electrophysiology, 2 doctors/ });
+    expect(getCatalogSpecializations).toHaveBeenLastCalledWith("dep-1");
+    expect(within(picker).getAllByRole("button", { pressed: false }).map((b) => b.textContent)).toEqual([
+      "Cardiac Electrophysiology2",
+      "Heart Failure0",
+      "Pediatric Cardiology1",
+    ]);
+    expect(within(picker).queryByRole("button", { name: /Sports Medicine/ })).not.toBeInTheDocument();
+  });
+
+  it("filters by several specializations, in the URL and the API request", async () => {
+    const user = userEvent.setup();
+    renderDirectory();
+    await screen.findByRole("option", { name: "Cardiology" });
+    await user.selectOptions(screen.getByLabelText("Department"), "dep-1");
+    await user.click(await screen.findByRole("button", { name: /Cardiac Electrophysiology/ }));
+    await user.click(screen.getByRole("button", { name: /Heart Failure/ }));
+    expect(screen.getByRole("button", { name: /Heart Failure/ })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => expect(lastRequest()).toEqual({ ...DEFAULTS, department_id: "dep-1", specializations: `${EP},${HF}` }));
+    expect(where()).toBe(`/doctors?department=dep-1&specializations=${encodeURIComponent(`${EP},${HF}`)}`);
+    // The applied filters are shown as chips; removing one asks the API again.
+    const applied = screen.getByLabelText("Applied filters");
+    expect(within(applied).getAllByRole("button").map((b) => b.textContent.trim())).toEqual([
+      "Cardiology", "Cardiac Electrophysiology", "Heart Failure", "Clear all",
+    ]);
+    await user.click(within(applied).getByRole("button", { name: "Remove filter Heart Failure" }));
+    await waitFor(() => expect(lastRequest()).toEqual({ ...DEFAULTS, department_id: "dep-1", specializations: EP }));
+  });
+
+  it("changing the department drops specializations the new one does not have", async () => {
+    const user = userEvent.setup();
+    renderDirectory(`/doctors?department=dep-1&specializations=${EP},${PEDCARD}`);
+    await screen.findByRole("button", { name: /Cardiac Electrophysiology/, pressed: true });
+    await user.selectOptions(screen.getByLabelText("Department"), "dep-2");
+    await screen.findByRole("button", { name: /Sports Medicine/ });
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => expect(lastRequest()).toEqual({ ...DEFAULTS, department_id: "dep-2" }));
+  });
+
+  it("names specializations from a shared link and shows an empty state when none match", async () => {
+    getPublicDoctors.mockResolvedValue(doctorsPage([]));
+    renderDirectory(`/doctors?specializations=${HF}`);
+    expect(await screen.findByText("No doctors found. Try a different search or fewer filters.")).toBeInTheDocument();
+    expect(lastRequest()).toEqual({ ...DEFAULTS, specializations: HF });
+    const applied = screen.getByLabelText("Applied filters");
+    await within(applied).findByRole("button", { name: "Remove filter Heart Failure" });
+  });
+
+  it("on small screens the filters fold behind a button showing how many apply", async () => {
+    const user = userEvent.setup();
+    renderDirectory(`/doctors?department=dep-1&specializations=${EP}&fee=150-200`);
+    const toggle = await screen.findByRole("button", { name: "Filters (3)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
   it("asks the API only when filters are applied, and goes back to page 1", async () => {

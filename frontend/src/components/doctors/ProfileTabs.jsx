@@ -1,4 +1,4 @@
-import { Briefcase, GraduationCap, UserRound } from "lucide-react";
+import { Briefcase, GraduationCap, Pencil, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { yearRange } from "../../utils/doctors";
 
@@ -20,7 +20,8 @@ function goTo(id) {
   el.focus({ preventScroll: true });
 }
 
-function Section({ id, icon: Icon, title, children }) {
+// `onEdit`: shown only to someone who may change this section (D113).
+function Section({ id, icon: Icon, title, editLabel, onEdit, children }) {
   return (
     <section
       id={sectionId(id)}
@@ -32,6 +33,11 @@ function Section({ id, icon: Icon, title, children }) {
       <div className="profile-section-head">
         <Icon className="icon" size={24} aria-hidden="true" />
         <h2 id={`${sectionId(id)}-title`}>{title}</h2>
+        {onEdit && (
+          <button type="button" className="secondary small-button section-edit" onClick={() => onEdit(id)} aria-label={`Edit ${editLabel}`}>
+            <Pencil size={15} aria-hidden="true" /> Edit
+          </button>
+        )}
       </div>
       <div className="profile-section-body">{children}</div>
     </section>
@@ -40,13 +46,13 @@ function Section({ id, icon: Icon, title, children }) {
 
 // The biography as written, one paragraph per blank-line-separated block.
 // Rendered as text (never HTML), so nothing in it can run as markup.
-function About({ doctor, name }) {
+function About({ doctor, name, onEdit }) {
   const paragraphs = (doctor.bio ?? "")
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .filter(Boolean);
   return (
-    <Section id="about" icon={UserRound} title={`About ${name}`}>
+    <Section id="about" icon={UserRound} title={`About ${name}`} editLabel="About" onEdit={onEdit}>
       {paragraphs.length ? (
         paragraphs.map((p, i) => (
           <p key={i} className="prose">
@@ -79,7 +85,7 @@ function Timeline({ items }) {
   );
 }
 
-function Experience({ doctor }) {
+function Experience({ doctor, onEdit }) {
   const items = doctor.experience.map((e) => ({
     heading: e.title,
     place: [e.organization, e.location].filter(Boolean).join(", "),
@@ -87,20 +93,20 @@ function Experience({ doctor }) {
     years: yearRange(e.start_year, e.end_year, { ongoing: "Present" }),
   }));
   return (
-    <Section id="experience" icon={Briefcase} title="Experience">
+    <Section id="experience" icon={Briefcase} title="Experience" editLabel="Experience" onEdit={onEdit}>
       {items.length ? <Timeline items={items} /> : <p className="muted">Professional experience has not been added yet.</p>}
     </Section>
   );
 }
 
-function Education({ doctor }) {
+function Education({ doctor, onEdit }) {
   const items = doctor.education.map((e) => ({
     heading: e.field_of_study ? `${e.qualification} (${e.field_of_study})` : e.qualification,
     place: e.institution,
     years: yearRange(e.start_year, e.end_year),
   }));
   return (
-    <Section id="education" icon={GraduationCap} title="Education">
+    <Section id="education" icon={GraduationCap} title="Education" editLabel="Education" onEdit={onEdit}>
       {items.length ? (
         <Timeline items={items} />
       ) : doctor.qualifications ? (
@@ -116,8 +122,9 @@ function Education({ doctor }) {
  * About, Experience and Education, all shown one under another, with a bar
  * of links that scroll to each. The link of the section being read is
  * highlighted as the page scrolls (where the browser supports it).
+ * `onEdit(section)`, when given, adds an Edit button to each section.
  */
-export default function ProfileTabs({ doctor, name }) {
+export default function ProfileTabs({ doctor, name, onEdit }) {
   const [active, setActive] = useState("about");
 
   useEffect(() => {
@@ -161,9 +168,9 @@ export default function ProfileTabs({ doctor, name }) {
           ))}
         </ul>
       </nav>
-      <About doctor={doctor} name={name} />
-      <Experience doctor={doctor} />
-      <Education doctor={doctor} />
+      <About doctor={doctor} name={name} onEdit={onEdit} />
+      <Experience doctor={doctor} onEdit={onEdit} />
+      <Education doctor={doctor} onEdit={onEdit} />
     </div>
   );
 }

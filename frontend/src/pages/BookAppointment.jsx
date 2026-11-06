@@ -97,7 +97,13 @@ function BookingWizard({ staff }) {
 
   // Keep a patient's own booking for a reload; finished or abandoned, forget it.
   const storable = !staff && doctor && !booked;
-  const storedSlot = slot && { starts_at: slot.starts_at, ends_at: slot.ends_at ?? null, timezone: slot.timezone ?? null };
+  const storedSlot = slot && {
+    starts_at: slot.starts_at,
+    ends_at: slot.ends_at ?? null,
+    timezone: slot.timezone ?? null,
+    mode: slot.mode ?? null,
+    queue_position: slot.queue_position ?? null,
+  };
   const storedValue = storable ? JSON.stringify({ doctorId: doctor.id, step, slot: storedSlot }) : null;
   useEffect(() => {
     if (storedValue) storeDraft(draft, JSON.parse(storedValue), RELOAD_KEEP_MS);
@@ -223,6 +229,7 @@ function BookingWizard({ staff }) {
         draftKey={`${draft}:date:${doctor.id}`}
         onBack={() => toStep(1)}
         onContinue={() => toStep(3)}
+        patientId={staff ? (patient?.id ?? null) : null}
       />
     );
   } else {

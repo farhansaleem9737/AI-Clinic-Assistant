@@ -8,24 +8,19 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 
 from app.core.config import settings
 from app.models.patient import SexAtBirth
-from app.schemas.common import LoginEmail, clean_name
+from app.schemas.common import LoginEmail, VerificationCode, check_birth_date, clean_name
 
 
 _PHONE = re.compile(r"\+?[0-9(][0-9 ()\-.]{3,28}")
 
 
 def _validate_dob(value: date | None) -> date | None:
-    if value is None:
-        return value
-    today = datetime.now(ZoneInfo(settings.clinic_timezone)).date()
-    if value > today:
-        raise ValueError("Date of birth cannot be in the future")
-    if value.year < 1900:
-        raise ValueError("Date of birth is not plausible")
-    return value
+    return value if value is None else check_birth_date(value)
 
 
 ContactMethod = Literal["phone", "sms", "email"]
+BloodGroup = Literal["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+MaritalStatus = Literal["single", "married", "divorced", "widowed"]
 
 
 class _Contact(BaseModel):
@@ -37,10 +32,21 @@ class _Contact(BaseModel):
     emergency_contact_relationship: str | None = Field(default=None, max_length=50)
     emergency_contact_phone: str | None = Field(default=None, max_length=30)
     preferred_contact_method: ContactMethod | None = None
+    # The address in parts (D111); `address` is the street / area.
+    city: str | None = Field(default=None, max_length=100)
+    province: str | None = Field(default=None, max_length=100)
+    country: str | None = Field(default=None, pattern=r"^[A-Z]{2}$", description="ISO 3166-1 alpha-2, e.g. PK")
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def country_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().upper() or None
+        return value
 
     @field_validator(
         "phone", "address", "preferred_language", "emergency_contact_name",
-        "emergency_contact_relationship", "emergency_contact_phone", mode="before",
+        "emergency_contact_relationship", "emergency_contact_phone", "city", "province", mode="before",
     )
     @classmethod
     def blank_is_none(cls, value: object) -> object:
@@ -90,13 +96,24 @@ class PatientSelfUpdate(_Contact):
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     date_of_birth: date | None = None
     sex_at_birth: SexAtBirth | None = None
+    # Personal details (D111). Sending null clears one.
+    blood_group: BloodGroup | None = None
+    marital_status: MaritalStatus | None = None
+    # A CNIC for Pakistan (checked and written 12345-1234567-1), otherwise
+    # any national ID as given. Never returned: reads show it masked.
+    national_id: str | None = Field(default=None, max_length=30)
 
     _dob = field_validator("date_of_birth")(_validate_dob)
 
-    @field_validator("first_name", "last_name", mode="before")
+    @field_validator("first_name", "last_name", "national_id", mode="before")
     @classmethod
     def trimmed(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("national_id", mode="before")
+    @classmethod
+    def blank_id_is_none(cls, value: object) -> object:
+        return None if value == "" else value
 
 
 class PatientRegistration(BaseModel):
@@ -118,6 +135,8 @@ class PatientRegistration(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     phone: str | None = Field(default=None, max_length=30)
     sex_at_birth: SexAtBirth = SexAtBirth.unknown
+    # Required when EMAIL_VERIFICATION_REQUIRED is on (the default).
+    verification_code: VerificationCode | None = None
 
     _dob = field_validator("date_of_birth")(_validate_dob)
     _names = field_validator("first_name", "last_name")(clean_name)
@@ -158,6 +177,13 @@ class PatientRead(BaseModel):
     emergency_contact_relationship: str | None = None
     emergency_contact_phone: str | None = None
     preferred_contact_method: str | None = None
+    blood_group: str | None = None
+    marital_status: str | None = None
+    # Only the last three characters: the full ID never leaves the server.
+    national_id_masked: str | None = None
+    city: str | None = None
+    province: str | None = None
+    country: str | None = None
     has_account: bool
     photo_url: str | None = None
     created_at: datetime

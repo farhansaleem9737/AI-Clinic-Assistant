@@ -1,4 +1,6 @@
 import { CalendarDays, ChevronLeft, ChevronRight, Search, SearchX } from "lucide-react";
+import QueuePanel from "../components/queue/QueuePanel";
+import { useAuth } from "../context/useAuth";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import ActionMenu from "../components/ActionMenu";
@@ -103,6 +105,7 @@ function Row({ appointment: a, showDate, isNext, onAction }) {
  * search text (a patient's name) stays out of it.
  */
 export default function DoctorAppointments() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const view = VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "day";
@@ -226,6 +229,9 @@ export default function DoctorAppointments() {
         <h1>My Appointments</h1>
         <p className="muted">View and manage your appointments.</p>
       </header>
+
+      {/* D117: the doctor's own queue for today. */}
+      {user?.doctor_id && <QueuePanel role="doctor" doctorId={user.doctor_id} />}
 
       <div className="appt-toolbar">
         <div className="appt-tabs" role="tablist" aria-label="Appointment views">

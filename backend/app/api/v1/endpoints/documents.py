@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import require_any_permission
@@ -82,14 +82,15 @@ async def download_document(
     patient_id: uuid.UUID,
     document_id: uuid.UUID,
     response: Response,
+    inline: bool = Query(False, description="Open in the browser (a preview) instead of saving the file"),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_any_permission(*READ)),
     storage: Storage = Depends(get_storage),
 ):
     """A link valid for a few minutes. JSON rather than a redirect: browsers
     drop the Authorization header on cross-origin redirects, and the app
-    decides when to open it."""
-    url, expires_at= await document_service.download_link(db, storage, principal, patient_id, document_id)
+    decides when to open it. `inline=true` is the same link for a preview."""
+    url, expires_at= await document_service.download_link(db, storage, principal, patient_id, document_id, inline=inline)
     response.headers["Cache-Control"] = "no-store"
     return DocumentDownload(url=url, expires_at=expires_at)
 

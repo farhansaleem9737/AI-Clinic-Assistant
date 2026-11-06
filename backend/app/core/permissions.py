@@ -81,6 +81,9 @@ class Perm(StrEnum):
     appointment_manage = "appointment:manage"
     appointment_check_in = "appointment:check_in"
     appointment_consult = "appointment:consult"
+    # Book outside the normal rules (custom time or duration, authorized double
+    # booking), always with a reason and an audit entry (D117). Staff only.
+    appointment_override = "appointment:override"
 
     # Document
     document_read_own="document:read_own"
@@ -89,6 +92,13 @@ class Perm(StrEnum):
     document_read_assigned="document:read_assigned"
     document_upload_assigned="document:upload_assigned"
     document_retract_assigned="document:retract_assigned"
+
+    # Allergies, diagnoses and medications (D112). Patients report their own
+    # allergies and medicines; treating doctors record all three.
+    health_record_read_own = "health_record:read_own"
+    health_record_report_own = "health_record:report_own"
+    health_record_read_assigned = "health_record:read_assigned"
+    health_record_write_assigned = "health_record:write_assigned"
 
 
 @dataclass(frozen=True)

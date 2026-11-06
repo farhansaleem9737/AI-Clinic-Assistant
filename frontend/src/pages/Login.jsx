@@ -88,7 +88,7 @@ export default function Login() {
               name="email"
               type="email"
               inputMode="email"
-              autoComplete="email"
+              autoComplete="username"
               placeholder="Enter your email address"
               value={form.email}
               onChange={(e) => set("email", e.target.value)}

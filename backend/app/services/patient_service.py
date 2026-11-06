@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -204,6 +205,21 @@ async def update_patient(db: AsyncSession, principal: Principal, patient_id: uui
 
 
 IDENTITY_FIELDS = ("first_name", "last_name", "date_of_birth", "sex_at_birth")
+_CNIC = re.compile(r"\d{5}-?\d{7}-?\d")
+_NATIONAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9 /-]{3,29}")
+
+
+def normalize_national_id(value: str, country: str | None) -> str:
+    """A Pakistani CNIC (13 digits) is checked and written 12345-1234567-1; for
+    other countries the ID is kept exactly as given, only its characters checked."""
+    if (country is None or country == "PK") and _CNIC.fullmatch(value):
+        digits = value.replace("-", "")
+        return f"{digits[:5]}-{digits[5:12]}-{digits[12]}"
+    if country == "PK":
+        raise BusinessRuleError("A CNIC has 13 digits, written 12345-1234567-1", code="INVALID_CNIC")
+    if not _NATIONAL_ID.fullmatch(value):
+        raise BusinessRuleError("Use 4 to 30 letters, digits, spaces, dashes or slashes", code="INVALID_NATIONAL_ID")
+    return value
 
 
 async def update_own_profile(db: AsyncSession, principal: Principal, data: PatientSelfUpdate) -> Patient:
@@ -215,16 +231,25 @@ async def update_own_profile(db: AsyncSession, principal: Principal, data: Patie
     for required in IDENTITY_FIELDS:
         if required in changes and changes[required] is None:
             del changes[required]
+    if changes.get("national_id"):
+        changes["national_id"] = normalize_national_id(changes["national_id"], changes.get("country", patient.country))
     previous = {
         field: str(getattr(patient, field))
         for field in IDENTITY_FIELDS
         if field in changes and changes[field] != getattr(patient, field)
     }
+    # The national ID is audited as changed, never with its value.
+    id_changed = "national_id" in changes and changes["national_id"] != patient.national_id
     for field, value in changes.items():
         setattr(patient, field, value)
-    if previous:
+    if previous or id_changed:
         record(db, AuditAction.patient_identity_changed, actor_id=principal.user_id, target_type="patient",
-               target_id=patient.id, details={"fields": sorted(previous), "previous": previous})
+               target_id=patient.id,
+               details={"fields": sorted({*previous, *(["national_id"] if id_changed else [])}), "previous": previous})
+    # The account shows the same name (top bar, notifications).
+    if {"first_name", "last_name"} & set(previous) and patient.user_id is not None:
+        account = await db.get(User, patient.user_id)
+        account.name = f"{patient.first_name} {patient.last_name}"[:100]
     await _commit_and_reload(db, patient)
     logger.info("patient_self_updated", extra={"patient_id": str(patient.id), "fields": sorted(changes)})
     return patient

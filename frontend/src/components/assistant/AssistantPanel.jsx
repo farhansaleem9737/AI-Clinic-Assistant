@@ -50,6 +50,7 @@ const ACTIONS = {
   book_appointment: { label: "Confirm booking", yes: "Confirm", no: "Cancel", busy: "Booking…" },
   cancel_appointment: { label: "Confirm cancellation", yes: "Confirm cancellation", no: "Keep appointment", busy: "Cancelling…" },
   reschedule_appointment: { label: "Confirm change", yes: "Confirm change", no: "Keep original", busy: "Moving…" },
+  walk_in_token: { label: "Confirm token", yes: "Get token", no: "Cancel", busy: "Issuing…" },
 };
 const when = (a) => a.when_text ?? a.local_time;
 
@@ -61,8 +62,10 @@ function actionResult(a) {
       return `Your appointment with ${a.doctor_name} on ${when(a)} was cancelled.`;
     case "rescheduled":
       return `Moved to ${a.new_when_text ?? a.new_local_time}.`;
+    case "token_issued":
+      return `Token #${a.token_number} for ${a.doctor_name} on ${a.when_text}. Check in at reception when you arrive.`;
     case "cancelled":
-      return { book_appointment: "Not booked.", cancel_appointment: "Kept your appointment.", reschedule_appointment: "Kept the original time." }[a.type];
+      return { book_appointment: "Not booked.", cancel_appointment: "Kept your appointment.", reschedule_appointment: "Kept the original time.", walk_in_token: "No token issued." }[a.type];
     case "expired":
       return "This expired before it was confirmed. Ask again to check the current times.";
     case "failed":

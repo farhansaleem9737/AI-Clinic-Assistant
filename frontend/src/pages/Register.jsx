@@ -1,4 +1,4 @@
-import { CalendarDays, CheckCircle2, Mail, Phone, UserRound, UsersRound } from "lucide-react";
+import { CalendarDays, CheckCircle2, KeyRound, Mail, Phone, UserRound, UsersRound, VenusAndMars } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import Alert from "../components/Alert";
@@ -16,11 +16,17 @@ import PasswordInput from "../components/PasswordInput";
 import SocialSignIn from "../components/SocialSignIn";
 import { useAuth } from "../context/useAuth";
 import { HOME_PATH } from "../routes/navigation";
+import { sendVerificationCode } from "../services/authService";
 import { getPublicDepartments } from "../services/departmentService";
 import {
+  ADULT_AGE_YEARS,
+  birthDateError,
   EMAIL_PATTERN,
   errorProps,
   FULL_NAME_MAX,
+  GENDER_OPTIONS,
+  isoYearsAgo,
+  MAX_AGE_YEARS,
   PASSWORD_MAX,
   PASSWORD_MIN,
   splitFullName,
@@ -31,6 +37,7 @@ const EMPTY = {
   accountType: "",
   fullName: "",
   dateOfBirth: "",
+  gender: "",
   email: "",
   phone: "",
   password: "",
@@ -50,12 +57,10 @@ function validate(form, professional) {
   else if (!splitFullName(name)) errors.fullName = "Enter your first and last name.";
   else if (name.length > FULL_NAME_MAX) errors.fullName = `Use at most ${FULL_NAME_MAX} characters.`;
 
-  // A patient record cannot exist without a date of birth; a doctor account does not need one.
-  if (form.accountType !== "doctor") {
-    if (!form.dateOfBirth) errors.dateOfBirth = "Enter your date of birth.";
-    else if (form.dateOfBirth > todayIso()) errors.dateOfBirth = "Date of birth cannot be in the future.";
-    else if (form.dateOfBirth < "1900-01-01") errors.dateOfBirth = "Enter a valid date of birth.";
-  }
+  // Doctors must be adults; patients of any age can have an account.
+  const dobError = birthDateError(form.dateOfBirth, { minAge: form.accountType === "doctor" ? ADULT_AGE_YEARS : 0 });
+  if (dobError) errors.dateOfBirth = dobError;
+  if (!form.gender) errors.gender = "Select your gender.";
 
   if (!EMAIL_PATTERN.test(form.email.trim())) errors.email = "Enter a valid email address.";
 
@@ -77,15 +82,18 @@ const FIELD_OF = {
   last_name: "fullName",
   name: "fullName",
   date_of_birth: "dateOfBirth",
+  sex_at_birth: "gender",
+  gender: "gender",
   email: "email",
   phone: "phone",
   password: "password",
 };
-const PATIENT_ONLY = ["first_name", "last_name", "date_of_birth"];
-const DOCTOR_ONLY = ["name"];
+const PATIENT_ONLY = ["first_name", "last_name", "sex_at_birth"];
+const DOCTOR_ONLY = ["name", "gender"];
 const SERVER_MESSAGES = {
   fullName: "Enter your first and last name.",
   dateOfBirth: "Enter a valid date of birth.",
+  gender: "Select your gender.",
   email: "Enter a valid email address.",
   phone: "Enter a phone number of at most 30 characters.",
   password: `Use ${PASSWORD_MIN} to ${PASSWORD_MAX} characters.`,
@@ -165,9 +173,14 @@ export default function Register() {
   const [errors, setErrors] = useState({});
   const [professionalErrors, setProfessionalErrors] = useState({});
   const [formError, setFormError] = useState("");
-  // form -> submitting -> (doctor only) done. Past "form", the session that
-  // registration opens must not bounce the user away from this page.
+  // form -> sending (the email code) -> verify -> submitting -> (doctor only)
+  // done. Past "form", the session that registration opens must not bounce
+  // the user away from this page.
   const [stage, setStage] = useState("form");
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState("");
+  const [codeNotice, setCodeNotice] = useState("");
+  const [resendIn, setResendIn] = useState(0);
   const [uploads, setUploads] = useState([]);
   const [departments, setDepartments] = useState(null);
   const [departmentsError, setDepartmentsError] = useState("");
@@ -185,6 +198,13 @@ export default function Register() {
     target.scrollIntoView?.({ block: "center", behavior: "smooth" });
     target.focus({ preventScroll: true });
   }, [showProblem]);
+
+  // Counts down until another code may be requested.
+  useEffect(() => {
+    if (resendIn <= 0) return undefined;
+    const timer = setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [resendIn]);
 
   // Departments are needed only once someone chooses Doctor.
   useEffect(() => {
@@ -207,7 +227,7 @@ export default function Register() {
   // Already signed in (not by the registration in progress here).
   if (user && stage === "form") return <Navigate to={HOME_PATH} replace />;
 
-  const submitting = stage === "submitting";
+  const submitting = stage === "submitting" || stage === "sending";
   const set = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined }));
@@ -221,12 +241,60 @@ export default function Register() {
   // Only what the API needs for the chosen account type: no confirmation
   // copy, no consent flag, no role, and nothing from the other type's fields.
   const payload = () => {
-    const common = { email: form.email.trim(), password: form.password };
+    const common = { email: form.email.trim(), password: form.password, verification_code: code };
     const phone = form.phone.trim();
     if (phone) common.phone = phone;
     if (isDoctor)
-      return { account_type: "doctor", name: form.fullName.trim(), ...common, ...professionalPayload(professional) };
-    return { account_type: "patient", ...splitFullName(form.fullName), date_of_birth: form.dateOfBirth, ...common };
+      return {
+        account_type: "doctor",
+        name: form.fullName.trim(),
+        date_of_birth: form.dateOfBirth,
+        gender: form.gender,
+        ...common,
+        ...professionalPayload(professional),
+      };
+    return {
+      account_type: "patient",
+      ...splitFullName(form.fullName),
+      date_of_birth: form.dateOfBirth,
+      sex_at_birth: form.gender,
+      ...common,
+    };
+  };
+
+  // Emails a verification code; on success the code step is shown.
+  const requestCode = async ({ resend = false } = {}) => {
+    setCodeError("");
+    setCodeNotice("");
+    if (!resend) setStage("sending");
+    try {
+      await sendVerificationCode(form.email.trim());
+      setResendIn(60);
+      setStage("verify");
+      if (resend) setCodeNotice("A new code is on its way.");
+    } catch (err) {
+      const { status, data } = err.response ?? {};
+      const errorCode = data?.error?.code;
+      if (errorCode === "CODE_RECENTLY_SENT") {
+        // A code sent moments ago is still valid: use that one.
+        setResendIn(data.error.details?.retry_after_seconds ?? 60);
+        setStage("verify");
+        return;
+      }
+      const message =
+        status === 429
+          ? "Too many requests. Please wait a minute and try again."
+          : "We couldn't send the verification code right now. Please try again.";
+      if (resend) {
+        setCodeError(message);
+        return;
+      }
+      if (errorCode === "EMAIL_TAKEN") setErrors({ email: "An account with this email already exists. Sign in instead." });
+      else if (status === 422) setErrors({ email: "Enter a valid email address." });
+      else setFormError(message);
+      setStage("form");
+      setShowProblem((n) => n + 1);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -240,11 +308,26 @@ export default function Register() {
       setShowProblem((n) => n + 1);
       return;
     }
+    await requestCode();
+  };
 
+  const createAccount = async (e) => {
+    e.preventDefault();
+    if (stage !== "verify") return;
+    if (!/^\d{6}$/.test(code)) {
+      setCodeError("Enter the 6-digit code from the email.");
+      return;
+    }
     setStage("submitting");
     try {
       await register(payload());
     } catch (err) {
+      const errorCode = err.response?.data?.error?.code;
+      if (errorCode === "INVALID_VERIFICATION_CODE" || errorCode === "VERIFICATION_REQUIRED") {
+        setCodeError("That code is incorrect or has expired. Check the email, or send a new code.");
+        setStage("verify");
+        return;
+      }
       if (err.accountCreated) {
         // The account exists but the automatic sign-in did not go through.
         const notice = isDoctor
@@ -273,6 +356,63 @@ export default function Register() {
     setUploads(results);
     setStage("done");
   };
+
+  if (stage === "verify" || stage === "submitting") {
+    const creating = stage === "submitting";
+    return (
+      <>
+        <h2 className="auth-title">Verify your email</h2>
+        <p className="auth-subtitle">
+          We sent a 6-digit code to <strong>{form.email.trim()}</strong>. Enter it below to create your account.
+        </p>
+        <form className="auth-form" onSubmit={createAccount} noValidate aria-busy={creating}>
+          {codeNotice && <Alert kind="success">{codeNotice}</Alert>}
+          <FormField id="register-code" label="Verification code" error={codeError}>
+            <div className={`input-icon${codeError ? " invalid" : ""}`}>
+              <KeyRound size={18} aria-hidden="true" />
+              <input
+                id="register-code"
+                name="one-time-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="Enter the 6-digit code"
+                maxLength={6}
+                autoFocus
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.replace(/\D/g, "").slice(0, 6));
+                  setCodeError("");
+                }}
+                disabled={creating}
+                {...errorProps("register-code", codeError)}
+              />
+            </div>
+          </FormField>
+          <button type="submit" className="block large" disabled={creating}>
+            {creating ? (isDoctor ? "Creating account and uploading…" : "Creating account…") : "Verify and create account"}
+          </button>
+          <div className="register-code-actions">
+            <button type="button" className="secondary" disabled={creating || resendIn > 0} onClick={() => requestCode({ resend: true })}>
+              {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={creating}
+              onClick={() => {
+                setStage("form");
+                setCode("");
+                setCodeError("");
+              }}
+            >
+              Change details
+            </button>
+          </div>
+          <p className="field-hint">The code expires in 10 minutes. Check your spam folder if it hasn't arrived.</p>
+        </form>
+      </>
+    );
+  }
 
   return (
     <>
@@ -325,24 +465,43 @@ export default function Register() {
           </div>
         </FormField>
 
-        {/* Not in the visual reference: the patient record cannot exist without it. */}
-        {!isDoctor && (
-          <FormField id="register-dob" label="Date of birth" error={errors.dateOfBirth}>
-            <div className={`input-icon${errors.dateOfBirth ? " invalid" : ""}`}>
-              <CalendarDays size={18} aria-hidden="true" />
-              <input
-                id="register-dob"
-                name="bday"
-                type="date"
-                autoComplete="bday"
-                min="1900-01-01"
-                max={todayIso()}
-                {...bind("dateOfBirth")}
-                {...errorProps("register-dob", errors.dateOfBirth)}
-              />
-            </div>
-          </FormField>
-        )}
+        <FormField id="register-dob" label="Date of birth" error={errors.dateOfBirth}>
+          <div className={`input-icon${errors.dateOfBirth ? " invalid" : ""}`}>
+            <CalendarDays size={18} aria-hidden="true" />
+            <input
+              id="register-dob"
+              name="bday"
+              type="date"
+              autoComplete="bday"
+              min={isoYearsAgo(MAX_AGE_YEARS)}
+              max={isDoctor ? isoYearsAgo(ADULT_AGE_YEARS) : todayIso()}
+              {...bind("dateOfBirth")}
+              {...errorProps("register-dob", errors.dateOfBirth)}
+              aria-describedby={errors.dateOfBirth ? "register-dob-error" : isDoctor ? "register-dob-hint" : undefined}
+            />
+          </div>
+          {isDoctor && !errors.dateOfBirth && (
+            <p id="register-dob-hint" className="field-hint">
+              Doctors must be at least {ADULT_AGE_YEARS} years old.
+            </p>
+          )}
+        </FormField>
+
+        <FormField id="register-gender" label="Gender" error={errors.gender}>
+          <div className={`input-icon${errors.gender ? " invalid" : ""}`}>
+            <VenusAndMars size={18} aria-hidden="true" />
+            <select id="register-gender" name="gender" {...bind("gender")} {...errorProps("register-gender", errors.gender)} disabled={submitting}>
+              <option value="" disabled>
+                Select your gender
+              </option>
+              {GENDER_OPTIONS.map(({ value, label }) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </FormField>
 
         <FormField id="register-email" label="Email address" error={errors.email}>
           <div className={`input-icon${errors.email ? " invalid" : ""}`}>
@@ -453,7 +612,7 @@ export default function Register() {
         )}
 
         <button type="submit" className="block large" disabled={submitting}>
-          {submitting ? (isDoctor ? "Creating account and uploading…" : "Creating account…") : "Create account"}
+          {submitting ? "Sending verification code…" : "Continue"}
         </button>
 
         <div className="field">

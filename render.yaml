@@ -26,6 +26,10 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
+      # Shared with the GitHub Actions reminder schedule (.github/workflows/reminders.yml):
+      # copy it from the dashboard into the repository secret of the same name.
+      - key: REMINDERS_CRON_SECRET
+        generateValue: true
       - key: GEMINI_API_KEY
         sync: false
       - key: R2_ACCESS_KEY_ID

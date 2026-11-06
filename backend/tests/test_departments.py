@@ -22,7 +22,7 @@ async def test_public_list_shows_only_active_departments_without_internal_fields
     body = response.json()
     assert [d["name"] for d in body["items"]] == ["Cardiology Pub"]
     # D94: card fields only; never status, timezone or timestamps.
-    assert set(body["items"][0]) == {"id", "name", "description", "icon", "color", "doctor_count", "doctors_preview"}
+    assert set(body["items"][0]) == {"id", "name", "description", "icon", "color", "doctor_count", "doctors_preview", "specialization_count"}
 
     assert (await client.get(f"{PUBLIC}{active.id}")).status_code == 200
 

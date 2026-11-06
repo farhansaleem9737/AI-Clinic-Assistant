@@ -98,3 +98,23 @@ export function formatMonthDay(isoDate) {
 export function weekdayName(isoDate) {
   return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${isoDate}T00:00:00Z`));
 }
+
+// The instant (ISO string, UTC) of a local wall-clock date and time in `timeZone`,
+// e.g. ("2026-11-07", "10:05", "Asia/Karachi") -> "2026-11-07T05:05:00.000Z".
+export function localToInstant(isoDate, hhmm, timeZone) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const [hh, mm] = hhmm.split(":").map(Number);
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  // The zone's offset at that moment, read back through Intl (twice, for DST edges).
+  const offsetAt = (ms) => {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+        .formatToParts(new Date(ms))
+        .map((p) => [p.type, p.value])
+    );
+    return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute) - ms;
+  };
+  let ms = guess - offsetAt(guess);
+  ms = guess - offsetAt(ms);
+  return new Date(ms).toISOString();
+}

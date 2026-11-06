@@ -21,12 +21,14 @@ import {
   listDoctors,
   updateDoctor,
 } from "../services/doctorService";
+import { getCatalogSpecializations, getDoctorSpecializations, setDoctorSpecializations } from "../services/catalogService";
 import { authAs, PERMISSIONS } from "../test/fixtures";
 import AdminDoctors from "./AdminDoctors";
 
 vi.mock("../context/useAuth");
 vi.mock("../services/departmentService");
 vi.mock("../services/doctorService");
+vi.mock("../services/catalogService");
 vi.mock("../services/doctorApplicationService", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -116,6 +118,8 @@ beforeEach(() => {
   getPublicDepartments.mockResolvedValue({ data: { items: [{ id: "dep-1", name: "Cardiology" }, { id: "dep-3", name: "Pediatrics" }] } });
   listAllSpecializations.mockResolvedValue({ data: ["Cardiologist", "Orthopedic Surgeon"] });
   listApplications.mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 50 } });
+  getDoctorSpecializations.mockResolvedValue({ data: [] });
+  getCatalogSpecializations.mockResolvedValue({ data: [] });
 });
 
 describe("Doctors list", () => {
@@ -253,6 +257,29 @@ describe("Actions", () => {
     await u.clear(within(dialog).getByLabelText("Phone (internal)"));
     await u.click(within(dialog).getByRole("button", { name: "Save changes" }));
     expect(updateDoctor).toHaveBeenCalledWith("d-1", expect.objectContaining({ years_of_experience: 12, specialization: "Cardiologist", department_id: "dep-1", phone: null }));
+    expect(await screen.findByText("Saved Dr. Sarah Khan.")).toBeInTheDocument();
+  });
+
+  it("Edit Doctor picks catalog specializations of the doctor's department and saves them (D118)", async () => {
+    const u = userEvent.setup();
+    updateDoctor.mockResolvedValue({ data: SARAH });
+    getDoctorSpecializations.mockResolvedValue({ data: [{ id: "s-ep", name: "Cardiac Electrophysiology", slug: "electrophysiology" }] });
+    getCatalogSpecializations.mockResolvedValue({
+      data: [
+        { id: "s-ep", name: "Cardiac Electrophysiology", slug: "electrophysiology", department_ids: ["dep-1"], doctor_count: 1 },
+        { id: "s-hf", name: "Heart Failure", slug: "heart-failure", department_ids: ["dep-1"], doctor_count: 0 },
+      ],
+    });
+    setDoctorSpecializations.mockResolvedValue({ data: [] });
+    renderPage();
+    await u.click(within(await rowOf("Dr. Sarah Khan")).getByRole("button", { name: "Actions for Dr. Sarah Khan" }));
+    await u.click(screen.getByRole("menuitem", { name: "Edit Doctor" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Dr. Sarah Khan" });
+    expect(await within(dialog).findByRole("button", { name: /Cardiac Electrophysiology/, pressed: true })).toBeInTheDocument();
+    expect(getCatalogSpecializations).toHaveBeenCalledWith("dep-1");
+    await u.click(within(dialog).getByRole("button", { name: /Heart Failure/ }));
+    await u.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(setDoctorSpecializations).toHaveBeenCalledWith("d-1", ["s-ep", "s-hf"]));
     expect(await screen.findByText("Saved Dr. Sarah Khan.")).toBeInTheDocument();
   });
 

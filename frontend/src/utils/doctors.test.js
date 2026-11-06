@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookingAvailability, directoryApiParams, directorySearchParams, EMPTY_FILTERS, pageWindow, readDirectoryState } from "./doctors";
+import { activeFilterCount, bookingAvailability, directoryApiParams, directorySearchParams, EMPTY_FILTERS, pageWindow, readDirectoryState } from "./doctors";
 
 const read = (query) => readDirectoryState(new URLSearchParams(query));
 
@@ -10,11 +10,20 @@ describe("directory state in the URL", () => {
 
   it("reads search, filters, sort, page and view", () => {
     expect(read("q=cardio&department=dep-1&specialization=Cardiologist&min_experience=10&fee=150-200&sort=fee_desc&page=3&view=list")).toEqual({
-      filters: { q: "cardio", department: "dep-1", specialization: "Cardiologist", min_experience: "10", fee: "150-200" },
+      filters: { q: "cardio", department: "dep-1", specializations: [], specialization: "Cardiologist", min_experience: "10", fee: "150-200" },
       sort: "fee_desc",
       page: 3,
       view: "list",
     });
+  });
+
+  it("reads catalog specialization ids, dropping anything that is not one (D118)", () => {
+    const a = "00000000-0000-7000-8000-0000000000a1";
+    const b = "00000000-0000-7000-8000-0000000000b2";
+    expect(read(`specializations=${a},${b},${a},drop-table`).filters.specializations).toEqual([a, b]);
+    const state = read(`department=dep-1&specializations=${a},${b}`);
+    expect(directorySearchParams(state)).toEqual({ department: "dep-1", specializations: `${a},${b}` });
+    expect(activeFilterCount(state.filters)).toBe(3);
   });
 
   it("ignores values it does not recognise", () => {

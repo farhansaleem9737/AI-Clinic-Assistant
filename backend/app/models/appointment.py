@@ -9,6 +9,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Identity,
+    SmallInteger,
     Index,
     String,
     UniqueConstraint,
@@ -89,11 +90,16 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # Double-booking is impossible, not merely checked (architecture D10):
         # the database rejects any second active appointment overlapping in
         # time for the same doctor, or for the same patient — even when two
-        # requests race.
+        # requests race. Ordinary bookings use capacity lane 0; an authorized
+        # double booking takes lane 1..max_overbook (D117), so the doctor's
+        # limit is enforced here too and each lane is still overlap-free.
         ExcludeConstraint(
-            ("doctor_id", "="), (_DURING, "&&"), using="gist", where=text(_SLOT_HELD),
+            ("doctor_id", "="), ("capacity_lane", "="), (_DURING, "&&"), using="gist", where=text(_SLOT_HELD),
             name="ex_appointments_doctor_overlap",
         ),
+        CheckConstraint("capacity_lane BETWEEN 0 AND 5", name="capacity_lane_range"),
+        CheckConstraint("capacity_lane = 0 OR override_reason IS NOT NULL", name="capacity_exception_has_reason"),
+        CheckConstraint("booking_mode IN ('auto', 'custom', 'override')", name="booking_mode_known"),
         ExcludeConstraint(
             ("patient_id", "="), (_DURING, "&&"), using="gist", where=text(_SLOT_HELD),
             name="ex_appointments_patient_overlap",
@@ -132,6 +138,16 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     cancellation_note: Mapped[str | None] = mapped_column(String(500))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_by_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"))
+
+    # 0 = an ordinary booking. 1..5 = an authorized capacity exception (double
+    # booking) made by staff with appointment:override, with its reason (D117).
+    capacity_lane: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))
+    # Why staff overrode the normal rules (double booking, custom time or duration). Staff only.
+    override_reason: Mapped[str | None] = mapped_column(String(500))
+    # How the time was chosen (D120): 'auto' = the earliest free time the clinic
+    # assigned, 'custom' = a free time the user picked, 'override' = staff
+    # outside the normal rules. NULL for bookings made before D120 (not guessed).
+    booking_mode: Mapped[str | None] = mapped_column(String(10))
 
     # Rescheduling chain: the new appointment points at the one it replaced.
     rescheduled_from_id: Mapped[uuid.UUID | None] = mapped_column(

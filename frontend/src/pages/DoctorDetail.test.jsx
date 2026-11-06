@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../context/useAuth";
-import { getPublicAvailability, getPublicDoctor } from "../services/doctorService";
+import {
+  getDoctorCareer,
+  getMyCareer,
+  getPublicAvailability,
+  getPublicDoctor,
+  updateDoctorCareer,
+  updateMyCareer,
+  updateMyDoctorProfile,
+} from "../services/doctorService";
 import { anonymous, authAs, PERMISSIONS, publicDoctor } from "../test/fixtures";
 import { addMonths, longDate, monthLabel } from "../utils/calendar";
 import { formatSlotTime, isoDateIn } from "../utils/datetime";
@@ -196,6 +204,92 @@ describe("about, experience and education tabs", () => {
     getPublicDoctor.mockResolvedValue({ data: publicDoctor({ experience: [], education: [] }) });
     renderProfile();
     expect(await screen.findByRole("region", { name: "Education" })).toHaveTextContent("MBBS, FCPS (Cardiology)");
+  });
+});
+
+describe("editing About, Experience and Education", () => {
+  const career = { experience: withHistory.experience, education: withHistory.education };
+  const editButtons = () => screen.queryAllByRole("button", { name: /^Edit (About|Experience|Education)$/ });
+
+  it("shows no Edit buttons to visitors, patients or another doctor", async () => {
+    for (const auth of [anonymous, authAs("Pat", ["patient"], PERMISSIONS.patient)]) {
+      const { unmount } = renderProfile(auth);
+      await screen.findByRole("heading", { level: 1 });
+      expect(editButtons()).toHaveLength(0);
+      unmount();
+    }
+    getPublicDoctor.mockResolvedValue({ data: { ...withHistory, id: "doc-2" } }); // not the viewer's profile
+    renderProfile(authAs("Other Doctor", ["doctor"], PERMISSIONS.doctor), "doc-2");
+    await screen.findByRole("heading", { level: 1 });
+    expect(editButtons()).toHaveLength(0);
+  });
+
+  it("the doctor edits their own biography from About", async () => {
+    const user = userEvent.setup();
+    updateMyDoctorProfile.mockResolvedValue({ data: {} });
+    renderProfile(authAs("Sarah Khan", ["doctor"], PERMISSIONS.doctor));
+    await screen.findByRole("heading", { level: 1 });
+    expect(editButtons()).toHaveLength(3);
+
+    await user.click(screen.getByRole("button", { name: "Edit About" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit About" });
+    const bio = within(dialog).getByLabelText("Professional biography");
+    await user.clear(bio);
+    await user.type(bio, "  Heart specialist.  ");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    expect(updateMyDoctorProfile).toHaveBeenCalledWith({ bio: "Heart specialist." });
+    expect(await screen.findByText("About saved")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("editing Experience keeps Education exactly as it was", async () => {
+    const user = userEvent.setup();
+    getMyCareer.mockResolvedValue({ data: career });
+    updateMyCareer.mockResolvedValue({ data: career });
+    renderProfile(authAs("Sarah Khan", ["doctor"], PERMISSIONS.doctor));
+    await user.click(await screen.findByRole("button", { name: "Edit Experience" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit Experience" });
+    await within(dialog).findByRole("group", { name: "Position 1" });
+    expect(within(dialog).queryByRole("group", { name: "Qualification 1" })).not.toBeInTheDocument();
+    await user.click(within(dialog).getAllByRole("button", { name: /Remove position/ })[1]);
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    const body = updateMyCareer.mock.calls[0][0];
+    expect(body.experience.map((e) => e.title)).toEqual(["Senior Cardiologist"]);
+    expect(body.education.map((e) => e.qualification)).toEqual(["FCPS", "MBBS"]);
+    expect(await screen.findByText("Experience saved")).toBeInTheDocument();
+  });
+
+  it("checks required fields before saving Education", async () => {
+    const user = userEvent.setup();
+    getMyCareer.mockResolvedValue({ data: { experience: [], education: [] } });
+    renderProfile(authAs("Sarah Khan", ["doctor"], PERMISSIONS.doctor));
+    await user.click(await screen.findByRole("button", { name: "Edit Education" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Education" });
+    await user.click(await within(dialog).findByRole("button", { name: /Add qualification/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(dialog).toHaveTextContent("Each qualification needs a degree or qualification and an institution.");
+    expect(updateMyCareer).not.toHaveBeenCalled();
+  });
+
+  it("an administrator edits another doctor's Education through the admin endpoint", async () => {
+    const user = userEvent.setup();
+    getDoctorCareer.mockResolvedValue({ data: career });
+    updateDoctorCareer.mockResolvedValue({ data: career });
+    renderProfile(authAs("Admin", ["admin"], [...PERMISSIONS.admin, "doctor:update"]));
+    await user.click(await screen.findByRole("button", { name: "Edit Education" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Education" });
+    const institution = (await within(dialog).findAllByLabelText("Institution"))[0];
+    await user.clear(institution);
+    await user.type(institution, "CPSP Karachi");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    expect(getDoctorCareer).toHaveBeenCalledWith("doc-1");
+    expect(updateDoctorCareer.mock.calls[0][0]).toBe("doc-1");
+    expect(updateDoctorCareer.mock.calls[0][1].education[0].institution).toBe("CPSP Karachi");
+    expect(getMyCareer).not.toHaveBeenCalled();
   });
 });
 

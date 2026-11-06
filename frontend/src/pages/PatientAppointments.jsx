@@ -1,4 +1,5 @@
 import { ArrowRight, CalendarPlus, CalendarX, Clock, FileText, MapPin, RotateCcw, Search, SearchX } from "lucide-react";
+import MyQueueCard from "../components/queue/MyQueueCard";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ActionMenu from "../components/ActionMenu";
@@ -213,6 +214,9 @@ export default function PatientAppointments() {
           <CalendarPlus size={19} aria-hidden="true" /> Book Appointment
         </Link>
       </div>
+
+      {/* D117: their own tokens, place and estimated wait (nothing about others). */}
+      <MyQueueCard />
 
       <div className="card tab-strip" role="tablist" aria-label="Appointments" onKeyDown={onTabKey}>
         {TABS.map((t) => (

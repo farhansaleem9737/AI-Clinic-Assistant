@@ -35,7 +35,18 @@ export const NAV_ITEMS = [
   { to: "/doctors", label: "Doctors", icon: Stethoscope, public: true, when: (user, can) => !user || !can("appointment:create") },
   { to: "/departments", label: "Departments", icon: Building2, public: true },
   { to: "/patients", label: "Patients", icon: Users, permission: "patient:read_any" },
-  { to: "/profile", label: "My Profile", icon: UserRound, permission: "patient:read_own" },
+  // A group (AppLayout): opens on its own pages, its sections are links.
+  {
+    to: "/profile",
+    label: "My Profile",
+    icon: UserRound,
+    permission: "patient:read_own",
+    children: [
+      { to: "/profile", label: "Personal Information", end: true },
+      { to: "/profile/contact", label: "Contact Information" },
+      { to: "/profile/medical-information", label: "Medical Information" },
+    ],
+  },
   // Only for logins that actually have a doctor profile.
   { to: "/doctor/profile", label: "My Profile", icon: UserRound, permission: "doctor:update_own", when: (user) => Boolean(user.doctor_id) },
   // Self-registered doctors until an administrator verifies them (D77).

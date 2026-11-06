@@ -112,6 +112,7 @@ async def register(db: AsyncSession, data: DoctorRegistration) -> User:
     Nothing is committed if any step fails."""
     await _check_department(db, data.department_id)
     user = await auth_service.create_user(db, name=data.name, email=data.email, password=data.password)
+    user.date_of_birth, user.gender = data.date_of_birth, data.gender
     await rbac_service.grant_roles(db, user.id, [RoleCode.doctor_applicant])
     db.add(
         DoctorApplication(

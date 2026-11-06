@@ -723,3 +723,99 @@ describe("SafeMarkdown", () => {
     expect(container.querySelector("strong")).toHaveTextContent("bold");
   });
 });
+
+describe("Conversational follow-ups (D115)", () => {
+  const DOCTOR = {
+    doctor_id: "d-3",
+    name: "Dr. Layla Hassan",
+    specialization: "Cardiology",
+    department: "Heart Centre",
+    years_of_experience: 18,
+    consultation_fee: "2000",
+    next_available: "2027-04-24T12:00:00Z",
+    selected: true,
+  };
+
+  async function ask(text) {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ClinicAssistant />
+      </MemoryRouter>
+    );
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("Find a Doctor").closest("button")).toBeEnabled());
+    await user.type(within(panel).getByLabelText("Message"), `${text}{Enter}`);
+    return { user, panel };
+  }
+
+  it("doctor cards: separate lines, named actions and relative links only", async () => {
+    replyWith(message("m-2", "assistant", "Dr. Layla Hassan is the most experienced.", { results: [{ kind: "doctors", total: 1, items: [DOCTOR] }] }));
+    const { panel } = await ask("book the most experienced one");
+    const card = await within(panel).findByRole("list", { name: "Doctors found" });
+    const item = within(card).getByRole("listitem");
+    expect(within(item).getByText("Selected")).toBeInTheDocument();
+    // Each fact is its own block, so the text never runs together.
+    expect([...item.querySelectorAll(".ai-result-body > p")].map((p) => p.textContent.trim())).toEqual([
+      "Dr. Layla HassanSelected",
+      "Cardiology · Heart Centre",
+      "18 yrs experience · Fee 2000",
+      expect.stringMatching(/^Next available: /),
+      "View profile Book appointment",
+    ]);
+    const profile = within(item).getByRole("link", { name: "View profile of Dr. Layla Hassan" });
+    const book = within(item).getByRole("link", { name: "Book an appointment with Dr. Layla Hassan" });
+    expect(profile).toHaveAttribute("href", "/doctors/d-3");
+    expect(book).toHaveAttribute("href", "/appointments/book?doctor=d-3");
+    for (const link of within(panel).getAllByRole("link")) expect(link.getAttribute("href")).not.toMatch(/localhost|^https?:/);
+  });
+
+  it("free times are chips that ask for that time", async () => {
+    replyWith(
+      message("m-2", "assistant", "Tomorrow evening is free.", {
+        results: [{ kind: "slots", doctor_id: "d-3", doctor_name: "Dr. Layla Hassan", timezone: "Asia/Karachi", total: 2, items: [
+          { starts_at: "2027-04-24T12:00:00Z", local_time: "Sat 24 Apr 2027, 05:00 PM" },
+          { starts_at: "2027-04-24T12:30:00Z", local_time: "Sat 24 Apr 2027, 05:30 PM" },
+        ] }],
+      })
+    );
+    const { user, panel } = await ask("tomorrow evening");
+    const slots = await within(panel).findByRole("region", { name: "Free times with Dr. Layla Hassan" });
+    replyWith(message("m-4", "assistant", "Confirm your appointment?"));
+    await user.click(within(slots).getByRole("button", { name: "Sat 24 Apr 2027, 05:30 PM" }));
+    await waitFor(() => expect(streamAssistantMessage).toHaveBeenCalledTimes(2));
+    expect(streamAssistantMessage.mock.calls[1][0].text).toBe("Book the Sat 24 Apr 2027, 05:30 PM slot");
+  });
+
+  it("a typed yes updates the earlier proposal instead of leaving its buttons", async () => {
+    const pending = { type: "book_appointment", status: "pending", doctor_name: "Dr. Layla Hassan", local_time: "Sat 24 Apr 2027, 05:00 PM", when_text: "Saturday, April 24 at 5:00 PM PKT" };
+    replyWith(message("m-2", "assistant", "Confirm your appointment with Dr. Layla Hassan?", { action: pending }));
+    const { user, panel } = await ask("take the earliest one");
+    expect(await within(panel).findByRole("group", { name: "Confirm booking" })).toBeInTheDocument();
+    replyWith(
+      message("m-4", "assistant", "Done: your appointment with Dr. Layla Hassan on Saturday, April 24 at 5:00 PM PKT is booked.", {
+        results: [{ kind: "decision", message_id: "m-2", action: { ...pending, status: "booked", appointment_id: "a-1" } }],
+      }),
+      message("m-3", "user", "yes")
+    );
+    await user.type(within(panel).getByLabelText("Message"), "yes, confirm{Enter}");
+    expect(await within(panel).findByText(/is booked\./)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+  });
+
+  it("answers show no app URLs, even in older saved messages", () => {
+    render(<SafeMarkdown text="Open [Dr Khan](http://localhost:5173/doctors/1) or http://localhost:5173/doctors now." />);
+    expect(screen.getByText(/Open Dr Khan or now\./)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/localhost|http/);
+  });
+
+  it("a failed follow-up never shows the previous doctor cards again", async () => {
+    replyWith(message("m-2", "assistant", "Three cardiologists.", { results: [{ kind: "doctors", total: 1, items: [{ ...DOCTOR, selected: false }] }] }));
+    const { user, panel } = await ask("heart doctors");
+    await within(panel).findByRole("list", { name: "Doctors found" });
+    replyWith(message("m-4", "assistant", "I'm not sure what you'd like to do with those doctors.", { results: null }), message("m-3", "user", "hmm"));
+    await user.type(within(panel).getByLabelText("Message"), "hmm{Enter}");
+    await within(panel).findByText(/not sure what you'd like/);
+    expect(within(panel).getAllByRole("list", { name: "Doctors found" })).toHaveLength(1); // only under the first answer
+  });
+});

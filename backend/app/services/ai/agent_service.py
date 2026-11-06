@@ -80,7 +80,11 @@ Rules:
 - Health questions: give clear, useful general information, including how a condition is usually treated or managed. Distinguish established treatments from unproven remedies. Never promise a cure, never diagnose the user, and never give personal prescriptions or doses. For possible emergencies, tell them to seek urgent care first.
 - When the user asks about treating, curing or managing a condition, medicines, home remedies or what they should do medically, start your answer with exactly this line, once, and never repeat it elsewhere: "{disclaimer}" Do not add it to any other kind of answer (greetings, doctors, appointments, documents, the app).
 - Style: answer the question first, like a helpful person, with no introductions ("Sure!", "Great question") and no closing offers unless useful. Match the length to the question: one or two sentences for simple ones, a complete explanation when asked to explain in detail. Use plain sentences; use lists or headings only for several items or long answers.
-- Ask a clarifying question only when you truly cannot proceed; use what the conversation already says. To cancel or move "my appointment", look at their upcoming appointments: if exactly one fits, propose it directly; if several fit, ask which one."""
+- Ask a clarifying question only when you truly cannot proceed; use what the conversation already says. To cancel or move "my appointment", look at their upcoming appointments: if exactly one fits, propose it directly; if several fit, ask which one.
+- Doctor requests in everyday words ("heart doctors", "skin specialist", "someone for my child's fever", "brain doctor") are doctor searches: call search_doctors with the user's words as the specialization; do not ask what they mean.
+- Earlier answers end with a [Shown to the user: ...] note listing the doctors (numbered, with doctor_id) and free times that were displayed. "The first one", "the most experienced one", "her", "that doctor", "the cheapest", "the earliest one", "5:30" refer to those: resolve them with pick_from_previous, never by guessing an id or re-searching. If the user changes their mind ("the second doctor instead", "what about Friday"), work from the newest choice.
+- Booking flow: pick the doctor (pick_from_previous or search), check real free times with get_doctor_availability for the day and part of day the user said ("tomorrow evening" = tomorrow, evening), then when the user chooses a time use pick_from_previous (entity slot), which prepares the booking. The user confirms with the button or by replying "yes".
+- Never write links or URLs (no http://, no markdown links): the cards under your answer already have View profile and Book buttons."""
 
 
 @dataclass(frozen=True)
@@ -272,6 +276,23 @@ def _active_document(history: list[AiMessage]) -> uuid.UUID | None:
     return None
 
 
+def _last_doctors_and_slots(history: list[AiMessage]) -> tuple[list[uuid.UUID], list[dict], uuid.UUID | None]:
+    """The doctors and free times shown most recently in this conversation (D115), in display
+    order, for "the second one" / "the earliest one". Ids only: tools re-read them with access checks."""
+    doctors: list[uuid.UUID] | None = None
+    slots: list[dict] | None = None
+    slots_doctor = None
+    for message in reversed(history):
+        for card in reversed(message.results or []):
+            if card.get("kind") == "slots" and slots is None:
+                slots, slots_doctor = list(card.get("items") or []), uuid.UUID(card["doctor_id"])
+            elif card.get("kind") == "doctors" and doctors is None:
+                doctors = [uuid.UUID(i["doctor_id"]) for i in card.get("items") or []]
+        if doctors is not None:
+            break
+    return doctors or [], slots or [], slots_doctor
+
+
 def _last_appointments(history: list[AiMessage]) -> list[uuid.UUID]:
     """The appointments of the most recent appointment-history card, for follow-ups."""
     for message in reversed(history):
@@ -301,10 +322,35 @@ TOOL_SUBJECTS = {
 }
 
 
-def _failure(category: str, tool: str | None) -> str:
+def _failure(category: str, tool: str | None, context=None) -> str:
     if category == "TOOL_EXECUTION_FAILED" and tool in TOOL_SUBJECTS:
         return f"I couldn't retrieve {TOOL_SUBJECTS[tool]} right now. Please try again."
+    if category == "INTENT_UNCERTAIN" and context is not None and context.last_doctor_ids:
+        # A specific question about what is on screen, not a generic one (D115).
+        return ("I'm not sure what you'd like to do with those doctors. Should I book one of them (for example "
+                "\"the first one\" or \"the most experienced\"), show a profile, or search for a different specialty?")
     return FAILURES.get(category, FAILURES["INTENT_UNCERTAIN"])
+
+
+def _cards_lead(card: dict) -> str:
+    items = card.get("items") or []
+    if card.get("kind") == "doctors":
+        return f"I found {card.get('total', len(items))} doctor{'s' if len(items) != 1 else ''}:" if len(items) != 1 else f"Here is {items[0]['name']}."
+    if card.get("kind") == "slots":
+        return f"Free times with {card.get('doctor_name')}:"
+    return "Here is what I found:"
+
+
+# Markdown links and absolute URLs of this app (e.g. http://localhost:5173/doctors/...) are
+# never part of an answer (D115): cards carry the app's own links, which work on every host.
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((?:[^()\s]+)\)")
+_URL = re.compile(r"\s*\(?<?https?://[^\s)>]+>?\)?")
+
+
+def _without_links(answer: str) -> str:
+    answer = _MD_LINK.sub(r"\1", answer)
+    answer = _URL.sub("", answer)
+    return re.sub(r"[ \t]{2,}", " ", answer).strip()
 
 
 def _tidy(answer: str) -> str:
@@ -328,11 +374,69 @@ def _with_shown(message: AiMessage) -> str:
             shown.append(f"list of {card.get('total', 0)} medical documents")
         elif kind == "medical_summary":
             shown.append(f"summary of {len(card.get('processed') or [])} documents")
-        elif kind in ("doctors", "appointments"):
-            shown.append(f"{kind} cards")
+        elif kind == "doctors":
+            listed = "; ".join(
+                f"{n}. {d['name']} (doctor_id {d['doctor_id']}, {d.get('specialization') or 'no specialty'}, "
+                f"{d['years_of_experience'] if d.get('years_of_experience') is not None else '?'} yrs"
+                + (f", fee {d['consultation_fee']}" if d.get("consultation_fee") else "")
+                + (", SELECTED" if d.get("selected") else "") + ")"
+                for n, d in enumerate(card.get("items") or [], start=1)
+            )
+            shown.append(f"doctors in this order: {listed}")
+        elif kind == "slots":
+            times = "; ".join(f"{n}. {t['local_time']} (starts_at {t['starts_at']})" for n, t in enumerate(card.get("items") or [], start=1))
+            shown.append(f"free times of {card.get('doctor_name')} (doctor_id {card.get('doctor_id')}): {times}")
+        elif kind == "appointments":
+            shown.append("appointments cards")
         elif kind == "appointment_history":
             shown.append(f"the user's own {len(card.get('items') or [])} appointment(s) (follow-ups: get_my_appointments with from_previous)")
-    return message.content + (f"\n[Shown to the user: {'; '.join(shown)}]" if shown else "")
+    action = message.action or {}
+    if action.get("type") == "book_appointment":
+        shown.append(f"booking with {action.get('doctor_name')} on {action.get('when_text')}: {action.get('status')}")
+    return message.content + (f"\n[Shown to the user: {' | '.join(shown)}]" if shown else "")
+
+
+# A reply that clearly answers the pending confirmation question (D115). Anything else
+# goes to the model as usual; nothing is decided on an unclear message.
+_YES = re.compile(
+    r"^(yes|yeah|yep|yup|sure|ok|okay|confirm|confirmed|go ahead|book it|do it|please do|please confirm|that works|"
+    r"sounds good|perfect|correct)\b[\s,.!]*((please|confirm( it)?|book( it)?|go ahead|do it|thanks?( you)?)[\s,.!]*)*$",
+    re.IGNORECASE,
+)
+_NO = re.compile(r"^(no|nope|cancel|cancel it|don'?t|do not|stop|never ?mind)\b[\s,.!]*(thanks?( you)?)?[\s,.!]*$", re.IGNORECASE)
+
+
+def _pending_action(history: list[AiMessage]) -> AiMessage | None:
+    """The previous assistant message, if it is waiting for a Confirm / Cancel decision."""
+    previous = [m for m in history if m.role == "assistant"]
+    if previous and (previous[-1].action or {}).get("status") == "pending":
+        return previous[-1]
+    return None
+
+
+def _decision_reply(action: dict) -> str:
+    doctor, when = action.get("doctor_name"), action.get("when_text")
+    status = action.get("status")
+    if status == "booked":
+        place = f" Your estimated queue no. that day is {action['queue_position']}." if action.get("queue_position") else ""
+        return f"Done: your appointment with {doctor} on {when} is booked.{place} The time is an estimate of when you'll be seen."
+    if status == "cancelled_appointment":
+        return f"Done: your appointment with {doctor} on {when} is cancelled."
+    if status == "rescheduled":
+        return f"Done: your appointment with {doctor} is moved to {action.get('new_when_text')}."
+    if status == "token_issued":
+        return (f"Done: your token for {doctor} on {when} is #{action.get('token_number')}. Check in at reception when you "
+                "arrive; you'll be seen in arrival order, so there is no fixed time.")
+    if status == "cancelled":
+        return "OK, I didn't change anything."
+    if status == "expired":
+        return "That proposal has expired, so nothing was booked. Ask me again and I'll check the current free times."
+    nxt = action.get("next_available") or {}
+    if nxt.get("starts_at"):
+        when_next = agent_tools.friendly(datetime.fromisoformat(nxt["starts_at"]), action.get("timezone") or "UTC")
+        return (f"That didn't go through: {action.get('error')} Nothing was booked. The next available time is "
+                f"{when_next}: shall I propose it?")
+    return f"That didn't go through: {action.get('error') or 'the time is no longer available'}. Nothing was booked. Shall I look for another time?"
 
 
 async def send_message(
@@ -379,6 +483,38 @@ async def send_message(
         await db.commit()
         return SendResult(conversation, user_message, assistant_message)
 
+    recent = (
+        await db.scalars(
+            select(AiMessage).where(AiMessage.conversation_id == conversation.id, AiMessage.id != user_message.id)
+            .order_by(AiMessage.created_at.desc(), AiMessage.id.desc()).limit(2)
+        )
+    ).all()[::-1]
+    pending = _pending_action(list(recent))
+    said = text.strip()
+    if pending is not None and (_YES.match(said) or _NO.match(said)):
+        # "Yes, confirm" to the question just asked: the same decision as the Confirm button,
+        # through confirm_action (permissions, slot and idempotency re-checked). No model call.
+        conversation_id, user_message_id, pending_id = conversation.id, user_message.id, pending.id
+        await db.commit()
+        try:
+            decided = await confirm_action(db, principal, conversation_id, pending_id, confirm=bool(_YES.match(said)))
+            reply, results = _decision_reply(decided.action or {}), [
+                {"kind": "decision", "message_id": str(pending_id), "action": decided.action}
+            ]
+        except DomainError:  # e.g. already decided with the button a moment ago
+            await db.rollback()
+            reply, results = "That was already decided, so nothing else changed.", None
+        if on_text is not None:
+            await on_text(reply)
+        assistant_message = AiMessage(conversation_id=conversation_id, role="assistant", content=reply, results=results)
+        db.add(assistant_message)
+        await db.commit()
+        # A failed booking rolls the session back, which expires loaded rows: read them again.
+        conversation = await db.get(AiConversation, conversation_id, populate_existing=True)
+        user_message = await db.get(AiMessage, user_message_id, populate_existing=True)
+        await db.refresh(assistant_message)
+        return SendResult(conversation, user_message, assistant_message)
+
     await usage_service.check_limits(db, principal)
 
     history = (
@@ -409,8 +545,10 @@ async def send_message(
     )
     # The document this conversation is about (D102): the last one read. Only its id is
     # kept; every use re-checks access and re-reads the (cached) extraction.
+    last_doctors, last_slots, slots_doctor = _last_doctors_and_slots(history)
     context = medical_tools.ToolContext(
-        storage=storage, active_document_id=_active_document(history), last_appointment_ids=_last_appointments(history)
+        storage=storage, active_document_id=_active_document(history), last_appointment_ids=_last_appointments(history),
+        last_doctor_ids=last_doctors, last_slots=last_slots, last_slots_doctor_id=slots_doctor,
     )
     if context.active_document_id is not None:
         system += (
@@ -485,6 +623,7 @@ async def send_message(
                     proposal = outcome.reply
                 if outcome.card is not None:
                     cards.append(outcome.card)
+                cards.extend(outcome.extra_cards)
                 if outcome.reply:
                     await show(outcome.reply)
                     texts.append(outcome.reply)
@@ -501,14 +640,22 @@ async def send_message(
         )
         await db.commit()
         raise
-    if not finished or not texts:
-        note = _failure(last_error or "INTENT_UNCERTAIN", last_error_tool)
+    if finished and not texts and cards and not last_error:
+        # The model said nothing but the lookup worked: a short factual lead-in (D115).
+        note = _cards_lead(cards[-1])
+        await show(note)
+        texts.append(note)
+    elif not finished or not texts:
+        note = _failure(last_error or "INTENT_UNCERTAIN", last_error_tool, context)
         logger.info("ai_request_incomplete", extra={"category": last_error or "INTENT_UNCERTAIN", "finished": finished})
         await show(note)
         texts.append(note)
+        # Never show results from a half-finished attempt under an error (D115):
+        # they would look like the answer to this question.
+        cards, action, proposal = [], None, None
     # A proposal's answer is only its confirmation question; otherwise the medical
     # disclaimer appears once, first (D104).
-    answer = proposal if proposal else _tidy(PARAGRAPH.join(texts))
+    answer = proposal if proposal else _tidy(_without_links(PARAGRAPH.join(texts)))
 
     assistant_message = AiMessage(
         conversation_id=conversation.id, role="assistant", content=answer, action=action, results=cards[-MAX_CARDS:] or None
@@ -545,7 +692,7 @@ async def confirm_action(
     action = dict(message.action)
     if action.get("status") != "pending":
         raise ConflictError("This was already decided", code="ACTION_DECIDED")
-    if action.get("type") not in ("book_appointment", "cancel_appointment", "reschedule_appointment"):
+    if action.get("type") not in ("book_appointment", "cancel_appointment", "reschedule_appointment", "walk_in_token"):
         raise BusinessRuleError("Unknown action")
     expires_at = action.get("expires_at")
     if not confirm:
@@ -560,10 +707,11 @@ async def confirm_action(
             if action.get("type") == "book_appointment":
                 data = AppointmentCreate(
                     doctor_id=action["doctor_id"], starts_at=action["starts_at"], reason=action.get("reason"),
-                    patient_id=action.get("patient_id"),
+                    patient_id=action.get("patient_id"), booking_mode=action.get("booking_mode") or "custom",
                 )
                 view, _ = await appointment_service.book(db, principal, data, f"ai-{message.id}")
-                action.update(status="booked", appointment_id=str(view.appointment.id))
+                # The real appointment and its place in the day, from the database (D120).
+                action.update(status="booked", appointment_id=str(view.appointment.id), queue_position=view.queue_position)
             elif action.get("type") == "cancel_appointment":
                 change = StatusChange(status=AppointmentStatus.cancelled, cancellation_reason=CancellationReason.patient_request)
                 await appointment_service.change_status(db, principal, uuid.UUID(action["appointment_id"]), change)
@@ -573,10 +721,24 @@ async def confirm_action(
                     db, principal, uuid.UUID(action["appointment_id"]), Reschedule(starts_at=action["new_starts_at"])
                 )
                 action.update(status="rescheduled", appointment_id=str(view.appointment.id))
+            elif action.get("type") == "walk_in_token":
+                # The same queue service as the front desk (D117): the doctor's policy,
+                # capacity and one-token-per-day rules are checked again now.
+                from app.schemas.scheduling import WalkInCreate
+                from app.services import queue_service
+
+                entry = await queue_service.register_walk_in(
+                    db, principal, WalkInCreate(doctor_id=action["doctor_id"], session_date=action["session_date"])
+                )
+                message = await db.get(AiMessage, message_id, populate_existing=True)
+                action.update(status="token_issued", token_number=entry.token_number, entry_id=str(entry.id))
         except DomainError as exc:
             await db.rollback()
             message = await db.get(AiMessage, message_id)
             action.update(status="failed", error=exc.message)
+            if exc.details.get("next_available"):
+                # Taken meanwhile: the next free time, to offer (never booked without asking).
+                action["next_available"] = exc.details["next_available"]
     message.action = action
     await db.commit()
     await db.refresh(message)

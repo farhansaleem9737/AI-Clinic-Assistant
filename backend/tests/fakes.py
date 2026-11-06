@@ -46,9 +46,9 @@ class FakeStorage:
         self._maybe_fail("delete")
         self.objects.pop(key, None)
 
-    def presigned_get_url(self, key, *, expires_in, download_name=None, content_type=None):
+    def presigned_get_url(self, key, *, expires_in, download_name=None, content_type=None, inline=False):
         self.presigned.append(
-            {"key": key, "expires_in": expires_in, "download_name": download_name, "content_type": content_type}
+            {"key": key, "expires_in": expires_in, "download_name": download_name, "content_type": content_type, "inline": inline}
         )
         return f"https://fake-r2.test/{key}?X-Amz-Expires={expires_in}&X-Amz-Signature=fake"
 

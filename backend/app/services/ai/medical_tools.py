@@ -74,6 +74,11 @@ class ToolContext:
     storage: Storage | None = None
     active_document_id: uuid.UUID | None = None
     last_appointment_ids: list[uuid.UUID] = field(default_factory=list)
+    # Doctors last listed, in the order shown ("the second one", "the most experienced").
+    last_doctor_ids: list[uuid.UUID] = field(default_factory=list)
+    # Free slots last shown and their doctor ("the earliest one", "take the 5 pm").
+    last_slots: list[dict] = field(default_factory=list)
+    last_slots_doctor_id: uuid.UUID | None = None
 
 
 def _args_base():

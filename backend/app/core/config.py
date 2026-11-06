@@ -92,6 +92,18 @@ class Settings(BaseSettings):
     # Two requests presenting the same refresh token within this many seconds
     # (e.g. two tabs opening at once) are treated as a race, not as theft.
     refresh_reuse_grace_seconds: int = 10
+    # Self-registration needs a one-time code sent to the email address first.
+    email_verification_required: bool = True
+    email_verification_code_minutes: int = 10
+    email_verification_max_attempts: int = 5
+    email_verification_resend_seconds: int = 60
+    verification_code_requests_per_minute: int = 5
+    # Changing the password without the current one is allowed only this soon
+    # after signing in (D116); later the current password is asked for again.
+    password_change_recent_auth_minutes: int = 10
+    password_change_attempts_per_minute: int = 5
+    # Header search (D119): typing is debounced, so this only stops scripted enumeration.
+    search_requests_per_minute: int = 120
 
     refresh_cookie_name: str = "refresh_token"
     csrf_cookie_name: str = "csrf_token"
@@ -188,9 +200,10 @@ class Settings(BaseSettings):
     # Notification emails (D109): queued in the email_outbox table and sent
     # by the outbox run (also part of the reminder run). After a commit that
     # queued email, this process also starts sending at once, without waiting
-    # for the next run. Reminder emails: these offsets only (minutes before).
+    # for the next run. Reminder emails: these offsets only (minutes before);
+    # by default every patient reminder (24 h and 1 h) also goes by email.
     email_send_after_commit: bool = True
-    email_reminder_offsets_minutes: Annotated[list[int], NoDecode] = [1440]
+    email_reminder_offsets_minutes: Annotated[list[int], NoDecode] = [1440, 60]
     email_max_attempts: int = 6
 
     # AI assistant (D96). Off unless a provider, model and key are all set.

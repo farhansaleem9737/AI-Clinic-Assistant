@@ -122,7 +122,8 @@ def _download_name(document: PatientDocument) -> str:
     return f"{document.document_type.value}-{day.isoformat()}.{extension}"
 
 async def download_link(
-        db: AsyncSession, storage: Storage, principal: Principal, patient_id:uuid.UUID, document_id:uuid.UUID
+        db: AsyncSession, storage: Storage, principal: Principal, patient_id:uuid.UUID, document_id:uuid.UUID,
+        *, inline: bool = False,
 ) -> tuple[str, datetime]:
     document = await get_document(db, principal, patient_id, document_id)
     try:
@@ -139,6 +140,7 @@ async def download_link(
         expires_in=ttl,
         download_name=_download_name(document),
         content_type=document.file.content_type,
+        inline=inline,
     )
     # Stand-in for an AuditLog row (architecture §21) until that table exists.
     logger.info(

@@ -7,6 +7,7 @@ import ErrorBoundary from "../components/ErrorBoundary";
 import ClinicAssistant from "../components/assistant/ClinicAssistant";
 import AccountMenu from "../components/layout/AccountMenu";
 import GlobalSearch from "../components/layout/GlobalSearch";
+import NavGroup from "../components/layout/NavGroup";
 import NotificationBell from "../components/layout/NotificationBell";
 import { useAuth } from "../context/useAuth";
 import { isAdmin, visibleNavItems } from "../routes/navigation";
@@ -53,12 +54,16 @@ export default function AppLayout() {
         </Link>
         {/* On small screens the sidebar is a drawer: any click inside closes it. */}
         <nav onClick={() => setNavOpen(false)}>
-          {items.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end}>
-              <Icon size={19} aria-hidden="true" />
-              {label}
-            </NavLink>
-          ))}
+          {items.map((item) => {
+            const { to, label, icon: Icon, end, children } = item;
+            if (children) return <NavGroup key={`group-${to}`} item={item} />;
+            return (
+              <NavLink key={to} to={to} end={end}>
+                <Icon size={19} aria-hidden="true" />
+                {label}
+              </NavLink>
+            );
+          })}
         </nav>
         {user && (
           <div className="sidebar-foot" onClick={() => setNavOpen(false)}>
@@ -94,6 +99,10 @@ export default function AppLayout() {
               <Search size={18} aria-hidden="true" />
               <input
                 type="search"
+                name="clinic-doctor-search"
+                autoComplete="off"
+                spellCheck={false}
+                enterKeyHint="search"
                 aria-label="Search doctors"
                 placeholder="Search doctors, specialties, departments…"
                 value={query}

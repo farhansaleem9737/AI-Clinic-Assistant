@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, CalendarDays, Clock, CreditCard, Info, MapPin, MessageCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Clock, CreditCard, Hourglass, Info, MapPin, MessageCircle, Ticket } from "lucide-react";
 import { useState } from "react";
 import { useFetch } from "../../hooks/useFetch";
 import { getErrorMessage } from "../../services/api";
 import { bookAppointment } from "../../services/appointmentService";
 import { getPublicAvailability } from "../../services/doctorService";
+import { durationMinutes } from "../../utils/appointments";
 import { addDays, formatLongDate, formatSlotTime, isoDateIn, timeZoneLabel } from "../../utils/datetime";
 import { doctorName, formatFee } from "../../utils/format";
 import Alert from "../Alert";
@@ -13,6 +14,11 @@ export const REASON_MAX = 500;
 const SLOT_TAKEN = "Sorry, this time was just booked by someone else. Please choose another time.";
 const SLOT_GONE = "This time is no longer available. Please choose another time.";
 const DOCTOR_GONE = "This doctor is no longer taking appointments. Please choose another doctor.";
+// Automatic token (D120): the assigned time went meanwhile; the next one is shown for review, never booked silently.
+const nextTimeNotice = (next, timezone) =>
+  next?.starts_at
+    ? `Sorry, that time was just taken. The next available time is ${formatSlotTime(next.starts_at, timezone)}: please review it and confirm again.`
+    : "Sorry, that time was just taken and there are no more free times that day. Please choose another date.";
 
 function DetailRow({ icon: Icon, label, children }) {
   return (
@@ -59,20 +65,28 @@ export default function ConfirmStep({
     .find((s) => Date.parse(s.starts_at) === Date.parse(slot.starts_at));
   const timezone = check.data?.timezone;
   const doctorGone = check.status === 404;
+  const auto = slot.mode === "auto";
 
   const confirm = async () => {
     if (submitting || !offered) return; // one request at a time
     setError("");
     setSubmitting(true);
     try {
-      const body = { doctor_id: doctor.id, starts_at: offered.starts_at, reason: reason.trim() || null };
+      const body = {
+        doctor_id: doctor.id,
+        starts_at: offered.starts_at,
+        reason: reason.trim() || null,
+        booking_mode: auto ? "auto" : "custom",
+      };
       if (patient) body.patient_id = patient.id;
       const res = await bookAppointment(body, idempotencyKey);
       onBooked(res.data);
     } catch (err) {
       setSubmitting(false);
       const code = err.response?.data?.error?.code;
-      if (err.response?.status === 409) onUnavailable(SLOT_TAKEN);
+      if (err.response?.status === 409 && auto && code === "SLOT_UNAVAILABLE") {
+        onUnavailable(nextTimeNotice(err.response.data.error.details?.next_available, timezone));
+      } else if (err.response?.status === 409) onUnavailable(SLOT_TAKEN);
       else if (code === "DOCTOR_UNAVAILABLE") onDoctorGone(DOCTOR_GONE);
       else setError(getErrorMessage(err, "Booking failed. Please check your connection and try again."));
     }
@@ -121,10 +135,21 @@ export default function ConfirmStep({
             <DetailRow icon={CalendarDays} label="Date">
               {formatLongDate(offered.starts_at, timezone)}
             </DetailRow>
-            <DetailRow icon={Clock} label="Time">
+            <DetailRow icon={Clock} label={auto ? "Estimated start time" : "Time"}>
               {formatSlotTime(offered.starts_at, timezone)}
-              <small className="muted">{timeZoneLabel(timezone, offered.starts_at)} · clinic time</small>
+              <small className="muted">
+                {auto ? "Automatic token: the next available time" : "Custom time"} · {timeZoneLabel(timezone, offered.starts_at)}
+              </small>
             </DetailRow>
+            <DetailRow icon={Hourglass} label="Duration">
+              About {durationMinutes(offered)} minutes
+            </DetailRow>
+            {slot.queue_position ? (
+              <DetailRow icon={Ticket} label="Queue no.">
+                #{slot.queue_position}
+                <small className="muted">Estimated place in the doctor's day; it can move up if an earlier booking is cancelled</small>
+              </DetailRow>
+            ) : null}
             <DetailRow icon={MapPin} label="Location">
               {doctor.department_name}
               <small className="muted">Department</small>

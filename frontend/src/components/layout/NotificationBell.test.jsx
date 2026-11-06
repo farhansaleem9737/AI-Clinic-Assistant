@@ -134,4 +134,24 @@ describe("notification center", () => {
     expect(within(panel).getByText(/Essential notifications/)).toBeInTheDocument();
     expect(within(panel).getByRole("checkbox", { name: /Also by email/ })).toBeChecked();
   });
+
+  it("turns every optional notification off at once, and back on", async () => {
+    const off = { appointment_updates: false, reminders: false, follow_ups: false, emails: false };
+    const on = { appointment_updates: true, reminders: true, follow_ups: true, emails: true };
+    getNotificationPreferences.mockResolvedValue({ data: on });
+    updateNotificationPreferences.mockResolvedValueOnce({ data: off }).mockResolvedValueOnce({ data: on });
+    renderBell();
+    const panel = await openPanel();
+    await userEvent.click(within(panel).getByRole("button", { name: "Notification settings" }));
+    const all = await within(panel).findByRole("checkbox", { name: /Turn off all notifications/ });
+    await waitFor(() => expect(within(panel).getByRole("checkbox", { name: /Appointment reminders/ })).toBeChecked());
+    expect(all).not.toBeChecked();
+    await userEvent.click(all);
+    expect(updateNotificationPreferences).toHaveBeenLastCalledWith(off);
+    await waitFor(() => expect(all).toBeChecked());
+    expect(within(panel).getByRole("checkbox", { name: /Appointment reminders/ })).not.toBeChecked();
+    await userEvent.click(all);
+    expect(updateNotificationPreferences).toHaveBeenLastCalledWith(on);
+    await waitFor(() => expect(within(panel).getByRole("checkbox", { name: /Also by email/ })).toBeChecked());
+  });
 });

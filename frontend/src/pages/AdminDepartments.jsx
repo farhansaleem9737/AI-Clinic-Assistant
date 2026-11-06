@@ -7,6 +7,7 @@ import EmptyState from "../components/EmptyState";
 import ErrorBoundary from "../components/ErrorBoundary";
 import NumberedPager from "../components/NumberedPager";
 import { DepartmentDetailsDialog, DepartmentFormDialog, ManageDoctorsDialog } from "../components/departments/DepartmentDialogs";
+import SpecializationsDialog from "../components/departments/SpecializationsDialog";
 import DepartmentCard from "../components/departments/DepartmentCard";
 import { getErrorMessage } from "../services/api";
 import { activateDepartment, deactivateDepartment, getDepartment, getDepartmentSummary, listDepartments } from "../services/departmentService";
@@ -113,6 +114,7 @@ export default function AdminDepartments() {
     { label: "View Department", onSelect: () => open("view", d) },
     { label: "Edit Department", onSelect: () => open("edit", d) },
     { label: "Manage Doctors", onSelect: () => open("doctors", d) },
+    { label: "Manage Specializations", onSelect: () => open("specializations", d) },
     { label: d.is_active ? "Deactivate Department" : "Activate Department", danger: d.is_active, onSelect: () => open("status", d) },
   ];
 
@@ -131,9 +133,14 @@ export default function AdminDepartments() {
             <p className="muted">Manage clinic departments and their details.</p>
           </div>
         </div>
-        <button type="button" className="add-patient" onClick={() => open("add")}>
-          <Plus size={20} aria-hidden="true" /> Add Department
-        </button>
+        <div className="row">
+          <button type="button" className="secondary" onClick={() => open("specializations", null)}>
+            All specializations
+          </button>
+          <button type="button" className="add-patient" onClick={() => open("add")}>
+            <Plus size={20} aria-hidden="true" /> Add Department
+          </button>
+        </div>
       </header>
 
       <div className="card users-toolbar">
@@ -260,6 +267,9 @@ export default function AdminDepartments() {
         />
       )}
       {dialog?.kind === "view" && <DepartmentDetailsDialog department={dialog.department} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "specializations" && (
+        <SpecializationsDialog department={dialog.department} onClose={() => setDialog(null)} onChanged={refresh} />
+      )}
       {dialog?.kind === "doctors" && (
         <ManageDoctorsDialog department={dialog.department} onClose={() => setDialog(null)} onChanged={refresh} />
       )}

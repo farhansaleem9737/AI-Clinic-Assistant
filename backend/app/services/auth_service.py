@@ -9,14 +9,14 @@ family is revoked (architecture §4, D7).
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.core.config import settings
-from app.core.exceptions import AuthenticationError, ConflictError, PermissionDeniedError
+from app.core.exceptions import AuthenticationError, BusinessRuleError, ConflictError, PermissionDeniedError
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -26,7 +26,8 @@ from app.core.security import (
 )
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
-from app.services import rbac_service
+from app.services import audit_service, rbac_service
+from app.services.audit_service import AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,69 @@ async def logout(db: AsyncSession, raw_token: str | None) -> None:
         await _revoke_family(db, stored.family_id)
         await db.commit()
         logger.info("logout", extra={"user_id": str(stored.user_id)})
+
+
+def _signed_in_at(family_id: uuid.UUID) -> datetime:
+    """When this session started: its family id is a UUIDv7 made at sign-in, so the
+    time is the server's own (never sent by the client) and survives token rotation."""
+    millis = int.from_bytes(family_id.bytes[:6], "big")
+    return datetime.fromtimestamp(millis / 1000, tz=UTC)
+
+
+async def _current_session(db: AsyncSession, user_id: uuid.UUID, raw_token: str | None) -> RefreshToken:
+    """The caller's own live session (from its refresh cookie)."""
+    stored = (
+        await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_token(raw_token)))
+        if raw_token else None
+    )
+    if stored is None or stored.user_id != user_id or stored.revoked_at is not None or stored.expires_at <= clock.utcnow():
+        raise AuthenticationError("Please sign in again to change your password.", code="SESSION_REQUIRED")
+    return stored
+
+
+async def password_change_needs_current(db: AsyncSession, user_id: uuid.UUID, raw_token: str | None) -> bool:
+    """True unless this session signed in within PASSWORD_CHANGE_RECENT_AUTH_MINUTES."""
+    session = await _current_session(db, user_id, raw_token)
+    age = clock.utcnow() - _signed_in_at(session.family_id)
+    return age > timedelta(minutes=settings.password_change_recent_auth_minutes)
+
+
+async def change_password(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    raw_token: str | None,
+    *,
+    new_password: str,
+    current_password: str | None,
+    client: ClientInfo,
+) -> SessionTokens:
+    """Set a new password for the signed-in user (D116).
+
+    The current password is required unless this session signed in moments ago.
+    Every session of the user ends; this browser gets a fresh one, so it stays
+    signed in. Neither password is ever logged or stored in plain text.
+    """
+    session = await _current_session(db, user_id, raw_token)
+    user = await db.get(User, user_id)
+    if current_password is not None:
+        if not verify_password(current_password, user.password_hash):
+            raise BusinessRuleError("The current password is incorrect.", code="INCORRECT_PASSWORD")
+    elif await password_change_needs_current(db, user_id, raw_token):
+        raise PermissionDeniedError("Enter your current password to continue.", code="REAUTHENTICATION_REQUIRED")
+    if verify_password(new_password, user.password_hash):
+        raise BusinessRuleError("Choose a password different from your current one.", code="PASSWORD_UNCHANGED")
+
+    user.password_hash = hash_password(new_password)
+    await revoke_all_sessions(db, user.id)
+    _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client, persistent=session.persistent)
+    audit_service.record(
+        db, AuditAction.user_password_changed, actor_id=user.id, target_type="user", target_id=user.id,
+        ip_address=client.ip_address, details={"verified_with": "current_password" if current_password else "recent_sign_in"},
+    )
+    access = await _access_token_for(db, user)
+    await db.commit()
+    logger.info("password_changed", extra={"user_id": str(user.id)})
+    return SessionTokens(access_token=access, refresh_token=raw, persistent=session.persistent)
 
 
 async def revoke_all_sessions(db: AsyncSession, user_id: uuid.UUID) -> None:
