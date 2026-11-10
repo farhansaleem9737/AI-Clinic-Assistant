@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     ai_agent,
     appointments,
     auth,
+    google_auth,
     catalog,
     dashboard,
     departments,
@@ -16,6 +17,7 @@ from app.api.v1.endpoints import (
     internal,
     patients,
     queue,
+    realtime,
     schedules,
     users,
     workspace,
@@ -23,6 +25,7 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(google_auth.router)
 api_router.include_router(admin.public_router)
 api_router.include_router(admin.router)
 api_router.include_router(users.router)
@@ -46,3 +49,4 @@ api_router.include_router(dashboard.router)
 api_router.include_router(workspace.router)
 api_router.include_router(ai_agent.router)
 api_router.include_router(internal.router)
+api_router.include_router(realtime.router)

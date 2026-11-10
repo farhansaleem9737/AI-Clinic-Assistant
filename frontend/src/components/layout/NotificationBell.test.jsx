@@ -13,6 +13,19 @@ import {
 import NotificationBell from "./NotificationBell";
 
 vi.mock("../../services/workspaceService");
+// The live connection, driven by the tests: `live.emit(event)` is a server event.
+const live = vi.hoisted(() => ({ listeners: new Set(), connected: false }));
+vi.mock("../../services/realtime", () => ({
+  RESYNC: "resync",
+  default: {
+    subscribe: (fn) => (live.listeners.add(fn), () => live.listeners.delete(fn)),
+    onStatus: () => () => {},
+    get connected() {
+      return live.connected;
+    },
+  },
+}));
+const emit = (event) => act(async () => live.listeners.forEach((fn) => fn(event)));
 
 const APPT = "01a0ed6e-7dcf-7b64-bc44-8d7e5496d463";
 const note = (id, extra = {}) => ({
@@ -41,6 +54,7 @@ const openPanel = async () => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  live.connected = false;
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   getUnreadCount.mockResolvedValue({ data: { unread: 1 } });
@@ -65,6 +79,24 @@ describe("notification center", () => {
     expect(getUnreadCount).toHaveBeenCalledTimes(2); // not again within 15 s
     await act(async () => vi.advanceTimersByTime(120_000));
     expect(getUnreadCount).toHaveBeenCalledTimes(3);
+  });
+
+  it("live: a new notification or one read in another tab updates the badge and the open list; no polling meanwhile", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    live.connected = true;
+    renderBell();
+    await waitFor(() => expect(getUnreadCount).toHaveBeenCalledTimes(1));
+    await act(async () => vi.advanceTimersByTime(130_000));
+    expect(getUnreadCount).toHaveBeenCalledTimes(1); // connected: the poll waits for events
+    getUnreadCount.mockResolvedValue({ data: { unread: 2 } });
+    await emit({ version: 1, type: "notification.created", resource: "notification", payload: {} });
+    expect(await screen.findByRole("button", { name: /2 unread/ })).toBeInTheDocument();
+    await emit({ version: 1, type: "appointment.created", resource: "appointment", payload: {} });
+    expect(getUnreadCount).toHaveBeenCalledTimes(2); // not a notification event
+    await openPanel();
+    expect(listNotifications).toHaveBeenCalledTimes(1);
+    await emit({ version: 1, type: "notification.read", resource: "notification", payload: {} });
+    await waitFor(() => expect(listNotifications).toHaveBeenCalledTimes(2));
   });
 
   it("opens a notification's page, marks it read, and pages back through older ones", async () => {

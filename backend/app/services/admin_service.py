@@ -24,6 +24,7 @@ from enum import StrEnum
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.realtime import capture
 from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError, PermissionDeniedError
@@ -391,6 +392,7 @@ async def revoke_admin_role(
             UserRole.user_id == user.id, UserRole.role_id.in_(select(Role.id).where(Role.code == RoleCode.admin))
         )
     )
+    capture.roles_changed(db, user.id)  # their live updates re-read what they may hear (D122)
     record(db, AuditAction.admin_role_revoked, actor_id=principal.user_id, target_type="user", target_id=user.id,
            ip_address=ip)
     await db.commit()

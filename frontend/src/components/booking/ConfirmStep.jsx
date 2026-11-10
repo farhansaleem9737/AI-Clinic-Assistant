@@ -1,8 +1,10 @@
 import { ArrowLeft, ArrowRight, CalendarDays, Clock, CreditCard, Hourglass, Info, MapPin, MessageCircle, Ticket } from "lucide-react";
 import { useState } from "react";
 import { useFetch } from "../../hooks/useFetch";
-import { getErrorMessage } from "../../services/api";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
+import { getErrorMessage, isNetworkError } from "../../services/api";
 import { bookAppointment } from "../../services/appointmentService";
+import { bookingKey, bookingScope, forgetBookingKey } from "../../services/bookingKeys";
 import { getPublicAvailability } from "../../services/doctorService";
 import { durationMinutes } from "../../utils/appointments";
 import { addDays, formatLongDate, formatSlotTime, isoDateIn, timeZoneLabel } from "../../utils/datetime";
@@ -14,6 +16,12 @@ export const REASON_MAX = 500;
 const SLOT_TAKEN = "Sorry, this time was just booked by someone else. Please choose another time.";
 const SLOT_GONE = "This time is no longer available. Please choose another time.";
 const DOCTOR_GONE = "This doctor is no longer taking appointments. Please choose another doctor.";
+const CHECKING = "We're checking whether your appointment was created. Please wait before trying again.";
+const UNCERTAIN =
+  "We couldn't confirm the booking. Pressing Confirm again is safe: it will not create a second appointment.";
+// No answer, or a server fault: the booking may or may not have been saved.
+const ambiguous = (err) => isNetworkError(err) || [500, 502, 504].includes(err?.response?.status);
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Automatic token (D120): the assigned time went meanwhile; the next one is shown for review, never booked silently.
 const nextTimeNotice = (next, timezone) =>
   next?.starts_at
@@ -36,8 +44,10 @@ function DetailRow({ icon: Icon, label, children }) {
  * availability first (it may have come from a link, or been taken since);
  * the server checks again, under its booking locks, when "Confirm
  * Appointment" is pressed. Nothing is booked before that. One
- * Idempotency-Key per mounted step makes a double click or a retry return
- * the same appointment instead of a second one.
+ * Idempotency-Key per intended booking (services/bookingKeys.js), kept across
+ * leaving and returning to this step, makes a double click, a retry or a lost
+ * answer return the same appointment instead of a second one. After an
+ * ambiguous failure the step asks the server once more with the same key.
  *
  * `reason` lives in the wizard, so it survives going back to step 2.
  */
@@ -55,11 +65,20 @@ export default function ConfirmStep({
 }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const scope = bookingScope({ patientId: patient?.id, doctorId: doctor.id, startsAt: slot.starts_at });
+  const [idempotencyKey] = useState(() => bookingKey(scope));
+  const [checking, setChecking] = useState(false);
 
   const day = isoDateIn(slot.starts_at);
   // The clinic's date can differ from the browser's: look one day either side.
   const check = useFetch(() => getPublicAvailability(doctor.id, addDays(day, -1), addDays(day, 1)), [doctor.id, day]);
+  // Live (D122): if this doctor's times change while the user reads this page, check again
+  // in the background; a time taken meanwhile shows "no longer available". The reason
+  // typed so far is kept (it lives in the wizard). The booking itself is still checked by the server.
+  useRealtimeEvent(["availability."], (event) => {
+    if (submitting) return;
+    if (!event.payload || event.payload.doctor_id === doctor.id) check.reload();
+  });
   const offered = check.data?.days
     .flatMap((d) => d.slots)
     .find((s) => Date.parse(s.starts_at) === Date.parse(slot.starts_at));
@@ -79,16 +98,30 @@ export default function ConfirmStep({
         booking_mode: auto ? "auto" : "custom",
       };
       if (patient) body.patient_id = patient.id;
-      const res = await bookAppointment(body, idempotencyKey);
+      let res;
+      try {
+        res = await bookAppointment(body, idempotencyKey);
+      } catch (first) {
+        if (!ambiguous(first)) throw first;
+        // Saved or not? Ask again with the same key: the server returns the
+        // saved appointment, or books it now; never a second one.
+        setChecking(true);
+        await pause(1500);
+        res = await bookAppointment(body, idempotencyKey);
+      }
+      forgetBookingKey(scope);
       onBooked(res.data);
     } catch (err) {
       setSubmitting(false);
+      setChecking(false);
       const code = err.response?.data?.error?.code;
+      if (err.response?.status === 409 || code === "DOCTOR_UNAVAILABLE") forgetBookingKey(scope);
       if (err.response?.status === 409 && auto && code === "SLOT_UNAVAILABLE") {
         onUnavailable(nextTimeNotice(err.response.data.error.details?.next_available, timezone));
       } else if (err.response?.status === 409) onUnavailable(SLOT_TAKEN);
       else if (code === "DOCTOR_UNAVAILABLE") onDoctorGone(DOCTOR_GONE);
-      else setError(getErrorMessage(err, "Booking failed. Please check your connection and try again."));
+      else if (ambiguous(err)) setError(UNCERTAIN);
+      else setError(getErrorMessage(err, "We couldn't book the appointment. Please try again."));
     }
   };
 
@@ -211,12 +244,13 @@ export default function ConfirmStep({
           </p>
         )}
         {body}
+        {checking && <Alert kind="info">{CHECKING}</Alert>}
         <Alert>{error}</Alert>
       </section>
 
       <div className="card booking-footer-card">
         <p className="sr-only" aria-live="polite">
-          {submitting ? "Booking your appointment…" : ""}
+          {checking ? CHECKING : submitting ? "Booking your appointment…" : ""}
         </p>
         <div className="booking-actions plain">
           <button type="button" className="secondary" onClick={onBack} disabled={submitting}>

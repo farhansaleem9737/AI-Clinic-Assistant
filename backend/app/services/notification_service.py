@@ -24,6 +24,8 @@ from app.core.permissions import Perm, Principal
 from app.models.notification import Notification, NotificationPreference
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.user import User
+from app.realtime import capture
+from app.realtime.events import Event, user_channel
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,8 @@ async def notify_once(
         .on_conflict_do_nothing(index_elements=["user_id", "dedupe_key"])
         .returning(Notification.id)
     )
+    if created is not None:  # a bulk insert: the session hooks don't see it, so say so here
+        capture.emit(db, Event("notification.created", "notification", str(created), frozenset({user_channel(user_id)})))
     return created is not None
 
 
@@ -175,6 +179,8 @@ async def mark_all_read(db: AsyncSession, principal: Principal) -> int:
         .where(Notification.user_id == principal.user_id, Notification.read_at.is_(None))
         .values(read_at=clock.utcnow())
     )
+    if result.rowcount:  # the user's other tabs update their count
+        capture.emit(db, Event("notification.read", "notification", None, frozenset({user_channel(principal.user_id)})))
     await db.commit()
     return result.rowcount or 0
 

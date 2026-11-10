@@ -31,6 +31,9 @@ export const PAGES = {
   PatientDetail: () => import("../pages/PatientDetail"),
   Patients: () => import("../pages/Patients"),
   Register: () => import("../pages/Register"),
+  // Continue with Google (D123): finishing a sign-in, and a new person's registration.
+  GoogleComplete: () => import("../pages/GoogleComplete"),
+  GoogleSignup: () => import("../pages/GoogleSignup"),
 };
 
 // `permission` on a route only hides pages the user cannot use; the API

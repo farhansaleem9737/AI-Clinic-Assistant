@@ -11,6 +11,7 @@ import {
   uploadCredentials,
   validateProfessional,
 } from "../components/doctor-application/professional";
+import { useRealtimeEvent } from "../hooks/useRealtime";
 import { getErrorMessage } from "../services/api";
 import { getPublicDepartments } from "../services/departmentService";
 import {
@@ -117,6 +118,10 @@ export default function DoctorApplication() {
     setApplication(res.data);
     return res.data;
   };
+  // Live (D122): the review decision appears as soon as it is made; fields being edited are kept.
+  useRealtimeEvent(["doctor_application."], () => {
+    if (application) refresh().catch(() => {});
+  });
 
   if (!application) {
     return (

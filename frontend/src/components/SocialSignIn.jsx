@@ -1,3 +1,9 @@
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
+import { useFetch } from "../hooks/useFetch";
+import { getSignInProviders, GOOGLE_MESSAGES, googleStartUrl } from "../services/googleAuthService";
+import Alert from "./Alert";
+
 function GoogleLogo() {
   return (
     <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -21,24 +27,65 @@ function MicrosoftLogo() {
 }
 
 /**
- * Google / Microsoft buttons for the sign-in and create-account pages.
- * The backend has no OAuth support, so they are shown as unavailable rather
- * than pretending to work. When provider sign-in is built, enable them here.
+ * Provider sign-in for the sign-in and create-account pages. Google works
+ * when the clinic has configured it (D123): the button navigates to the
+ * backend, which runs Google's OpenID Connect flow and returns to the app.
+ * Microsoft is not built, so it stays visibly unavailable.
+ *
+ * `intent`: "login" or "register"; `remember`: the sign-in page's "Remember me".
  */
-export default function SocialSignIn() {
+export default function SocialSignIn({ intent = "login", remember = false }) {
+  const location = useLocation();
+  const [leaving, setLeaving] = useState(false);
+  const providers = useFetch(() => getSignInProviders(), [], { query: "auth/providers" });
+  const google = Boolean(providers.data?.google);
+  const reason = new URLSearchParams(location.search).get("google");
+  const message = reason ? GOOGLE_MESSAGES[reason] : null;
+
+  // Back from Google's page: the browser may restore this page as it was left.
+  useEffect(() => {
+    const restored = (e) => e.persisted && setLeaving(false);
+    window.addEventListener("pageshow", restored);
+    return () => window.removeEventListener("pageshow", restored);
+  }, []);
+
+  const continueWithGoogle = () => {
+    if (leaving) return; // one navigation, however many clicks
+    setLeaving(true);
+    window.location.assign(googleStartUrl(intent, remember));
+  };
+
   return (
     <>
+      {message && (
+        <div className="auth-provider-message" role={message.kind === "error" ? "alert" : "status"}>
+          <Alert kind={message.kind}>{message.text}</Alert>
+        </div>
+      )}
       <div className="auth-divider">or</div>
       <div className="auth-providers">
-        <button type="button" className="secondary" disabled aria-describedby="sso-note">
-          <GoogleLogo /> Continue with Google
+        <button
+          type="button"
+          className="secondary"
+          onClick={continueWithGoogle}
+          disabled={!google || leaving}
+          aria-busy={leaving}
+          aria-describedby={google ? undefined : "sso-google-note"}
+        >
+          {leaving ? <span className="spinner" aria-hidden="true" /> : <GoogleLogo />}
+          {leaving ? "Opening Google…" : intent === "register" ? "Sign up with Google" : "Continue with Google"}
         </button>
-        <button type="button" className="secondary" disabled aria-describedby="sso-note">
+        <button type="button" className="secondary" disabled aria-describedby="sso-ms-note">
           <MicrosoftLogo /> Continue with Microsoft
         </button>
       </div>
-      <p id="sso-note" className="muted small auth-note">
-        Google and Microsoft sign-in are not available yet.
+      {!providers.loading && !google && (
+        <p id="sso-google-note" className="muted small auth-note">
+          Google sign-in is not set up for this clinic yet.
+        </p>
+      )}
+      <p id="sso-ms-note" className="muted small auth-note">
+        Microsoft sign-in is not available yet.
       </p>
     </>
   );

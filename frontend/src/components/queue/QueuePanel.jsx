@@ -1,6 +1,8 @@
 import { BellRing, CalendarPlus, Clock, Play, RefreshCw, Square, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
 import { getErrorMessage } from "../../services/api";
+import realtime from "../../services/realtime";
 import { changeAppointmentStatus } from "../../services/appointmentService";
 import { callNextPatient, getQueueBoard, getQueueSessions, queueAction, registerWalkIn } from "../../services/queueService";
 import { formatTime } from "../../utils/datetime";
@@ -9,7 +11,7 @@ import Alert from "../Alert";
 import PatientPickerDialog from "../booking/PatientPickerDialog";
 import OverrideBookingDialog from "./OverrideBookingDialog";
 
-const REFRESH_MS = 30000; // a light poll: no websockets for one clinic's front desk
+const REFRESH_MS = 30000; // the fallback poll, paused while live updates are connected (D122)
 
 const MODE_LABEL = { hybrid: "Hybrid", scheduled: "Scheduled only", fifo: "First come, first served" };
 
@@ -74,9 +76,13 @@ export default function QueuePanel({ role, doctorId: fixedDoctorId, canOverride 
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, REFRESH_MS);
+    const timer = setInterval(() => !realtime.connected && load(), REFRESH_MS);
     return () => clearInterval(timer);
   }, [load]);
+  // This doctor's queue or appointments changed (someone checked in, booked, cancelled), or a reconnect.
+  useRealtimeEvent(["queue.", "appointment."], (event) => {
+    if (!event.payload || event.payload.doctor_id === doctorId) load();
+  });
 
   const run = async (work, success) => {
     if (busy) return;

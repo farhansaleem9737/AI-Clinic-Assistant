@@ -16,7 +16,8 @@ import { PAGES, PROTECTED_ROUTES } from "./routes/pages";
 // the layouts are in the main bundle. Each layout shows a page skeleton while a
 // page's code downloads; a failed download is retried and can be tried again.
 const LAZY = { ...Object.fromEntries(Object.entries(PAGES).map(([name, load]) => [name, lazyPage(load)])), Dashboard };
-const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, Landing, LegalDocument, NotFound, Register } = LAZY;
+const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, GoogleComplete, GoogleSignup, Landing, LegalDocument, NotFound, Register } =
+  LAZY;
 
 function App() {
   return (
@@ -40,9 +41,12 @@ function App() {
             <Route path="/forgot-password" element={<ForgotPassword />} />
             {/* Public: reached from an emailed invitation link (D87). */}
             <Route path="/accept-admin-invite" element={<AcceptAdminInvite />} />
+            {/* Back from Google (D123): the backend redirects here. */}
+            <Route path="/auth/google/complete" element={<GoogleComplete />} />
           </Route>
           <Route element={<AuthLayout variant="register" />}>
             <Route path="/register" element={<Register />} />
+            <Route path="/register/google" element={<GoogleSignup />} />
             <Route path="/terms" element={<LegalDocument document="terms" />} />
             <Route path="/privacy" element={<LegalDocument document="privacy" />} />
             <Route path="/ai-disclaimer" element={<LegalDocument document="ai" />} />

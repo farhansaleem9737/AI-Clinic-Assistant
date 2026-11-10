@@ -41,6 +41,14 @@ services:
         sync: false
       - key: FRONTEND_BASE_URL
         sync: false
+      # Continue with Google (D123, docs/GOOGLE_SIGN_IN.md): set true once the
+      # client id and secret below are in place.
+      - key: GOOGLE_OAUTH_ENABLED
+        value: "false"
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
       # Storage
       - key: R2_ACCOUNT_ID
         sync: false

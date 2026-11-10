@@ -2824,3 +2824,11 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 @media (max-width: 560px) {
   .booking-mode, .auto-token-facts { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- Continue with Google (D123) ------------------------------------------ */
+.auth-provider-message { margin-top: 1rem; }
+.auth-providers button { display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; }
+.connected-accounts { margin-top: 1rem; display: grid; gap: 0.75rem; justify-items: start; }
+.connected-accounts .card-title h2 { margin: 0; font-size: 1.1rem; }
+.connected-accounts p { margin: 0; }
+.connected-reauth { display: grid; gap: 0.5rem; width: min(100%, 24rem); }

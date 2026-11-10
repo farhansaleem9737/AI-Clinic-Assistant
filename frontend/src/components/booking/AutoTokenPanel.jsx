@@ -1,6 +1,7 @@
 import { CalendarClock, Hourglass, Ticket } from "lucide-react";
 import { useEffect } from "react";
 import { useFetch } from "../../hooks/useFetch";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
 import { getNextAvailable } from "../../services/appointmentService";
 import { longDate } from "../../utils/calendar";
 import { formatSlotTime } from "../../utils/datetime";
@@ -14,12 +15,17 @@ import Alert from "../Alert";
  * taken meanwhile, the server names the next one and the user reviews it.
  */
 export default function AutoTokenPanel({ doctorId, date, patientId, selected, onSelect, onPickDate, refreshKey = 0 }) {
-  const { data, loading, error } = useFetch(
+  const { data, loading, error, reload } = useFetch(
     () => getNextAvailable(doctorId, date, patientId),
     [doctorId, date, patientId],
     // Not a shared cache entry: the earliest time changes as people book.
     { refresh: String(refreshKey) }
   );
+  // Someone booked or freed a time with this doctor that day (D122): re-ask in the background.
+  useRealtimeEvent(["availability."], (event) => {
+    const p = event.payload;
+    if (!p || (p.doctor_id === doctorId && (!p.date || p.date === date))) reload();
+  });
   const result = loading ? null : data;
   const slot = result?.slot ?? null;
 

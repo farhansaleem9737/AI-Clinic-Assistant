@@ -103,6 +103,10 @@ higher (always on).
 4. Environment variables: `VITE_API_BASE_URL=/api/v1` (must stay relative so the rewrite
    is used); optional `VITE_CURRENCY`, `VITE_SUPPORT_PHONE`, `VITE_SUPPORT_EMAIL`.
    `VITE_*` values are public; never put a secret in one. Do not set `VITE_API_PROXY_TARGET`.
+   Live updates (D122): also set `VITE_REALTIME_URL=wss://<render-host>/api/v1/ws` (the host
+   from A3). Vercel's `/api` rewrite cannot carry a WebSocket, so the socket goes to Render
+   directly; it is authenticated by a one-time ticket fetched through the rewrite, so no
+   cookie crosses sites. Without this variable the app works, just without live updates.
 5. Deploy and note the URL, e.g. `https://<project>.vercel.app`.
 
 Vercel Hobby is for non-commercial use; plan on Pro for a real clinic.
@@ -116,6 +120,11 @@ Vercel Hobby is for non-commercial use; plan on Pro for a real clinic.
    - Direct load of a deep link, e.g. `/doctors/<id>`.
    - Book, reschedule, cancel an appointment.
    - AI assistant answer **streams** word by word.
+   - Live updates: signed in as a patient in one browser and reception (or the doctor) in
+     another, book and cancel; the other window updates within a second without reloading.
+     DevTools → Network → WS: one `wss://<render-host>/api/v1/ws` per tab, status 101.
+     (Render's free plan sleeps after 15 minutes without HTTP requests; the socket then
+     reconnects when the service wakes.)
    - Upload a ~10–15 MB patient document and download it.
    - DevTools → Network: calls go to `https://<project>.vercel.app/api/v1/...`; cookies are `Secure`.
 3. If streaming arrives in one block or large uploads fail at the proxy, the fallback is a

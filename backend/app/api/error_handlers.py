@@ -30,6 +30,7 @@ from app.core.exceptions import (
     UnsupportedFileError
 )
 from app.core.logging import request_id_var
+from app.db.schema_check import SCHEMA_MISMATCH_SQLSTATES, sqlstate_of
 from app.services.ai.provider import AiUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,20 @@ async def database_error_handler(request: Request, exc: DBAPIError) -> JSONRespo
             "DATABASE_UNAVAILABLE",
             "The connection to the database was interrupted. Please try again.",
             headers={"Retry-After": "1"},
+        )
+    # The code expects a column or table the database does not have: its
+    # migrations were not applied. Say exactly that in the log (no row values),
+    # and tell the client it is a server-side update, not their request.
+    if sqlstate_of(exc) in SCHEMA_MISMATCH_SQLSTATES:
+        logger.error(
+            "database_schema_mismatch",
+            extra={"path": request.url.path, "sqlstate": sqlstate_of(exc),
+                   "fix": "the database is behind the code: run `alembic upgrade head`"},
+        )
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "SCHEMA_OUT_OF_DATE",
+            "This part of the clinic system is being updated. Please try again a little later.",
         )
     return await unhandled_error_handler(request, exc)
 

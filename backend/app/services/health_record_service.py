@@ -59,6 +59,16 @@ class Access:
         return self.own and kind in PATIENT_REPORTED and entry.recorded_by_user_id == user_id
 
 
+async def may_read(db: AsyncSession, principal: Principal, patient_id: uuid.UUID) -> bool:
+    """Whether this caller may read the patient's record (the same rule as the API):
+    used to authorize watching it for live updates (D122)."""
+    try:
+        await _access(db, principal, patient_id)
+    except NotFoundError:
+        return False
+    return True
+
+
 async def _access(db: AsyncSession, principal: Principal, patient_id: uuid.UUID) -> Access:
     own_patient = principal.patient_id is not None and principal.patient_id == patient_id
     reads_own = own_patient and principal.has(Perm.health_record_read_own)

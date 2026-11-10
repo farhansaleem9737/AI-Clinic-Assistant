@@ -372,6 +372,41 @@ describe("steps 2 and 3", () => {
     expect(screen.getByRole("heading", { name: "Select a doctor" })).toBeInTheDocument();
   });
 
+  it("a lost answer is checked with the same key, so the booking is never made twice", async () => {
+    const user = userEvent.setup();
+    bookAppointment
+      .mockRejectedValueOnce({ request: {}, message: "Network Error", code: "ERR_NETWORK" }) // saved, answer lost
+      .mockResolvedValueOnce({ data: appointment({ id: "appt-7", starts_at: SLOT, timezone: TZ, status: "scheduled" }) });
+    renderBooking(patient());
+    await chooseSarahAndTime(user);
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(await screen.findByText(/We're checking whether your appointment was created/, { selector: ".alert" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Your appointment is booked" }, { timeout: 4000 })).toBeInTheDocument();
+    expect(bookAppointment).toHaveBeenCalledTimes(2);
+    expect(bookAppointment.mock.calls[1][1]).toBe(bookAppointment.mock.calls[0][1]); // the same Idempotency-Key
+  });
+
+  it("when the server keeps failing, says a retry is safe and retries with the same key, even after leaving the step", async () => {
+    const user = userEvent.setup();
+    const fault = { response: { status: 500, data: { error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred", request_id: "abcd1234ef" } } } };
+    bookAppointment.mockRejectedValue(fault);
+    renderBooking(patient());
+    await chooseSarahAndTime(user);
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(await screen.findByText(/Pressing Confirm again is safe/, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.queryByText("An unexpected error occurred")).not.toBeInTheDocument();
+    const key = bookAppointment.mock.calls[0][1];
+
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+    await screen.findByRole("region", { name: "Appointment Details" });
+    bookAppointment.mockResolvedValue({ data: appointment({ starts_at: SLOT, timezone: TZ, status: "scheduled" }) });
+    await user.click(screen.getByRole("button", { name: /Confirm Appointment/ }));
+    expect(await screen.findByRole("heading", { name: "Your appointment is booked" })).toBeInTheDocument();
+    expect(bookAppointment.mock.calls.every(([, k]) => k === key)).toBe(true);
+  });
+
   it("shows other booking errors and lets the patient retry", async () => {
     const user = userEvent.setup();
     bookAppointment.mockRejectedValue(apiError("Complete your patient profile before booking", 400));

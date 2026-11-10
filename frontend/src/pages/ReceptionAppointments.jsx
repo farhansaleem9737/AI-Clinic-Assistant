@@ -145,6 +145,7 @@ export default function ReceptionAppointments() {
     query: "appointments/list",
     refresh: attempt,
     enabled: !waitingForToday,
+    errorMessage: "We couldn't load the appointments. Please try again.",
   });
 
   const onSearch = (value) => {

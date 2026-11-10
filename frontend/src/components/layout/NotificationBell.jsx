@@ -1,7 +1,9 @@
 import { ArrowLeft, Bell, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
 import { getErrorMessage } from "../../services/api";
+import realtime from "../../services/realtime";
 import {
   getNotificationPreferences,
   getUnreadCount,
@@ -115,7 +117,8 @@ export default function NotificationBell() {
 
   useEffect(() => {
     refreshCount(true);
-    const timer = setInterval(() => document.visibilityState === "visible" && refreshCount(true), POLL_MS);
+    // Polling is the fallback: while the live connection is open, events say when to refresh.
+    const timer = setInterval(() => document.visibilityState === "visible" && !realtime.connected && refreshCount(true), POLL_MS);
     const back = () => document.visibilityState === "visible" && refreshCount();
     document.addEventListener("visibilitychange", back);
     window.addEventListener("focus", back);
@@ -125,6 +128,12 @@ export default function NotificationBell() {
       window.removeEventListener("focus", back);
     };
   }, [refreshCount]);
+
+  // A new notification, or one read in another tab (D122): the badge, and the list if it is open.
+  useRealtimeEvent(["notification."], () => {
+    refreshCount(true);
+    if (open) setAttempt((n) => n + 1);
+  });
 
   useEffect(() => {
     if (!open) return;

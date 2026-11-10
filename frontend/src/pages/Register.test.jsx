@@ -150,7 +150,7 @@ describe("rendering", () => {
 
   it("offers Google and Microsoft only as unavailable", () => {
     renderRegister();
-    expect(screen.getByRole("button", { name: /Continue with Google/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Sign up with Google/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Continue with Microsoft/ })).toBeDisabled();
   });
 });

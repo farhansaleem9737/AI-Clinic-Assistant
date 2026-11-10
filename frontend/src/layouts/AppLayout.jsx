@@ -9,6 +9,7 @@ import AccountMenu from "../components/layout/AccountMenu";
 import GlobalSearch from "../components/layout/GlobalSearch";
 import NavGroup from "../components/layout/NavGroup";
 import NotificationBell from "../components/layout/NotificationBell";
+import RealtimeConnection from "../components/layout/RealtimeConnection";
 import { useAuth } from "../context/useAuth";
 import { isAdmin, visibleNavItems } from "../routes/navigation";
 import { pageLoaderFor } from "../routes/pages";
@@ -138,6 +139,7 @@ export default function AppLayout() {
       </div>
       {/* One assistant for the whole signed-in app (D96); outside the page boundary so a page error never removes it. */}
       {user && <ClinicAssistant />}
+      {user && <RealtimeConnection userId={user.id} />}
     </div>
   );
 }

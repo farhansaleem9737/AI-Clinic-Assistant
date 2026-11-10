@@ -71,6 +71,7 @@ const AFFECTS = {
   "follow-ups": ["appointments"],
   notifications: [],
   auth: [],
+  realtime: [], // a socket ticket changes nothing
 };
 
 /** After a successful POST/PUT/PATCH/DELETE to `url`, mark the affected data stale. */

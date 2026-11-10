@@ -59,7 +59,13 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
   const slot = slots.find((s) => s.starts_at === selected?.starts_at) ?? null;
   const stale = Boolean(current && selected && !slot);
 
-  // A chosen time that is no longer offered (refreshed, or another date) is cleared.
+  // A chosen time that is no longer offered is cleared, and the user told why: it
+  // was taken meanwhile (a live update, D122, or a refresh). Changing the date or
+  // month clears the choice first, so it is never "stale" for those.
+  // (Automatic mode picks its own next time instead.)
+  const [takenAt, setTakenAt] = useState(null);
+  if (stale && !auto && takenAt !== selected.starts_at) setTakenAt(selected.starts_at);
+  const takenNotice = takenAt ? "The time you picked was just booked by someone else. Please choose another time." : "";
   useEffect(() => {
     if (stale) onSelect(null);
   }, [stale, onSelect]);
@@ -75,6 +81,7 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
     onSelect(null);
   };
   const choose = (s) => {
+    setTakenAt(null);
     setPickedDate(date);
     onSelect({ ...s, timezone, mode: "custom" });
   };
@@ -214,6 +221,11 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
               </label>
             </div>
           )}
+          {takenNotice && (
+            <div role="status">
+              <Alert kind="warn">{takenNotice}</Alert>
+            </div>
+          )}
           {error ? null : loading ? (
             <p className="muted small" role="status">
               Loading available times…
@@ -311,6 +323,11 @@ export default function DateTimePicker({ doctorId, selected, onSelect, refreshKe
         <h3>
           <Clock size={18} aria-hidden="true" /> Available times
         </h3>
+        {takenNotice && (
+          <div role="status">
+            <Alert kind="warn">{takenNotice}</Alert>
+          </div>
+        )}
         {loading ? (
           <p className="muted small" role="status">
             Loading available times…

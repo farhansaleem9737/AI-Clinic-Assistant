@@ -115,6 +115,21 @@ class Settings(BaseSettings):
     # Comma-separated in .env, e.g. CORS_ORIGINS=http://localhost:5173,https://app.example.com
     cors_origins: Annotated[list[str], NoDecode] = []
 
+    # Live updates over a WebSocket (D122). Events only say *what changed*; the
+    # page then re-reads it through the REST API, which stays the source of truth.
+    realtime_enabled: bool = True
+    # Browser origins allowed to open the socket. Empty = the CORS_ORIGINS list.
+    # A page on the API's own origin is always allowed; development allows any
+    # origin (the Vite proxy, a phone on the LAN). A ticket is required regardless.
+    ws_allowed_origins: Annotated[list[str], NoDecode] = []
+    ws_max_connections_per_user: int = 5  # tabs and devices of one account
+    ws_max_connections: int = 500  # this process in total
+    ws_ticket_ttl_seconds: int = 30  # a ticket is used once, right after it is issued
+    ws_tickets_per_minute: int = 30  # per client IP
+    ws_revalidate_seconds: int = 300  # re-read the account: deactivated or signed out everywhere → closed
+    ws_send_timeout_seconds: float = 5  # a client that cannot take a message this fast is dropped
+    ws_queue_size: int = 100  # messages waiting for one client before it counts as too slow
+
     log_level: str = "INFO"
 
     api_v1_prefix: str = "/api/v1"
@@ -176,6 +191,20 @@ class Settings(BaseSettings):
     # Administrator invitations (D87). The link points at the frontend, with
     # the token in the URL fragment so it never reaches a server log.
     frontend_base_url: str = "http://localhost:5173"
+
+    # "Continue with Google" (D123): OpenID Connect, Authorization Code + PKCE,
+    # run by the backend. Off unless enabled; then the client id and secret are
+    # required. The callback must be on the origin the browser uses for the app
+    # (the Vite / Vercel origin that forwards /api), so its cookies are first-party:
+    # by default FRONTEND_BASE_URL + API_V1_PREFIX + /auth/google/callback.
+    google_oauth_enabled: bool = False
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    google_oauth_redirect_uri: str | None = None
+    google_oauth_timeout_seconds: float = 10
+    google_oauth_flow_minutes: int = 10  # Google sign-in must finish within this
+    google_oauth_signup_minutes: int = 30  # a new user's time to complete the registration form
+    google_oauth_attempts_per_minute: int = 20  # per client IP, at the start endpoints
     admin_invite_expire_hours: int = 24
     # Attempts per client IP per minute at the public invitation endpoints.
     invite_attempts_per_minute: int = 10
@@ -351,20 +380,20 @@ class Settings(BaseSettings):
             raise ValueError(f"Unknown DOCTOR_APPROVAL_REQUIREMENTS: {', '.join(unknown)}")
         return value
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "ws_allowed_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
         if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
+            return [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("cors_origins")
+    @field_validator("cors_origins", "ws_allowed_origins")
     @classmethod
     def reject_wildcard(cls, value: list[str]) -> list[str]:
         # The API sends credentials cross-origin, which browsers refuse with "*"
         # anyway; an explicit list is also the only safe production setting.
         if "*" in value:
-            raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
+            raise ValueError("CORS_ORIGINS and WS_ALLOWED_ORIGINS must list explicit origins, not '*'")
         return value
 
     @field_validator("reminder_offsets_minutes", "doctor_reminder_offsets_minutes", mode="before")
@@ -431,6 +460,10 @@ class Settings(BaseSettings):
             raise ValueError("EMAIL_BACKEND=smtp needs SMTP_HOST")
         if self.smtp_host:
             self._check_smtp_security()
+        if self.google_oauth_enabled and not (self.google_oauth_client_id and self.google_oauth_client_secret):
+            raise ValueError("GOOGLE_OAUTH_ENABLED needs GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET")
+        if self.google_oauth_redirect_uri and not self.google_oauth_redirect_uri.startswith(("https://", "http://localhost", "http://127.0.0.1")):
+            raise ValueError("GOOGLE_OAUTH_REDIRECT_URI must be https (http only for localhost)")
         return self
 
     def _check_smtp_security(self) -> None:
@@ -468,6 +501,16 @@ class Settings(BaseSettings):
         if self.cookie_secure is not None:
             return self.cookie_secure
         return self.environment is not Environment.development
+
+    @property
+    def google_redirect_uri(self) -> str:
+        """The exact callback registered in Google Cloud Console."""
+        return self.google_oauth_redirect_uri or f"{self.frontend_base_url}{self.api_v1_prefix}/auth/google/callback"
+
+    @property
+    def google_cookie_path(self) -> str:
+        # The short-lived Google sign-in cookies go only to these endpoints.
+        return f"{self.api_v1_prefix}/auth/google"
 
     @property
     def auth_cookie_path(self) -> str:

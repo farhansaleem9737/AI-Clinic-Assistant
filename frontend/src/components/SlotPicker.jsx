@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRealtimeEvent } from "../hooks/useRealtime";
 import { getErrorMessage } from "../services/api";
 import { getAvailability } from "../services/scheduleService";
 import { addDays, formatDayHeading, formatTime, isoDateIn } from "../utils/datetime";
@@ -15,6 +16,10 @@ export default function SlotPicker({ doctorId, selected, onSelect }) {
   const [start, setStart] = useState(() => isoDateIn(new Date()));
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [version, setVersion] = useState(0); // bumped by live updates: re-read, keeping the week on screen
+  useRealtimeEvent(["availability."], (event) => {
+    if (!event.payload || event.payload.doctor_id === doctorId) setVersion((n) => n + 1);
+  });
 
   useEffect(() => {
     if (!doctorId) return;
@@ -30,7 +35,7 @@ export default function SlotPicker({ doctorId, selected, onSelect }) {
     return () => {
       cancelled = true;
     };
-  }, [doctorId, start]);
+  }, [doctorId, start, version]);
 
   if (!doctorId) return <p className="muted">Choose a doctor to see free times.</p>;
 

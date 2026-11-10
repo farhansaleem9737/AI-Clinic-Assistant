@@ -15,7 +15,9 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(100))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    # None: the account signs in only with a linked provider (Google, D123) until
+    # its owner sets a password. Never a placeholder value.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     # Users are never deleted (audit and clinical records reference them).
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Personal details of doctors and staff, given at sign-up or by the admin

@@ -71,10 +71,11 @@ async def _commit_and_reload(db: AsyncSession, patient: Patient) -> Patient:
     return patient
 
 
-async def register_self(db: AsyncSession, data: PatientRegistration) -> User:
-    """Self-registration: login, patient role and patient profile in one transaction."""
+async def register_self(db: AsyncSession, data: PatientRegistration, *, oauth=None) -> User:
+    """Self-registration: login, patient role and patient profile in one transaction.
+    ``oauth``: a verified Google identity to link (D123); then there is no password."""
     user = await auth_service.create_user(
-        db, name=f"{data.first_name} {data.last_name}", email=data.email, password=data.password
+        db, name=f"{data.first_name} {data.last_name}", email=data.email, password=data.password, oauth=oauth
     )
     await rbac_service.grant_roles(db, user.id, [RoleCode.patient])
     db.add(

@@ -84,6 +84,16 @@ export function AuthProvider({ children }) {
     [fetchCurrentUser]
   );
 
+  // A session the server just issued another way (Google sign-in, D123): the
+  // refresh cookie is already set; this keeps the access token and loads the user.
+  const signInWithToken = useCallback(
+    async (accessToken) => {
+      setAccessToken(accessToken);
+      return fetchCurrentUser();
+    },
+    [fetchCurrentUser]
+  );
+
   // Self-registration always creates a patient (login + profile); the backend decides the role.
   const register = useCallback(
     async (data) => {
@@ -116,8 +126,8 @@ export function AuthProvider({ children }) {
   const hasRole = useCallback((role) => Boolean(user?.roles?.includes(role)), [user]);
 
   const value = useMemo(
-    () => ({ user, initializing, login, register, logout, fetchCurrentUser, can, hasRole }),
-    [user, initializing, login, register, logout, fetchCurrentUser, can, hasRole]
+    () => ({ user, initializing, login, register, logout, fetchCurrentUser, signInWithToken, can, hasRole }),
+    [user, initializing, login, register, logout, fetchCurrentUser, signInWithToken, can, hasRole]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

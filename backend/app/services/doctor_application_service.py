@@ -107,11 +107,14 @@ async def _check_department(db: AsyncSession, department_id: uuid.UUID | None) -
         )
 
 
-async def register(db: AsyncSession, data: DoctorRegistration) -> User:
+async def register(db: AsyncSession, data: DoctorRegistration, *, oauth=None) -> User:
     """Login + doctor_applicant role + pending application, one transaction.
-    Nothing is committed if any step fails."""
+    Nothing is committed if any step fails. ``oauth``: a verified Google identity
+    to link (D123); the application still waits for review like any other."""
     await _check_department(db, data.department_id)
-    user = await auth_service.create_user(db, name=data.name, email=data.email, password=data.password)
+    user = await auth_service.create_user(
+        db, name=data.name, email=data.email, password=data.password, oauth=oauth
+    )
     user.date_of_birth, user.gender = data.date_of_birth, data.gender
     await rbac_service.grant_roles(db, user.id, [RoleCode.doctor_applicant])
     db.add(

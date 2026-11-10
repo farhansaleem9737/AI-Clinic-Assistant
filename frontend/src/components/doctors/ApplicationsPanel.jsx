@@ -1,5 +1,6 @@
 import { FileText, UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
 import { getErrorMessage } from "../../services/api";
 import {
   APPLICATION_STATUS,
@@ -172,6 +173,8 @@ export default function ApplicationsPanel({ onDecided }) {
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [reviewing, setReviewing] = useState(null);
+  // Live (D122): an application submitted, or decided by another reviewer; the list stays while it reloads.
+  useRealtimeEvent(["doctor_application."], () => setAttempt((n) => n + 1));
 
   useEffect(() => {
     let live = true;

@@ -643,7 +643,7 @@ export default function Register() {
         </div>
       </form>
 
-      <SocialSignIn />
+      <SocialSignIn intent="register" />
 
       <p className="auth-footer">
         Already have an account? <Link to="/login">Sign in</Link>

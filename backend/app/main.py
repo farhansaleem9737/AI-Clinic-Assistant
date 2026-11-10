@@ -9,8 +9,11 @@ from app.api.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.db import schema_check
 from app.db.database import engine
 from app.core.storage import close_storage
+from app.realtime import capture  # noqa: F401  (installs the commit hooks that publish live events)
+from app.realtime.hub import hub
 
 setup_logging(settings.log_level)
 logger = logging.getLogger("app")
@@ -22,7 +25,11 @@ async def lifespan(app: FastAPI):
         "startup",
         extra={"environment": settings.environment.value, "cors_origins": settings.cors_origins},
     )
+    # Log loudly when the database is behind the code's migrations (never changes it).
+    await schema_check.check(engine)
     yield
+    # Ask open sockets to close (1012): browsers reconnect to the next process and re-read.
+    await hub.shutdown()
     await engine.dispose()
     close_storage()
     logger.info("shutdown")
@@ -59,4 +66,5 @@ def root():
 
 @app.get("/health", tags=["health"])
 def health_check():
-    return {"status": "healthy"}
+    # "schema": "behind" means migrations are pending (see the startup log).
+    return {"status": "healthy", "schema": schema_check.state["status"]}

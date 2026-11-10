@@ -110,12 +110,27 @@ api.interceptors.response.use(
 // The backend returns every error as
 //   {"error": {"code", "message", "details", "request_id"}}
 // This turns one into text a page can show.
+export const NETWORK_MESSAGE = "We couldn't connect to the server. Please try again.";
+
+/** True when the request never got an answer (offline, server down, timeout). */
+export const isNetworkError = (err) => Boolean(err && !err.response && (err.request || err.code === "ERR_NETWORK"));
+
+/**
+ * The message to show for a failed request. A server fault ("INTERNAL_ERROR")
+ * is shown with the page's own wording (`fallback`, e.g. "We couldn't load your
+ * appointments") and a short reference staff can find in the logs, never the
+ * server's generic text; no answer at all is a connection message.
+ */
 export function getErrorMessage(err, fallback = "Something went wrong") {
+  if (isNetworkError(err)) return NETWORK_MESSAGE;
   const error = err?.response?.data?.error;
   if (!error) return fallback;
   if (error.code === "VALIDATION_ERROR") {
     const first = error.details?.errors?.[0];
     if (first) return `${first.loc.at(-1)}: ${first.msg}`;
+  }
+  if (error.code === "INTERNAL_ERROR") {
+    return error.request_id ? `${fallback} (reference ${String(error.request_id).slice(0, 8)})` : fallback;
   }
   return error.message || fallback;
 }

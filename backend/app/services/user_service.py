@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import case, delete, func, literal_column, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.realtime import capture
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, ConflictError, DomainError, NotFoundError, PermissionDeniedError
 from app.core.permissions import Perm, Principal, RoleCode
@@ -316,6 +317,7 @@ async def set_roles(
                 UserRole.role_id.in_(select(Role.id).where(Role.code.in_(removed))),
             )
         )
+        capture.roles_changed(db, user.id)  # their live updates re-read what they may hear (D122)
     await rbac_service.grant_roles(db, user.id, wanted - current, granted_by=principal.user_id)
     if removed or wanted - current:
         record(

@@ -123,7 +123,7 @@ export default function Login() {
         </button>
       </form>
 
-      <SocialSignIn />
+      <SocialSignIn intent="login" remember={form.rememberMe} />
 
       <p className="auth-footer">
         Don&apos;t have an account? <Link to="/register">Create account</Link>

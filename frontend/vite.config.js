@@ -15,6 +15,8 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8000',
           changeOrigin: true,
+          // Live updates (D122): /api/v1/ws is a WebSocket, forwarded too.
+          ws: true,
         },
       },
     },

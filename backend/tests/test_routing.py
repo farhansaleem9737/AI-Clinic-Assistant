@@ -14,4 +14,5 @@ async def test_old_unversioned_routes_are_gone(client):
 async def test_health(client):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    body = response.json()
+    assert body["status"] == "healthy" and body["schema"] in {"current", "behind", "unknown"}

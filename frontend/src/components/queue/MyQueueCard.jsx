@@ -1,6 +1,8 @@
 import { Ticket } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useRealtimeEvent } from "../../hooks/useRealtime";
 import { getErrorMessage } from "../../services/api";
+import realtime from "../../services/realtime";
 import { getMyQueue, queueAction } from "../../services/queueService";
 import { formatCalendarDate, formatTime, isoDateIn } from "../../utils/datetime";
 import { waitText } from "../../utils/queue";
@@ -32,9 +34,15 @@ export default function MyQueueCard() {
   );
   useEffect(() => {
     load();
-    const timer = setInterval(load, 60000);
+    const timer = setInterval(() => !realtime.connected && load(), 60000);
     return () => clearInterval(timer);
   }, [load]);
+  // Live (D122): my own token changed (it carries an id only for me), or the
+  // queue I am waiting in moved, or a reconnect.
+  useRealtimeEvent(["queue."], (event) => {
+    const mine = event.resource_id || !event.payload;
+    if (mine || entries?.some((e) => e.doctor_id === event.payload.doctor_id)) load();
+  });
 
   if (!entries?.length && !error) return null;
   return (

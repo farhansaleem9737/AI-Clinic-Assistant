@@ -1,5 +1,6 @@
 import { IdCard, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
+import ConnectedAccounts from "../components/account/ConnectedAccounts";
 import Avatar from "../components/Avatar";
 import InfoCard from "../components/patient-profile/InfoCard";
 import { useAuth } from "../context/useAuth";
@@ -61,6 +62,7 @@ export default function AccountProfile() {
           ]}
         />
       </div>
+      <ConnectedAccounts />
     </div>
   );
 }

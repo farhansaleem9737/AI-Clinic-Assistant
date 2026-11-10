@@ -149,6 +149,7 @@ export default function PatientAppointments() {
     query: "appointments/list",
     refresh: attempt,
     enabled: valid,
+    errorMessage: "We couldn't load your appointments. Please try again.",
   });
   const counts = useFetch(() => countAppointments(apiCounts), [JSON.stringify(apiCounts)], {
     query: "appointments/counts",

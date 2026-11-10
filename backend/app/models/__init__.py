@@ -17,6 +17,7 @@ from app.models.email_verification import EmailVerificationCode
 from app.models.health_record import PatientAllergy, PatientDiagnosis, PatientMedication
 from app.models.doctor_application import DoctorApplication, DoctorApplicationDocument
 from app.models.notification import ClinicSettings, FollowUp, Notification, NotificationPreference
+from app.models.oauth import OAuthFlow, OAuthIdentity
 from app.models.patient import Patient
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.refresh_token import RefreshToken
@@ -55,6 +56,8 @@ __all__ = [
     "PatientMedication",
     "Permission",
     "RefreshToken",
+    "OAuthFlow",
+    "OAuthIdentity",
     "Role",
     "RolePermission",
     "ScheduleException",

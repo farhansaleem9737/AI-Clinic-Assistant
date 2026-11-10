@@ -3,6 +3,7 @@ import { useState } from "react";
 import Alert from "../Alert";
 import ConfirmDialog from "../ConfirmDialog";
 import { useFetch } from "../../hooks/useFetch";
+import { useRealtimeEvent, useRealtimeWatch } from "../../hooks/useRealtime";
 import { getErrorMessage } from "../../services/api";
 import { addHealthRecord, getHealthRecords, removeHealthRecord, updateHealthRecord } from "../../services/healthRecordService";
 import { shortDate } from "../../utils/medical";
@@ -284,9 +285,14 @@ export function HealthRecordSection({ kind, patientId, entries, canAdd, viewer, 
 export function PatientHealthRecords({ patientId }) {
   const [version, setVersion] = useState(0);
   const [notice, setNotice] = useState("");
-  const { data, error } = useFetch(() => getHealthRecords(patientId), [patientId], {
+  const { data, error, reload } = useFetch(() => getHealthRecords(patientId), [patientId], {
     refresh: version,
     errorMessage: "Could not load the patient's health records",
+  });
+  // Live (D122): the patient adds an allergy, or another doctor a diagnosis, while this page is open.
+  useRealtimeWatch(patientId);
+  useRealtimeEvent(["health_record."], (event) => {
+    if (!event.payload || event.payload.patient_id === patientId) reload();
   });
   return (
     <section className="card hr-card" aria-labelledby="hr-card-title">

@@ -29,6 +29,10 @@ class AuditAction(StrEnum):
     user_deactivated = "user.deactivated"
     user_activated = "user.activated"
     user_password_changed = "user.password_changed"
+    # Google sign-in (D123): linking and unlinking, and accounts created through it.
+    user_google_linked = "user.google_linked"
+    user_google_unlinked = "user.google_unlinked"
+    user_google_registered = "user.google_registered"
     scheduling_policy_changed = "doctor.scheduling_policy_changed"
     appointment_override_booked = "appointment.override_booked"
     queue_walk_in_registered = "queue.walk_in_registered"

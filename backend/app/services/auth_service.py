@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.realtime import capture
 from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, BusinessRuleError, ConflictError, PermissionDeniedError
@@ -47,14 +48,52 @@ class SessionTokens:
     persistent: bool = False
 
 
-async def create_user(db: AsyncSession, *, name: str, email: str, password: str) -> User:
-    """Create a login identity. Does not commit or grant roles."""
+async def create_user(
+    db: AsyncSession, *, name: str, email: str, password: str | None, oauth: "OAuthLink | None" = None
+) -> User:
+    """Create a login identity. Does not commit or grant roles.
+
+    ``password`` None only with ``oauth``: an account created through Google
+    (D123) signs in with Google until its owner sets a password. The linked
+    identity is added in the same transaction."""
+    if password is None and oauth is None:
+        raise ValueError("An account needs a password or a linked sign-in provider")
     if await db.scalar(select(User.id).where(User.email == email)) is not None:
         raise ConflictError("Email already registered", code="EMAIL_TAKEN")
-    user = User(name=name, email=email, password_hash=hash_password(password))
+    user = User(name=name, email=email, password_hash=hash_password(password) if password is not None else None)
     db.add(user)
     await db.flush()
+    if oauth is not None:
+        from app.models.oauth import OAuthIdentity
+
+        db.add(OAuthIdentity(
+            user_id=user.id, provider=oauth.provider, subject=oauth.subject, email=oauth.email,
+            last_login_at=clock.utcnow(),
+        ))
+        await db.flush()
     return user
+
+
+@dataclass(frozen=True)
+class OAuthLink:
+    """A verified external identity to attach to a new account (D123)."""
+
+    provider: str
+    subject: str
+    email: str
+
+
+async def start_session(db: AsyncSession, user: User, client: ClientInfo, *, remember_me: bool) -> SessionTokens:
+    """A new session (refresh-token family + access token) for an authenticated
+    user. The one way every sign-in method ends, so they all share the same
+    session, rotation, cookie and status rules. Commits."""
+    if not user.is_active:
+        logger.info("login_rejected_inactive", extra={"user_id": str(user.id)})
+        raise PermissionDeniedError("Account is inactive", code="ACCOUNT_INACTIVE")
+    _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client, persistent=remember_me)
+    access = await _access_token_for(db, user)
+    await db.commit()
+    return SessionTokens(access_token=access, refresh_token=raw, persistent=remember_me)
 
 
 async def _issue_refresh_token(
@@ -96,15 +135,9 @@ async def login(
         logger.info("login_failed")
         raise AuthenticationError("Incorrect email or password", code="INVALID_CREDENTIALS")
 
-    if not user.is_active:
-        logger.info("login_rejected_inactive", extra={"user_id": str(user.id)})
-        raise PermissionDeniedError("Account is inactive", code="ACCOUNT_INACTIVE")
-
-    _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client, persistent=remember_me)
-    access = await _access_token_for(db, user)
-    await db.commit()
+    tokens = await start_session(db, user, client, remember_me=remember_me)
     logger.info("login_succeeded", extra={"user_id": str(user.id)})
-    return SessionTokens(access_token=access, refresh_token=raw, persistent=remember_me)
+    return tokens
 
 
 async def _revoke_family(db: AsyncSession, family_id: uuid.UUID) -> None:
@@ -219,6 +252,11 @@ async def change_password(
         if not verify_password(current_password, user.password_hash):
             raise BusinessRuleError("The current password is incorrect.", code="INCORRECT_PASSWORD")
     elif await password_change_needs_current(db, user_id, raw_token):
+        if user.password_hash is None:  # Google-only account (D123): prove it is you with Google again
+            raise PermissionDeniedError(
+                "Sign out, sign in with Google again, then set your password within a few minutes.",
+                code="REAUTHENTICATION_REQUIRED",
+            )
         raise PermissionDeniedError("Enter your current password to continue.", code="REAUTHENTICATION_REQUIRED")
     if verify_password(new_password, user.password_hash):
         raise BusinessRuleError("Choose a password different from your current one.", code="PASSWORD_UNCHANGED")
@@ -243,3 +281,5 @@ async def revoke_all_sessions(db: AsyncSession, user_id: uuid.UUID) -> None:
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=clock.utcnow())
     )
+    # Their live-update sockets close too once this commits (D122), not at the next 5-minute check.
+    capture.end_sessions(db, user_id)
