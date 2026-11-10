@@ -35,6 +35,12 @@ async def get_current_principal(
     # A deactivated account loses access immediately, not when its token expires.
     if principal is None or not principal.user.is_active:
         raise invalid
+    # So does a token issued before the password was last reset or changed (D126).
+    # `iat` has whole seconds, so compare in whole seconds: a token issued in the
+    # same second as the change (the changing browser's own new one) still works.
+    changed = principal.user.password_changed_at
+    if changed is not None and int(claims.get("iat", 0)) < int(changed.timestamp()):
+        raise invalid
     return principal
 
 

@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_principal
@@ -14,7 +14,18 @@ from app.core.storage import Storage, get_optional_storage
 from app.db.session import get_db
 from app.schemas.patient import PatientRegistration
 from app.schemas.registration import RegistrationRequest, VerificationCodeRequest
-from app.schemas.user import AccessTokenResponse, MeResponse, PasswordChange, PasswordChangeStatus, UserLogin, UserResponse
+from app.schemas.user import (
+    AccessTokenResponse,
+    MeResponse,
+    MessageResponse,
+    PasswordChange,
+    PasswordChangeStatus,
+    PasswordReset,
+    PasswordResetRequest,
+    PasswordResetToken,
+    UserLogin,
+    UserResponse,
+)
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.services import (
@@ -22,6 +33,7 @@ from app.services import (
     doctor_application_service,
     email_verification_service,
     file_service,
+    password_reset_service,
     patient_service,
     rbac_service,
 )
@@ -199,6 +211,43 @@ async def change_password(
     )
     _set_session_cookies(response, tokens.refresh_token, persistent=tokens.persistent)
     return _access_response(tokens.access_token)
+
+
+# Forgot password (D126). Public; no session, so no CSRF cookie to check.
+RESET_REQUESTED = "If an account exists for this email, you'll receive a password reset link shortly."
+PASSWORD_RESET_DONE = "Your password has been reset. Sign in with your new password."
+_reset_requests = Depends(rate_limit("password_reset_request", lambda: settings.password_reset_requests_per_minute))
+_reset_attempts = Depends(rate_limit("password_reset", lambda: settings.password_reset_attempts_per_minute))
+
+
+@router.post("/forgot-password", response_model=MessageResponse, dependencies=[_reset_requests])
+async def forgot_password(
+    body: PasswordResetRequest, request: Request, background: BackgroundTasks, db: AsyncSession = Depends(get_db)
+):
+    """Email a one-time reset link (valid PASSWORD_RESET_TOKEN_MINUTES) to an active
+    account. The answer, and its timing, are the same whether or not the address
+    has an account: the email goes out after the response."""
+    pending = await password_reset_service.request_reset(db, body.email, ip_address=_client_info(request).ip_address)
+    if pending is not None:
+        background.add_task(password_reset_service.send, pending)
+    return MessageResponse(message=RESET_REQUESTED)
+
+
+@router.post("/reset-password/check", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_reset_attempts])
+async def check_reset_link(body: PasswordResetToken, db: AsyncSession = Depends(get_db)):
+    """204 if the link can still be used; otherwise 400 RESET_TOKEN_INVALID, _EXPIRED or _USED.
+    POST so the token never appears in a URL."""
+    await password_reset_service.check(db, body.token)
+
+
+@router.post("/reset-password", response_model=MessageResponse, dependencies=[_reset_attempts])
+async def reset_password(body: PasswordReset, request: Request, db: AsyncSession = Depends(get_db)):
+    """Set a new password with an emailed link. The link is used up; every session
+    of the account ends; nobody is signed in (the user signs in with the new password)."""
+    await password_reset_service.reset_password(
+        db, body.token, body.new_password, ip_address=_client_info(request).ip_address
+    )
+    return MessageResponse(message=PASSWORD_RESET_DONE)
 
 
 @router.get("/me", response_model=MeResponse)

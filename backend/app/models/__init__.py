@@ -18,6 +18,7 @@ from app.models.health_record import PatientAllergy, PatientDiagnosis, PatientMe
 from app.models.doctor_application import DoctorApplication, DoctorApplicationDocument
 from app.models.notification import ClinicSettings, FollowUp, Notification, NotificationPreference
 from app.models.oauth import OAuthFlow, OAuthIdentity
+from app.models.password_reset import PasswordResetToken
 from app.models.patient import Patient
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.refresh_token import RefreshToken
@@ -58,6 +59,7 @@ __all__ = [
     "RefreshToken",
     "OAuthFlow",
     "OAuthIdentity",
+    "PasswordResetToken",
     "Role",
     "RolePermission",
     "ScheduleException",

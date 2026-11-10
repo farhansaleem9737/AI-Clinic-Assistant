@@ -262,6 +262,7 @@ async def change_password(
         raise BusinessRuleError("Choose a password different from your current one.", code="PASSWORD_UNCHANGED")
 
     user.password_hash = hash_password(new_password)
+    user.password_changed_at = clock.utcnow()  # other browsers' access tokens stop working too (D126)
     await revoke_all_sessions(db, user.id)
     _, raw = await _issue_refresh_token(db, user.id, uuid.uuid7(), client, persistent=session.persistent)
     audit_service.record(

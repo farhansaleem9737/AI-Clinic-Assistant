@@ -126,14 +126,19 @@ async def register(db: AsyncSession, data: DoctorRegistration, *, oauth=None) ->
         )
     )
     # Reviewers learn about it; nothing about the applicant beyond the name.
+    reviewers = await notification_service.holders_of(db, Perm.doctor_application_review)
     notification_service.notify(
         db,
-        await notification_service.holders_of(db, Perm.doctor_application_review),
+        reviewers,
         type="doctor_application",
         title="New doctor application",
         message=f"{data.name} registered as a doctor and is waiting for credential review.",
         link="/admin/doctors",
     )
+    for reviewer in reviewers:  # and by email (D124): no applicant details in it
+        await email_outbox_service.enqueue(
+            db, reviewer, "doctor_application_submitted", {}, dedupe_key=f"doctor_application_submitted:{user.id}"
+        )
     await db.commit()
     logger.info("doctor_applicant_registered", extra={"user_id": str(user.id)})
     return user

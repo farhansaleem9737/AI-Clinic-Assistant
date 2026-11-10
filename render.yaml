@@ -67,6 +67,16 @@ services:
         value: "false"
       - key: AI_ENABLE_MEDICAL_DOCUMENT_UPLOAD
         value: "false"
+      # Email (D125, docs/EMAIL.md). Render's free plan blocks outbound SMTP
+      # (ports 25, 465, 587), so email goes over HTTPS through Brevo's API.
+      # BREVO_API_KEY: Brevo → SMTP & API → API keys. EMAIL_FROM: a sender
+      # verified in Brevo, e.g. Clinic AI Assistant <you@gmail.com>.
+      - key: EMAIL_BACKEND
+        value: brevo
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
       # General
       - key: CLINIC_TIMEZONE
         value: Asia/Karachi

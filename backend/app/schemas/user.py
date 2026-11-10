@@ -68,6 +68,30 @@ class PasswordChange(BaseModel):
     current_password: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class PasswordResetRequest(BaseModel):
+    """Forgot password (D126): the account's email address."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: LoginEmail
+
+
+class PasswordResetToken(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # secrets.token_urlsafe(32) is 43 characters; anything else cannot be a link we sent.
+    token: str = Field(min_length=20, max_length=128)
+
+
+class PasswordReset(PasswordResetToken):
+    # The same rule as everywhere else a password is set (registration, change).
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class PasswordChangeStatus(BaseModel):
     current_password_required: bool
     min_length: int = 8

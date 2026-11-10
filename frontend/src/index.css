@@ -849,6 +849,15 @@ button.large { min-height: 52px; font-size: 1.05rem; font-weight: 600; border-ra
 .auth-note { text-align: center; margin: 0.6rem 0 0; }
 .auth-footer { text-align: center; margin: 1.5rem 0 0; color: var(--muted); }
 .auth-footer a { font-weight: 600; }
+/* Forgot / reset password (D126): the icon above a result's heading, and the reset form's centred notes. */
+.auth-state-icon {
+  display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 1rem;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+}
+.auth-state-icon.warning { background: var(--danger-bg); color: var(--danger); }
+.auth-state { text-align: center; }
+.auth-state .muted { margin: 0 0 1rem; }
+.auth-state a.button { display: flex; justify-content: center; min-height: 52px; font-weight: 600; border-radius: 10px; }
 
 /* The create-account card has more fields: slightly tighter so it fits a
    desktop screen without scrolling. Same components, same look. */

@@ -75,9 +75,12 @@ Vite proxy in development. No auth code changes and no CORS preflights.
    ```
    Logs: Render dashboard → clinic-api → Logs (JSON lines with `request_id`).
 
-Optional variables (add in Render → Environment): `EMAIL_BACKEND=smtp`, `EMAIL_FROM`,
-`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`. Without SMTP, production sends
-**no email** (admin invitations must be handed over another way). Do **not** set `PORT`,
+**Email (D125).** Render's free plan blocks outbound SMTP (ports 25, 465 and 587), so
+Gmail SMTP cannot work there: every send fails with `OSError`. The blueprint sets
+`EMAIL_BACKEND=brevo`, which sends over HTTPS. Set `BREVO_API_KEY` and `EMAIL_FROM` (a sender
+verified in Brevo) in Render → Environment; see docs/EMAIL.md. Without them production sends
+**no email**: no registration codes, no appointment emails. On a paid instance, SMTP
+(`EMAIL_BACKEND=smtp`, `SMTP_*`) works too. Do **not** set `PORT`,
 `COOKIE_SECURE`, `TEST_DATABASE_URL`, `CF_API_TOKEN` or `REMINDERS_OIDC_*` (Google-only).
 
 **Plan.** `plan: free` in `render.yaml` is fine for a demo: 512 MB RAM, and the service

@@ -23,6 +23,9 @@ _R2_FIELDS=("r2_account_id","r2_endpoint_url","r2_access_key_id","r2_secret_acce
 class EmailBackend(StrEnum):
     # Hand the message to an SMTP server; "sent" only once the server accepts it.
     smtp = "smtp"
+    # Brevo's HTTPS email API (D125): for hosts that block outbound SMTP ports,
+    # such as Render's free plan. "sent" once Brevo accepts it.
+    brevo = "brevo"
     # Development only: write the message to a file under EMAIL_OUTBOX_DIR,
     # never to the log or an API response.
     outbox = "outbox"
@@ -205,6 +208,14 @@ class Settings(BaseSettings):
     google_oauth_flow_minutes: int = 10  # Google sign-in must finish within this
     google_oauth_signup_minutes: int = 30  # a new user's time to complete the registration form
     google_oauth_attempts_per_minute: int = 20  # per client IP, at the start endpoints
+    # Forgot password (D126): an emailed one-time link. Per client IP per minute at
+    # both public endpoints; per account at most PER_HOUR links, at least
+    # RESEND_SECONDS apart (counted in the database, so every API process agrees).
+    password_reset_token_minutes: int = 15
+    password_reset_requests_per_minute: int = 5
+    password_reset_attempts_per_minute: int = 10
+    password_reset_resend_seconds: int = 60
+    password_reset_max_per_hour: int = 5
     admin_invite_expire_hours: int = 24
     # Attempts per client IP per minute at the public invitation endpoints.
     invite_attempts_per_minute: int = 10
@@ -214,6 +225,9 @@ class Settings(BaseSettings):
     email_backend: EmailBackend | None = None
     email_from: str = "Clinic AI Assistant <no-reply@localhost>"
     email_outbox_dir: Path = Path(__file__).resolve().parents[2] / "var" / "outbox"
+    # EMAIL_BACKEND=brevo (D125): a Brevo API key (SMTP & API → API keys), sent over
+    # HTTPS port 443. EMAIL_FROM must be a sender verified in Brevo.
+    brevo_api_key: SecretStr | None = None
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
@@ -411,6 +425,11 @@ class Settings(BaseSettings):
             raise ValueError("Reminder offsets must be positive minutes")
         return sorted(set(value), reverse=True)
 
+    @field_validator("brevo_api_key", mode="before")
+    @classmethod
+    def blank_brevo_key(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("reminders_oidc_audience", "reminders_invoker_email", "reminders_cron_secret", mode="before")
     @classmethod
     def blank_reminder_setting_is_unset(cls, value: object) -> object:
@@ -452,12 +471,19 @@ class Settings(BaseSettings):
             account=R2_ENDPOINT_PATTERN.fullmatch(self.r2_endpoint_url)["account"]
             if account!=self.r2_account_id.strip().lower():
                 raise ValueError("R2_ENDPOINT_URL does not belong to R2_ACCOUNT_ID")
+        if self.environment is Environment.production and (
+            not self.frontend_base_url.startswith("https://") or re.search(r"//(localhost|127\.0\.0\.1)\b", self.frontend_base_url)
+        ):
+            # Every email link starts here (D124): never http or localhost in production.
+            raise ValueError("FRONTEND_BASE_URL must be the public https address of the app in production")
         if self.environment is  Environment.production and not self.storage_configured:
             raise ValueError("R2 storage settings are required in production")
         if self.environment is not Environment.development and self.email_backend is EmailBackend.outbox:
             raise ValueError("EMAIL_BACKEND=outbox is for development only")
         if self.email_backend is EmailBackend.smtp and not self.smtp_host:
             raise ValueError("EMAIL_BACKEND=smtp needs SMTP_HOST")
+        if self.email_backend is EmailBackend.brevo and not self.brevo_api_key:
+            raise ValueError("EMAIL_BACKEND=brevo needs BREVO_API_KEY")
         if self.smtp_host:
             self._check_smtp_security()
         if self.google_oauth_enabled and not (self.google_oauth_client_id and self.google_oauth_client_secret):
@@ -488,6 +514,8 @@ class Settings(BaseSettings):
             return self.email_backend
         if self.environment is Environment.development:
             return EmailBackend.outbox
+        if self.brevo_api_key:
+            return EmailBackend.brevo
         return EmailBackend.smtp if self.smtp_host else EmailBackend.none
 
     @property

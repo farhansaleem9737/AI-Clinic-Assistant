@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, String
+from sqlalchemy import Boolean, Date, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -18,6 +18,9 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # None: the account signs in only with a linked provider (Google, D123) until
     # its owner sets a password. Never a placeholder value.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    # When the password was last set by a reset or a change (D126). Access tokens
+    # issued before it are refused, so a stolen session ends at once, not at expiry.
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Users are never deleted (audit and clinical records reference them).
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Personal details of doctors and staff, given at sign-up or by the admin

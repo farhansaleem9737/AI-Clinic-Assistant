@@ -82,11 +82,12 @@ describe("rendering", () => {
     expect(screen.getByText(/not available yet/)).toBeInTheDocument();
   });
 
-  it("the forgot-password page is honest that reset is not available", async () => {
+  it("Forgot password? opens the reset request form (D126)", async () => {
     renderLogin();
     await userEvent.click(screen.getByRole("link", { name: "Forgot password?" }));
-    expect(screen.getByText("Online password reset is not available yet.")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Forgot your password?" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Email address")).toHaveAttribute("type", "email");
+    expect(screen.queryByText(/Online password reset is not available/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Back to sign in/ })).toHaveAttribute("href", "/login");
   });
 });

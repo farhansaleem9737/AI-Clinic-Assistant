@@ -29,6 +29,7 @@ class AuditAction(StrEnum):
     user_deactivated = "user.deactivated"
     user_activated = "user.activated"
     user_password_changed = "user.password_changed"
+    user_password_reset = "user.password_reset"
     # Google sign-in (D123): linking and unlinking, and accounts created through it.
     user_google_linked = "user.google_linked"
     user_google_unlinked = "user.google_unlinked"

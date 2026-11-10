@@ -883,8 +883,8 @@ async def book(
         )
     await _notify_doctor_of_booking(db, appt, principal)
     await _notify_patient_of_booking(db, appt, principal)
-    # The patient's receipt by email, however it was booked (D109).
-    await email_outbox_service.appointment_email(db, appt, "appointment_booked")
+    # The patient's receipt by email, however it was booked (D109); the doctor's unless they booked it (D124).
+    await email_outbox_service.appointment_email(db, appt, "appointment_booked", actor=principal.user_id)
     await db.commit()
     logger.info(
         "appointment_booked",
@@ -1047,7 +1047,7 @@ async def change_status(
     if change.status is S.cancelled:
         _cancel(ctx, change.cancellation_reason, change.note)
         await _notify_cancellation(db, ctx)
-        await email_outbox_service.appointment_email(db, appt, "appointment_cancelled")
+        await email_outbox_service.appointment_email(db, appt, "appointment_cancelled", actor=principal.user_id)
     else:
         appt.status = change.status
         await _notify_status(db, ctx, change.status)
@@ -1107,7 +1107,7 @@ async def reschedule(
     await _flush_or_conflict(db)
     _record_booking(db, new, principal)
     await _notify_reschedule(db, principal, old, new)
-    await email_outbox_service.appointment_email(db, new, "appointment_rescheduled", old=old)
+    await email_outbox_service.appointment_email(db, new, "appointment_rescheduled", old=old, actor=principal.user_id)
     await db.commit()
     logger.info(
         "appointment_rescheduled",

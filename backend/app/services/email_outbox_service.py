@@ -6,12 +6,15 @@
 
 - **Queued with the event**, so it exists exactly when the event does, and a
   slow or failing SMTP server can never delay or undo a booking.
-- **Who:** the recipient is always the account the event is about (the
-  patient's or applicant's own login and address), active, and wanting it:
-  the notification category is on and so is email.
+- **Who:** the recipient is always an account the event is about (the
+  patient's, the doctor's (D124) or the applicant's own login and address, or
+  the reviewers for a new application), active, and wanting it: the
+  notification category is on and so is email.
 - **When:** after a commit that queued email, this process starts a run at
   once (best effort); the scheduled reminder run (Cloud Scheduler) also runs
   the outbox, so nothing waits longer than its interval if that was cut short.
+  A temporary failure also sets a wake-up in this process for its retry (D124),
+  so a short outage heals without a scheduler.
 - **Safety:** a claim is a lease (status "sending" until a deadline), so
   concurrent runs on several Cloud Run instances never take the same row,
   and an instance that died mid-send gives its rows back after the deadline.
@@ -28,7 +31,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import event, select, update
+from sqlalchemy import event, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -46,16 +49,20 @@ from app.services import email_service, email_templates, notification_service
 
 logger = logging.getLogger(__name__)
 
-# Which preference category an email belongs to; None = always (an answer to the user's own application).
+# Which preference category an email belongs to; None = always (given the 'emails' switch).
 CATEGORY = {
     "appointment_booked": "appointment_updates",
     "appointment_confirmed": "appointment_updates",
     "appointment_rescheduled": "appointment_updates",
     "appointment_cancelled": "appointment_updates",
+    "doctor_appointment_booked": "appointment_updates",
+    "doctor_appointment_cancelled": "appointment_updates",
+    "doctor_appointment_rescheduled": "appointment_updates",
     "appointment_reminder": "reminders",
     "follow_up_due": "follow_ups",
     "doctor_application_approved": None,
     "doctor_application_rejected": None,
+    "doctor_application_submitted": None,  # reviewers: work waiting for them
 }
 BATCH = 25
 LEASE = timedelta(minutes=10)  # how long a claimed row is reserved for the run that claimed it
@@ -108,13 +115,21 @@ async def enqueue(
     return queued is not None
 
 
-# ---- appointment emails: always to the patient's own login --------------------------------
+# ---- appointment emails: to the patient's and the doctor's own logins ---------------------
+
+# Doctors (D124) hear about bookings, cancellations and moves made by someone
+# else, as in the app; never the patient's name or the reason for the visit.
+DOCTOR_KIND = {
+    "appointment_booked": "doctor_appointment_booked",
+    "appointment_cancelled": "doctor_appointment_cancelled",
+    "appointment_rescheduled": "doctor_appointment_rescheduled",
+}
 
 
-async def _appointment_facts(db: AsyncSession, appt: Appointment) -> tuple[uuid.UUID | None, dict, ZoneInfo]:
-    patient_user, title, doctor_name, department, tz = (
+async def _appointment_facts(db: AsyncSession, appt: Appointment) -> tuple[uuid.UUID | None, uuid.UUID, dict, ZoneInfo]:
+    patient_user, doctor_user, title, doctor_name, department, tz = (
         await db.execute(
-            select(Patient.user_id, Doctor.title, User.name, Department.name, Department.timezone)
+            select(Patient.user_id, Doctor.user_id, Doctor.title, User.name, Department.name, Department.timezone)
             .select_from(Appointment)
             .join(Patient, Patient.id == Appointment.patient_id)
             .join(Doctor, Doctor.id == Appointment.doctor_id)
@@ -124,28 +139,75 @@ async def _appointment_facts(db: AsyncSession, appt: Appointment) -> tuple[uuid.
         )
     ).one()
     zone = ZoneInfo(tz)
+    local = appt.starts_at.astimezone(zone)
     ctx = {
         "when": notification_service.when(appt.starts_at, zone),
+        "date": local.strftime("%A %d %B %Y"),
+        "time": f"{local:%H:%M} ({tz})",
         "doctor": f"{title or 'Dr.'} {doctor_name}",
         "department": department,
+        "status": str(appt.status),  # as stored, never assumed
         "link": f"/appointments/{appt.id}",
     }
-    return patient_user, ctx, zone
+    return patient_user, doctor_user, ctx, zone
 
 
-async def appointment_email(db: AsyncSession, appt: Appointment, kind: str, *, old: Appointment | None = None) -> None:
-    patient_user, ctx, zone = await _appointment_facts(db, appt)
+# Emails about an appointment that make no sense once it is cancelled or moved.
+_STALE_KINDS = ("appointment_booked", "appointment_confirmed", "appointment_rescheduled",
+                "doctor_appointment_booked", "doctor_appointment_rescheduled")
+
+
+async def withdraw(db: AsyncSession, appointment_id: uuid.UUID) -> None:
+    """Drop this appointment's unsent confirmations and reminders (D124). Rows already
+    claimed by a run ("sending") may still go out: delivery is at least once."""
+    await db.execute(
+        update(EmailOutbox)
+        .where(
+            EmailOutbox.status == "pending",
+            or_(
+                EmailOutbox.dedupe_key.in_([f"{k}:{appointment_id}" for k in _STALE_KINDS]),
+                EmailOutbox.dedupe_key.startswith(f"reminder:{appointment_id}:", autoescape=True),
+            ),
+        )
+        .values(status="expired", text_body="", html_body="")
+    )
+
+
+async def appointment_email(
+    db: AsyncSession, appt: Appointment, kind: str, *, old: Appointment | None = None, actor: uuid.UUID | None = None
+) -> None:
+    """The patient's email, and (for bookings, cancellations and moves) the doctor's unless they did it."""
+    if kind == "appointment_cancelled":
+        await withdraw(db, appt.id)
+    if old is not None:
+        await withdraw(db, old.id)
+    patient_user, doctor_user, ctx, zone = await _appointment_facts(db, appt)
     if old is not None:
         ctx["old_when"] = notification_service.when(old.starts_at, zone)
     # Not worth sending once the appointment has started (a cancellation is still news).
     expires = None if kind == "appointment_cancelled" else appt.starts_at
     await enqueue(db, patient_user, kind, ctx, dedupe_key=f"{kind}:{appt.id}", expires_at=expires)
+    doctor_kind = DOCTOR_KIND.get(kind)
+    if doctor_kind and doctor_user != actor:
+        await enqueue(db, doctor_user, doctor_kind, ctx, dedupe_key=f"{doctor_kind}:{appt.id}", expires_at=expires)
+    if kind == "appointment_rescheduled" and old is not None and old.doctor_id != appt.doctor_id:
+        # Moved to another doctor: for the previous one it is a cancellation.
+        _, old_doctor, old_ctx, _ = await _appointment_facts(db, old)
+        if old_doctor != actor:
+            cancelled = DOCTOR_KIND["appointment_cancelled"]
+            await enqueue(db, old_doctor, cancelled, old_ctx, dedupe_key=f"{cancelled}:{old.id}")
 
 
 async def reminder_email(db: AsyncSession, appointment_id: uuid.UUID, patient_user: uuid.UUID, dedupe_key: str) -> None:
     appt = await db.get(Appointment, appointment_id)
-    _, ctx, _ = await _appointment_facts(db, appt)
+    _, _, ctx, _ = await _appointment_facts(db, appt)
     await enqueue(db, patient_user, "appointment_reminder", ctx, dedupe_key=dedupe_key, expires_at=appt.starts_at)
+
+
+async def status_counts(db: AsyncSession) -> dict[str, int]:
+    """Emails per status, for monitoring (e.g. failed > 0 needs a look)."""
+    rows = await db.execute(select(EmailOutbox.status, func.count()).group_by(EmailOutbox.status))
+    return {status: count for status, count in rows.all()}
 
 
 # ---- the outbox run ---------------------------------------------------------------------
@@ -233,6 +295,36 @@ async def run(db: AsyncSession, now: datetime | None = None) -> OutboxResult:
 
 _kick_task: asyncio.Task | None = None
 _kick_again = False
+_retry_timer: asyncio.TimerHandle | None = None
+RETRY_HORIZON = timedelta(hours=6)  # beyond that, the scheduled run takes over
+
+
+async def _next_due(db: AsyncSession) -> datetime | None:
+    return await db.scalar(select(func.min(EmailOutbox.next_attempt_at)).where(EmailOutbox.status == "pending"))
+
+
+def _retry_at(due: datetime) -> None:
+    """Wake this process when the next retry is due, so a short SMTP outage heals by itself
+    even without a scheduler (D124). Best effort: lost on restart, which the scheduled run covers."""
+    global _retry_timer
+    delay = max((due - clock.utcnow()).total_seconds(), 1)
+    if delay > RETRY_HORIZON.total_seconds():
+        return
+    loop = asyncio.get_running_loop()
+    if _retry_timer is not None:
+        if _retry_timer.when() <= loop.time() + delay:
+            return  # an earlier wake-up is already set
+        _retry_timer.cancel()
+    _retry_timer = loop.call_later(delay, _start_kick)
+
+
+def _start_kick() -> None:
+    global _kick_task, _kick_again, _retry_timer
+    _retry_timer = None
+    if _kick_task is not None:
+        _kick_again = True
+        return
+    _kick_task = asyncio.get_running_loop().create_task(_kick())
 
 
 async def _kick() -> None:
@@ -240,12 +332,16 @@ async def _kick() -> None:
     from app.db.database import AsyncSessionLocal
 
     try:
+        due = None
         while True:
             _kick_again = False
             async with AsyncSessionLocal() as db:
                 await run(db)
+                due = await _next_due(db)
             if not _kick_again:
                 break
+        if due is not None:
+            _retry_at(due)
     except Exception:  # the scheduled run will pick it up
         logger.exception("email_outbox_kick_failed")
     finally:
@@ -254,14 +350,10 @@ async def _kick() -> None:
 
 @event.listens_for(Session, "after_commit")
 def _after_commit(session: Session) -> None:
-    global _kick_task, _kick_again
     if not session.info.pop("email_queued", False) or not settings.email_send_after_commit:
         return
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return  # no event loop (a script): the scheduled run sends it
-    if _kick_task is not None:
-        _kick_again = True
-        return
-    _kick_task = loop.create_task(_kick())
+    _start_kick()

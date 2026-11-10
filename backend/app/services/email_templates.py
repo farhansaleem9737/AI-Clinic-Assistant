@@ -1,11 +1,13 @@
-"""Notification email templates (D109).
+"""Notification email templates (D109, D124).
 
-One shared layout: white, navy (#102A56) and blue (#1677FF), table-based with
-inline styles so mail clients render it, readable on phones, with a plain-text
-version of everything. Only what the recipient needs: when, with whom, where
-to look. Never a reason for the visit, notes, diagnoses, documents or links to
-them. Every value is HTML-escaped; links are built from FRONTEND_BASE_URL and
-a known app path only.
+One shared layout: a white card on a light background with the app's navy
+(#102A56) and blue (#1677FF), table-based with inline styles and bgcolor
+attributes so Gmail and Outlook render it, readable on phones, no scripts,
+web fonts or images, and a plain-text version of everything. Only what the
+recipient needs: when, with whom, the appointment's status as stored, where
+to look. Never a reason for the visit, notes, diagnoses, documents, AI output
+or links to them. Every value is HTML-escaped; links are built from
+FRONTEND_BASE_URL and a known app path only, and carry no tokens.
 """
 
 from dataclasses import dataclass
@@ -17,8 +19,21 @@ from app.services.notification_service import safe_link
 BRAND = "Clinic AI Assistant"
 NAVY = "#102A56"
 BLUE = "#1677FF"
+BACKGROUND = "#F7F9FC"
+TEXT = "#172B4D"
 MUTED = "#667085"
 BORDER = "#E4EAF2"
+
+# Appointment status as stored → (label, text colour, badge background).
+STATUS = {
+    "requested": ("Requested, awaiting confirmation", "#B54708", "#FFFAEB"),
+    "scheduled": ("Scheduled", BLUE, "#EAF2FF"),
+    "confirmed": ("Confirmed", "#067647", "#ECFDF3"),
+    "checked_in": ("Checked in", BLUE, "#EAF2FF"),
+    "in_progress": ("In progress", BLUE, "#EAF2FF"),
+    "completed": ("Completed", MUTED, "#F2F4F7"),
+    "cancelled": ("Cancelled", "#B42318", "#FEF3F2"),
+}
 
 
 @dataclass(frozen=True)
@@ -33,64 +48,106 @@ def app_url(path: str | None) -> str | None:
     return f"{settings.frontend_base_url}{path}" if path else None
 
 
-def _layout(*, greeting: str, lines: list[str], facts: list[tuple[str, str]], action: tuple[str, str] | None) -> str:
+def status_label(status: str | None) -> str | None:
+    return STATUS[status][0] if status in STATUS else None
+
+
+def _badge(status: str) -> str:
+    label, colour, background = STATUS[status]
+    return (
+        f'<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:{background};'
+        f'color:{colour};font-size:13px;font-weight:600">{escape(label)}</span>'
+    )
+
+
+_SIGN_IN_NOTE = "You will be asked to sign in first."
+
+
+def _default_footer() -> tuple[str, str]:
+    """(HTML, text): why the email came and where to change which ones come."""
+    url = f"{settings.frontend_base_url}/dashboard"
+    html = (
+        f"You receive this because you have an account at {BRAND}. "
+        f'Choose which emails you get under Notifications › Settings in the <a href="{escape(url, quote=True)}" style="color:{BLUE}">app</a>. '
+        "Please do not reply to this email."
+    )
+    text = (
+        f"You receive this because you have an account at {BRAND}.\n"
+        f"Choose which emails you get under Notifications > Settings in the app: {url}"
+    )
+    return html, text
+
+
+def _layout(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[str, str]], status: str | None,
+            action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None) -> str:
+    cell = f'padding:8px 0;font-size:14px;vertical-align:top;border-bottom:1px solid {BORDER}'
     rows = "".join(
-        f'<tr><td style="padding:6px 0;color:{MUTED};font-size:14px;width:120px;vertical-align:top">{escape(k)}</td>'
-        f'<td style="padding:6px 0;color:{NAVY};font-size:15px;font-weight:600">{escape(v)}</td></tr>'
+        f'<tr><td style="{cell};color:{MUTED};width:110px">{escape(k)}</td>'
+        f'<td style="{cell};color:{TEXT};font-weight:600">{escape(v)}</td></tr>'
         for k, v in facts
     )
+    if status in STATUS:
+        rows += f'<tr><td style="{cell};color:{MUTED};width:110px">Status</td><td style="{cell}">{_badge(status)}</td></tr>'
     facts_html = (
-        f'<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin:16px 0;'
-        f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER}">{rows}</table>'
-        if facts
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{BACKGROUND}" '
+        f'style="width:100%;margin:16px 0;background:{BACKGROUND};border-radius:8px">'
+        f'<tr><td style="padding:8px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table></td></tr></table>'
+        if rows
         else ""
     )
-    paragraphs = "".join(f'<p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:{NAVY}">{escape(l)}</p>' for l in lines)
+    paragraphs = "".join(f'<p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:{TEXT}">{escape(l)}</p>' for l in lines)
     button = ""
     if action:
         label, url = action
+        # A table cell carries the colour: Outlook ignores padding and radius on links.
         button = (
-            f'<p style="margin:20px 0 8px"><a href="{escape(url, quote=True)}" '
-            f'style="display:inline-block;background:{BLUE};color:#ffffff;text-decoration:none;font-weight:600;'
-            f'font-size:15px;padding:12px 22px;border-radius:8px">{escape(label)}</a></p>'
+            '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 4px"><tr>'
+            f'<td bgcolor="{BLUE}" style="background:{BLUE};border-radius:8px">'
+            f'<a href="{escape(url, quote=True)}" target="_blank" '
+            f'style="display:inline-block;padding:12px 24px;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px">'
+            f"{escape(label)}</a></td></tr></table>"
+            f'<p style="margin:8px 0 0;font-size:12px;line-height:1.5;color:{MUTED}">'
+            f'Or open this address: <a href="{escape(url, quote=True)}" style="color:{BLUE};word-break:break-all">{escape(url)}</a>'
+            f"{'<br>' + escape(note) if note else ''}</p>"
         )
-    settings_url = escape(f"{settings.frontend_base_url}/dashboard", quote=True)
+    footer_html = escape(footer) if footer else _default_footer()[0]
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"></head>'
-        '<body style="margin:0;padding:0;background:#ffffff;font-family:Segoe UI,Helvetica,Arial,sans-serif">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">'
+        f"<title>{escape(heading)}</title></head>"
+        f'<body style="margin:0;padding:0;background:{BACKGROUND};font-family:Segoe UI,Helvetica,Arial,sans-serif">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{BACKGROUND}" style="background:{BACKGROUND}">'
+        '<tr><td align="center" style="padding:24px 12px">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">'
-        f'<tr><td style="padding-bottom:16px;border-bottom:3px solid {BLUE};font-size:18px;font-weight:700;color:{NAVY}">{BRAND}</td></tr>'
-        f'<tr><td style="padding-top:20px"><p style="margin:0 0 12px;font-size:15px;color:{NAVY}">{escape(greeting)}</p>'
+        f'<tr><td style="padding:0 4px 12px;font-size:17px;font-weight:700;color:{NAVY}">{BRAND}</td></tr>'
+        f'<tr><td bgcolor="#ffffff" style="background:#ffffff;border:1px solid {BORDER};border-top:4px solid {BLUE};'
+        'border-radius:10px;padding:24px 24px 28px">'
+        f'<h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:{NAVY}">{escape(heading)}</h1>'
+        f'<p style="margin:0 0 12px;font-size:15px;color:{TEXT}">{escape(greeting)}</p>'
         f"{paragraphs}{facts_html}{button}</td></tr>"
-        f'<tr><td style="padding-top:24px;font-size:12px;line-height:1.5;color:{MUTED}">'
-        f"You receive this because you have an account at {BRAND}. "
-        f'Choose which emails you get under Notifications › Settings in the <a href="{settings_url}" style="color:{BLUE}">app</a>. '
-        "Please do not reply to this email.</td></tr>"
+        f'<tr><td style="padding:16px 4px 0;font-size:12px;line-height:1.5;color:{MUTED}">{footer_html}</td></tr>'
         "</table></td></tr></table></body></html>"
     )
 
 
-def _text(*, greeting: str, lines: list[str], facts: list[tuple[str, str]], action: tuple[str, str] | None) -> str:
-    parts = [greeting, "", *lines]
+def _text(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[str, str]], status: str | None,
+          action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None) -> str:
+    parts = [heading, "", greeting, "", *lines]
+    facts = [*facts, *([("Status", STATUS[status][0])] if status in STATUS else [])]
     if facts:
         parts += ["", *(f"{k}: {v}" for k, v in facts)]
     if action:
-        parts += ["", f"{action[0]}: {action[1]}"]
-    parts += [
-        "",
-        "--",
-        f"You receive this because you have an account at {BRAND}.",
-        f"Choose which emails you get under Notifications > Settings in the app: {settings.frontend_base_url}/dashboard",
-    ]
+        parts += ["", f"{action[0]}{' (sign-in required)' if note == _SIGN_IN_NOTE else ''}: {action[1]}"]
+    parts += ["", f"Thank you,\n{BRAND}", "", "--", footer or _default_footer()[1]]
     return "\n".join(parts) + "\n"
 
 
-def _render(subject: str, *, name: str | None, lines: list[str], facts: list[tuple[str, str]], action: tuple[str, str] | None) -> Rendered:
+def _render(subject: str, *, name: str | None, lines: list[str], facts: list[tuple[str, str]],
+            action: tuple[str, str] | None, status: str | None = None, heading: str | None = None) -> Rendered:
     greeting = f"Hello {name}," if name else "Hello,"
-    parts = dict(greeting=greeting, lines=lines, facts=facts, action=action)
-    return Rendered(subject=subject, text=_text(**parts), html=_layout(**parts))
+    parts = dict(heading=heading or subject, greeting=greeting, lines=lines, facts=facts, status=status, action=action)
+    return Rendered(subject=f"{subject} — {BRAND}", text=_text(**parts), html=_layout(**parts))
 
 
 def _view(link: str | None, label: str = "View appointment") -> tuple[str, str] | None:
@@ -98,30 +155,62 @@ def _view(link: str | None, label: str = "View appointment") -> tuple[str, str] 
     return (label, url) if url else None
 
 
+def _booked(ctx: dict, name: str | None, facts: list[tuple[str, str]]) -> Rendered:
+    status = ctx.get("status")
+    if status == "confirmed":
+        subject, line = "Your appointment is confirmed", "Your appointment has been booked and confirmed."
+    elif status == "requested":
+        subject, line = "Your appointment request was received", "Your appointment request was received. The clinic will confirm it."
+    else:
+        subject, line = "Your appointment is booked", "Your appointment has been successfully scheduled."
+    return _render(subject, name=name, lines=[line], facts=facts, status=status, action=_view(ctx.get("link")))
+
+
 def render(kind: str, ctx: dict) -> Rendered:
-    """`ctx`: name, when, doctor, department, link, and per kind old_when / due_date."""
+    """`ctx`: name, when, date, time, doctor, department, status, link, and per kind old_when / due_date."""
     name = ctx.get("name")
-    appointment = [("When", ctx.get("when", "")), ("Doctor", ctx.get("doctor", "")), ("Department", ctx.get("department", ""))]
-    appointment = [(k, v) for k, v in appointment if v]
+    status = ctx.get("status")
+    date_time = [("Date", ctx.get("date", "")), ("Time", ctx.get("time", ""))] if ctx.get("date") else [("When", ctx.get("when", ""))]
+    facts = [(k, v) for k, v in [("Doctor", ctx.get("doctor", "")), *date_time, ("Department", ctx.get("department", ""))] if v]
+    view = _view(ctx.get("link"))
     if kind == "appointment_booked":
-        return _render("Your appointment is booked", name=name, lines=["Your appointment is booked."], facts=appointment, action=_view(ctx.get("link")))
+        return _booked(ctx, name, facts)
     if kind == "appointment_confirmed":
-        return _render("Your appointment is confirmed", name=name, lines=["The clinic has confirmed your appointment."], facts=appointment, action=_view(ctx.get("link")))
+        return _render("Your appointment is confirmed", name=name, lines=["The clinic has confirmed your appointment."], facts=facts, status=status, action=view)
     if kind == "appointment_rescheduled":
         return _render(
             "Your appointment was rescheduled", name=name,
-            lines=[f"Your appointment on {ctx.get('old_when', '')} was moved to a new time."], facts=appointment, action=_view(ctx.get("link")),
+            lines=[f"Your appointment on {ctx.get('old_when', '')} was rescheduled. The new time is below."],
+            facts=facts, status=status, action=view,
         )
     if kind == "appointment_cancelled":
         return _render(
             "Your appointment was cancelled", name=name,
             lines=["This appointment was cancelled. If you still need a visit, you can book a new time."],
-            facts=appointment, action=_view("/appointments/book", "Book an appointment"),
+            facts=facts, status="cancelled", action=_view("/appointments/book", "Book an appointment"),
         )
     if kind == "appointment_reminder":
         return _render(
-            f"Reminder: your appointment on {ctx.get('when', '')}", name=name,
-            lines=["This is a reminder of your upcoming appointment."], facts=appointment, action=_view(ctx.get("link")),
+            f"Reminder: your appointment on {ctx.get('when', '')}", name=name, heading="Your upcoming appointment",
+            lines=["This is a reminder of your upcoming appointment."], facts=facts, status=status, action=view,
+        )
+    if kind == "doctor_appointment_booked":
+        return _render(
+            "New appointment booked with you", name=name,
+            lines=[f"A new appointment was booked with you for {ctx.get('when', '')}."],
+            facts=[f for f in facts if f[0] != "Doctor"], status=status, action=view,
+        )
+    if kind == "doctor_appointment_rescheduled":
+        return _render(
+            "An appointment with you was rescheduled", name=name,
+            lines=[f"The appointment on {ctx.get('old_when', '')} was moved. The new time is below."],
+            facts=[f for f in facts if f[0] != "Doctor"], status=status, action=view,
+        )
+    if kind == "doctor_appointment_cancelled":
+        return _render(
+            "An appointment with you was cancelled", name=name,
+            lines=[f"The appointment on {ctx.get('when', '')} was cancelled. The time is free again."],
+            facts=[f for f in facts if f[0] != "Doctor"], status="cancelled", action=view,
         )
     if kind == "follow_up_due":
         return _render(
@@ -131,6 +220,12 @@ def render(kind: str, ctx: dict) -> Rendered:
                 "It is not booked yet. You can review available appointment times.",
             ],
             facts=[], action=_view(ctx.get("link"), "See available times"),
+        )
+    if kind == "doctor_application_submitted":
+        return _render(
+            "A doctor application is waiting for review", name=name,
+            lines=["A new doctor registered and is waiting for credential review."],
+            facts=[], action=_view("/admin/doctors", "Review applications"),
         )
     if kind == "doctor_application_approved":
         return _render(
@@ -145,3 +240,46 @@ def render(kind: str, ctx: dict) -> Rendered:
             facts=[], action=_view("/doctor/application", "View your application"),
         )
     raise ValueError(f"Unknown email kind: {kind}")
+
+
+# ---- account security (D126) --------------------------------------------------------------
+# Sent whatever the notification preferences say: the owner asked for them.
+
+_SECURITY_FOOTER = (
+    f"You receive this because a password reset was requested for a {BRAND} account with this email address. "
+    "Please do not reply to this email."
+)
+
+
+def _security(subject: str, *, lines: list[str], action: tuple[str, str]) -> Rendered:
+    parts = dict(heading=subject, greeting="Hello,", lines=lines, facts=[], status=None, action=action,
+                 note=None, footer=_SECURITY_FOOTER)
+    return Rendered(subject=f"{subject} — {BRAND}", text=_text(**parts), html=_layout(**parts))
+
+
+def password_reset(link: str, minutes: int) -> Rendered:
+    """The reset link itself: a credential, so it is sent at once and never queued."""
+    return _security(
+        "Reset your password",
+        lines=[
+            f"We received a request to reset the password for your {BRAND} account.",
+            "Click the button below to create a new password.",
+            f"This link expires in {minutes} minutes and can be used once.",
+            "If you didn't request this change, you can safely ignore this email. Your password stays the same.",
+        ],
+        action=("Reset Password", link),
+    )
+
+
+def password_reset_google_only() -> Rendered:
+    """For an account without a password: it signs in with Google (D123)."""
+    return _security(
+        "Reset your password",
+        lines=[
+            f"We received a request to reset the password for your {BRAND} account.",
+            "Your account doesn't use a password: you sign in with Google. On the sign-in page, choose Continue with Google.",
+            "Once signed in, you can add a password under Change password in your account menu.",
+            "If you didn't request this, you can safely ignore this email.",
+        ],
+        action=("Go to sign in", f"{settings.frontend_base_url}/login"),
+    )
