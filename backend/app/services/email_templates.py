@@ -79,7 +79,8 @@ def _default_footer() -> tuple[str, str]:
 
 
 def _layout(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[str, str]], status: str | None,
-            action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None) -> str:
+            action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None,
+            code: str | None = None, after: list[str] | None = None) -> str:
     cell = f'padding:8px 0;font-size:14px;vertical-align:top;border-bottom:1px solid {BORDER}'
     rows = "".join(
         f'<tr><td style="{cell};color:{MUTED};width:110px">{escape(k)}</td>'
@@ -96,6 +97,17 @@ def _layout(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[
         else ""
     )
     paragraphs = "".join(f'<p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:{TEXT}">{escape(l)}</p>' for l in lines)
+    if code:
+        # A one-time code (D127): large, spaced and selectable; nothing else in the box.
+        paragraphs += (
+            f'<table role="presentation" cellpadding="0" cellspacing="0" bgcolor="{BACKGROUND}" '
+            f'style="margin:8px 0 16px;background:{BACKGROUND};border:1px solid {BORDER};border-radius:8px"><tr>'
+            f'<td style="padding:14px 24px;font-family:Consolas,Menlo,monospace;font-size:30px;font-weight:700;'
+            f'letter-spacing:8px;color:{NAVY}">{escape(code)}</td></tr></table>'
+        )
+    paragraphs += "".join(
+        f'<p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:{TEXT}">{escape(l)}</p>' for l in after or []
+    )
     button = ""
     if action:
         label, url = action
@@ -132,8 +144,12 @@ def _layout(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[
 
 
 def _text(*, heading: str, greeting: str, lines: list[str], facts: list[tuple[str, str]], status: str | None,
-          action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None) -> str:
+          action: tuple[str, str] | None, note: str | None = _SIGN_IN_NOTE, footer: str | None = None,
+          code: str | None = None, after: list[str] | None = None) -> str:
     parts = [heading, "", greeting, "", *lines]
+    if code:
+        parts += ["", f"    {code}", ""]
+    parts += after or []
     facts = [*facts, *([("Status", STATUS[status][0])] if status in STATUS else [])]
     if facts:
         parts += ["", *(f"{k}: {v}" for k, v in facts)]
@@ -251,23 +267,23 @@ _SECURITY_FOOTER = (
 )
 
 
-def _security(subject: str, *, lines: list[str], action: tuple[str, str]) -> Rendered:
+def _security(subject: str, *, lines: list[str], action: tuple[str, str] | None = None,
+              code: str | None = None, after: list[str] | None = None, footer: str = _SECURITY_FOOTER) -> Rendered:
     parts = dict(heading=subject, greeting="Hello,", lines=lines, facts=[], status=None, action=action,
-                 note=None, footer=_SECURITY_FOOTER)
+                 note=None, footer=footer, code=code, after=after)
     return Rendered(subject=f"{subject} — {BRAND}", text=_text(**parts), html=_layout(**parts))
 
 
-def password_reset(link: str, minutes: int) -> Rendered:
-    """The reset link itself: a credential, so it is sent at once and never queued."""
+def password_reset_code(code: str, minutes: int) -> Rendered:
+    """The 6-digit reset code (D127): a credential, so it is sent at once and never queued."""
     return _security(
-        "Reset your password",
-        lines=[
-            f"We received a request to reset the password for your {BRAND} account.",
-            "Click the button below to create a new password.",
-            f"This link expires in {minutes} minutes and can be used once.",
-            "If you didn't request this change, you can safely ignore this email. Your password stays the same.",
+        "Your password reset code",
+        lines=["We received a request to reset your password.", "Your verification code is:"],
+        code=code,
+        after=[
+            f"This code expires in {minutes} minutes.",
+            "If you did not request this, you can ignore this email. Your password stays the same.",
         ],
-        action=("Reset Password", link),
     )
 
 
@@ -282,4 +298,40 @@ def password_reset_google_only() -> Rendered:
             "If you didn't request this, you can safely ignore this email.",
         ],
         action=("Go to sign in", f"{settings.frontend_base_url}/login"),
+    )
+
+
+# ---- linking Google at sign-in (D128) ------------------------------------------------------
+
+_LINK_FOOTER = (
+    f"You receive this because someone signed in with Google using this email address at {BRAND}. "
+    "Please do not reply to this email."
+)
+
+
+def google_link_code(code: str, minutes: int) -> Rendered:
+    """Proves the person linking Google controls this account's mailbox. Sent at once, never queued."""
+    return _security(
+        "Your code to connect Google sign-in",
+        lines=["Someone asked to connect Google sign-in to your account.", "Your verification code is:"],
+        code=code,
+        after=[
+            f"This code expires in {minutes} minutes.",
+            "If this wasn't you, don't share the code and ignore this email. Your account stays as it is.",
+        ],
+        footer=_LINK_FOOTER,
+    )
+
+
+def google_linked_notice() -> Rendered:
+    """After linking: the owner hears about the new sign-in method, whoever did it."""
+    return _security(
+        "Google sign-in was connected to your account",
+        lines=[
+            "Google sign-in is now connected to your account. You can sign in with Google or with your usual method.",
+            "If this wasn't you, change your password now and remove Google under Account › Connected accounts, "
+            "or contact the clinic.",
+        ],
+        action=("Open your account", f"{settings.frontend_base_url}/account"),
+        footer=_LINK_FOOTER,
     )

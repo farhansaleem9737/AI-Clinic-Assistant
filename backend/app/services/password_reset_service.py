@@ -1,23 +1,34 @@
-"""Forgot password: a one-time link by email (D126).
+"""Forgot password: a 6-digit code by email, then a new password (D126, D127).
+
+    request_reset(email) ── emails a code ──▶ verify_code(email, code) ── reset token ──▶ reset_password(token, password)
 
 * ``request_reset`` always gives the caller the same answer. For an active
-  account it stores the SHA-256 of a new 256-bit token (replacing any unused
-  one) and returns the email to send; the endpoint sends it after the response,
-  so the response time does not reveal whether the account exists either.
-  Links per account are bounded in the database (RESEND_SECONDS apart, at most
+  account it stores the HMAC of a new random 6-digit code (expiring any unused
+  earlier one) and returns the email to send; the endpoint sends it after the
+  response, so the response time does not reveal whether the account exists.
+  Codes per account are bounded in the database (RESEND_SECONDS apart, at most
   PER_HOUR an hour), which holds across API processes.
 * An account that signs in only with Google (D123) gets an email saying so,
-  not a link: its password is set after signing in with Google.
-* ``reset_password`` uses a token up with one conditional UPDATE, so two
-  submissions of one link cannot both succeed. It sets the password, deletes
-  the user's other links, ends every session (refresh tokens now, access
-  tokens through ``users.password_changed_at``) and does not sign anyone in.
+  not a code: its password is set after signing in with Google.
+* ``verify_code`` checks the code under a row lock, so concurrent guesses are
+  counted one by one; after CODE_MAX_ATTEMPTS wrong ones, or CODE_MINUTES, the
+  code stops working. The right code is used up at once and exchanged for a
+  256-bit reset token, valid TOKEN_MINUTES, that can only set a password: it
+  is not a sign-in token. Every refusal reads the same, whether the address
+  has an account or not.
+* ``reset_password`` uses the token up with one conditional UPDATE, so two
+  submissions cannot both succeed. It sets the password (hashed as
+  everywhere else), expires the user's other codes, ends every session
+  (refresh tokens now, access tokens through ``users.password_changed_at``)
+  and commits; nobody is signed in.
 
-The link is sent at once, not through the email outbox: the outbox would have
-to store it, and with it a working credential, in plain text (as for
-invitations, D87). Neither the token nor a password is ever logged.
+Codes are sent at once, not through the email outbox, which would store them
+in plain text (as for invitations, D87). Codes, tokens and passwords are never
+logged or returned.
 """
 
+import hashlib
+import hmac
 import logging
 import secrets
 import uuid
@@ -47,20 +58,25 @@ class TokenState(StrEnum):
 
 
 _MESSAGES = {
-    TokenState.invalid: "This password reset link is not valid. Request a new one.",
-    TokenState.expired: "This password reset link has expired. Request a new one.",
-    TokenState.used: "This password reset link has already been used. Request a new one if you still need it.",
+    TokenState.invalid: "This password reset is not valid. Request a new code.",
+    TokenState.expired: "This password reset has expired. Request a new code.",
+    TokenState.used: "This password reset was already completed. Request a new code if you still need it.",
 }
+CODE_REFUSED = "RESET_CODE_INVALID"
+CODE_MESSAGE = "That code is incorrect or has expired. Check the email, or request a new code."
 
 
 def _refused(state: TokenState) -> BusinessRuleError:
     return BusinessRuleError(_MESSAGES[state], code=state.value)
 
 
-def reset_link(raw_token: str) -> str:
-    # In the fragment: browsers never send it to a server or in a Referer header,
-    # so it stays out of Vercel, Render and proxy logs.
-    return f"{settings.frontend_base_url}/reset-password#token={raw_token}"
+def _code_hash(row_id: uuid.UUID, code: str) -> str:
+    # Keyed and bound to its row: a database copy alone cannot test the 10^6 codes.
+    return hmac.new(settings.secret_key.encode(), f"password-reset:{row_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def new_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"  # the OS CSPRNG
 
 
 @dataclass(frozen=True)
@@ -71,10 +87,16 @@ class PendingEmail:
     expires_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class ResetGrant:
+    token: str
+    expires_at: datetime
+
+
 async def request_reset(db: AsyncSession, email: str, *, ip_address: str | None) -> PendingEmail | None:
     """None when nothing is to be sent (no such account, inactive, or over the limits). Commits."""
     # Row lock: concurrent requests for one account run one after the other, so
-    # the limits below hold and the account ends up with exactly one live link.
+    # the limits below hold and the account ends up with exactly one live code.
     user = await db.scalar(select(User).where(User.email == email).with_for_update())
     if user is None or not user.is_active:
         logger.info("password_reset_requested", extra={"outcome": "no_eligible_account"})
@@ -104,20 +126,22 @@ async def request_reset(db: AsyncSession, email: str, *, ip_address: str | None)
         rendered = email_templates.password_reset_google_only()
         return PendingEmail(email_service.Email(to=address, subject=rendered.subject, text=rendered.text, html=rendered.html))
 
-    raw = secrets.token_urlsafe(32)  # 256 bits from the OS CSPRNG
-    expires_at = now + timedelta(minutes=settings.password_reset_token_minutes)
-    # Unused older links stop working; used and expired ones stay (they count towards the hourly limit).
+    code = new_code()
+    row_id = uuid.uuid7()
+    expires_at = now + timedelta(minutes=settings.password_reset_code_minutes)
+    # The new code replaces every unused one (and any verified, unused reset token).
     await db.execute(
         update(PasswordResetToken)
         .where(PasswordResetToken.user_id == user_id, PasswordResetToken.consumed_at.is_(None), PasswordResetToken.expires_at > now)
         .values(expires_at=now)
     )
     db.add(PasswordResetToken(
-        user_id=user_id, token_hash=hash_token(raw), created_at=now, expires_at=expires_at, requested_ip=ip_address,
+        id=row_id, user_id=user_id, code_hash=_code_hash(row_id, code), attempts=0, created_at=now,
+        expires_at=expires_at, requested_ip=ip_address,
     ))
     await db.commit()
-    logger.info("password_reset_requested", extra={"outcome": "link_created", "user_id": str(user_id)})
-    rendered = email_templates.password_reset(reset_link(raw), settings.password_reset_token_minutes)
+    logger.info("password_reset_requested", extra={"outcome": "code_created", "user_id": str(user_id)})
+    rendered = email_templates.password_reset_code(code, settings.password_reset_code_minutes)
     return PendingEmail(
         email_service.Email(to=address, subject=rendered.subject, text=rendered.text, html=rendered.html),
         expires_at=expires_at,
@@ -125,13 +149,60 @@ async def request_reset(db: AsyncSession, email: str, *, ip_address: str | None)
 
 
 async def send(pending: PendingEmail) -> None:
-    """Send a reset email (after the response). Failures are logged by class only, never with the link."""
+    """Send a reset email (after the response). Failures are logged by class only, never with the code."""
     if pending.expires_at is not None and clock.utcnow() >= pending.expires_at:
         logger.warning("password_reset_email_skipped_expired")
         return
     delivery = await email_service.send(pending.email)
     if delivery not in (email_service.Delivery.sent, email_service.Delivery.outbox):
         logger.warning("password_reset_email_not_sent", extra={"delivery": delivery.value})
+
+
+async def verify_code(db: AsyncSession, email: str, code: str) -> ResetGrant:
+    """Exchange the emailed code for a reset token (not a sign-in). Commits, also on a wrong guess."""
+    refused = BusinessRuleError(CODE_MESSAGE, code=CODE_REFUSED)
+    now = clock.utcnow()
+    # The newest live, unverified code of an active account, locked: guesses are counted one at a time.
+    row = await db.scalar(
+        select(PasswordResetToken)
+        .join(User, User.id == PasswordResetToken.user_id)
+        .where(
+            User.email == email,
+            User.is_active.is_(True),
+            PasswordResetToken.code_hash.is_not(None),
+            PasswordResetToken.verified_at.is_(None),
+            PasswordResetToken.consumed_at.is_(None),
+            PasswordResetToken.expires_at > now,
+        )
+        .order_by(PasswordResetToken.created_at.desc())
+        .limit(1)
+        .with_for_update(of=PasswordResetToken)
+    )
+    if row is None:
+        hmac.compare_digest(_code_hash(uuid.uuid7(), code), "0" * 64)  # about the same work as a real check
+        await db.rollback()
+        raise refused
+    if row.attempts >= settings.password_reset_code_max_attempts:
+        await db.rollback()
+        raise refused
+    if not hmac.compare_digest(_code_hash(row.id, code), row.code_hash):
+        row.attempts += 1
+        if row.attempts >= settings.password_reset_code_max_attempts:
+            row.expires_at = now  # used up: a new code is needed
+        user_id = row.user_id
+        await db.commit()
+        logger.info("password_reset_code_rejected", extra={"user_id": str(user_id)})
+        raise refused
+
+    raw = secrets.token_urlsafe(32)  # 256 bits
+    expires_at = now + timedelta(minutes=settings.password_reset_token_minutes)
+    row.verified_at = now
+    row.token_hash = hash_token(raw)
+    row.expires_at = expires_at
+    user_id = row.user_id
+    await db.commit()
+    logger.info("password_reset_code_verified", extra={"user_id": str(user_id)})
+    return ResetGrant(token=raw, expires_at=expires_at)
 
 
 async def _state_of(db: AsyncSession, token_hash: str) -> TokenState:
@@ -143,26 +214,17 @@ async def _state_of(db: AsyncSession, token_hash: str) -> TokenState:
     return TokenState.expired
 
 
-async def check(db: AsyncSession, raw_token: str) -> None:
-    """Raise unless the link can still be used (lets the page explain before a password is typed)."""
-    token_hash = hash_token(raw_token)
-    row = await db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash))
-    if row is None or row.consumed_at is not None or row.expires_at <= clock.utcnow():
-        raise _refused(await _state_of(db, token_hash))
-    user = await db.get(User, row.user_id)
-    if user is None or not user.is_active:
-        raise _refused(TokenState.invalid)
-
-
 async def reset_password(db: AsyncSession, raw_token: str, new_password: str, *, ip_address: str | None) -> None:
-    """Set a new password from an emailed link. Ends every session; nobody is signed in. Commits."""
+    """Set a new password with a reset token from ``verify_code``. Ends every session; nobody is signed in. Commits."""
     token_hash = hash_token(raw_token)
     now = clock.utcnow()
-    # Atomic: of two submissions of one link, exactly one gets a row back.
+    # Atomic: of two submissions of one token, exactly one gets a row back.
+    # Only tokens earned with a verified code count (D127): old emailed links no longer work.
     user_id: uuid.UUID | None = await db.scalar(
         update(PasswordResetToken)
         .where(
             PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.verified_at.is_not(None),
             PasswordResetToken.consumed_at.is_(None),
             PasswordResetToken.expires_at > now,
         )
@@ -175,11 +237,12 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str, *,
         raise _refused(state)
     user = await db.scalar(select(User).where(User.id == user_id).with_for_update())
     if user is None or not user.is_active:
-        await db.rollback()  # the link stays unused; it cannot help an inactive account anyway
+        await db.rollback()  # the token stays unused; it cannot help an inactive account anyway
         raise _refused(TokenState.invalid)
 
     user.password_hash = hash_password(new_password)
     user.password_changed_at = now
+    # Every other unused code or token of this account stops working.
     await db.execute(
         delete(PasswordResetToken).where(
             PasswordResetToken.user_id == user.id, PasswordResetToken.consumed_at.is_(None)
@@ -188,7 +251,7 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str, *,
     await auth_service.revoke_all_sessions(db, user.id)
     audit_service.record(
         db, AuditAction.user_password_reset, actor_id=user.id, target_type="user", target_id=user.id,
-        ip_address=ip_address, details={"verified_with": "email_link"},
+        ip_address=ip_address, details={"verified_with": "email_code"},
     )
     await db.commit()
     logger.info("password_reset_completed", extra={"user_id": str(user.id)})

@@ -70,3 +70,29 @@ class GoogleLinkStart(BaseModel):
 class Reauthentication(BaseModel):
     # Needed unless this session signed in within the last few minutes.
     current_password: str | None = Field(default=None, max_length=128)
+
+
+# ---- linking Google at sign-in (D128) ------------------------------------------------------
+
+
+class GoogleLinkTicket(BaseModel):
+    """The existing account Google matched, and how its owner may prove it is theirs."""
+
+    email: str
+    methods: list[str]  # "password", "email_code"
+    code_sent: bool
+    resend_in: int  # seconds until another code may be sent
+    attempts_left: int
+
+
+class GoogleLinkProof(BaseModel):
+    """Exactly one: the account's password, or the 6-digit code emailed to it."""
+
+    model_config = {"extra": "forbid"}
+
+    password: str | None = Field(default=None, min_length=1, max_length=128)
+    code: str | None = Field(default=None, pattern=r"^\d{6}$")
+
+    def model_post_init(self, _context: Any) -> None:
+        if (self.password is None) == (self.code is None):
+            raise ValueError("Send either the password or the code")

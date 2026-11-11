@@ -10,6 +10,10 @@
     GET  /auth/google/identity         the signed-in user's Google link
     POST /auth/google/link             start linking Google to the signed-in user
     POST /auth/google/unlink           remove the link (not the last sign-in method)
+    GET  /auth/google/link-ticket      D128: Google matched an existing account; how to prove it is yours
+    POST /auth/google/link-ticket/code email a confirmation code to that account
+    POST /auth/google/link-ticket/verify   password or code → Google linked, signed in
+    POST /auth/google/link-ticket/cancel   do not link
 
 Every browser redirect goes to FRONTEND_BASE_URL + a fixed path chosen here: never
 a URL from the request, so there is no open redirect.
@@ -17,7 +21,7 @@ a URL from the request, so there is no open redirect.
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +33,9 @@ from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.schemas.google_auth import (
     GoogleIdentityStatus,
+    GoogleLinkProof,
     GoogleLinkStart,
+    GoogleLinkTicket,
     GooglePrefill,
     GoogleSignupRequest,
     Reauthentication,
@@ -159,3 +165,43 @@ async def unlink(
         db, principal, request.cookies.get(settings.refresh_cookie_name), body.current_password,
         request.client.host if request.client else None,
     )
+
+
+# ---- linking at sign-in (D128): Google matched an existing account ---------------------------
+# Public, before any session: the g_link cookie (HttpOnly, SameSite=Lax, this path only)
+# names the step. Lax cookies are not sent on cross-site POSTs, so another site cannot
+# drive these requests.
+
+
+@router.get("/google/link-ticket", response_model=GoogleLinkTicket)
+async def link_ticket(request: Request, db: AsyncSession = Depends(get_db)):
+    return GoogleLinkTicket(**await service.link_ticket(db, request.cookies.get(service.LINK_COOKIE)))
+
+
+@router.post("/google/link-ticket/code", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_limited])
+async def link_code(request: Request, db: AsyncSession = Depends(get_db)):
+    """Email a 6-digit code to the account's own address (patients and applicants)."""
+    await service.send_link_code(db, request.cookies.get(service.LINK_COOKIE))
+
+
+@router.post("/google/link-ticket/verify", response_model=AccessTokenResponse, dependencies=[_limited])
+async def link_verify(
+    body: GoogleLinkProof, request: Request, response: Response, background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """The owner's proof → Google linked to the existing user (same id, roles and
+    data) and the normal session, in one transaction. 400 LINK_PROOF_INVALID with
+    attempts_left; after the last one the step is gone (GOOGLE_STATE_INVALID)."""
+    result = await service.link_and_sign_in(
+        db, request.cookies.get(service.LINK_COOKIE), _client_info(request), password=body.password, code=body.code
+    )
+    _clear(response, service.LINK_COOKIE)
+    _set_session_cookies(response, result.tokens.refresh_token, persistent=result.tokens.persistent)
+    background.add_task(service.send_notice, result.notice)
+    return _access_response(result.tokens.access_token)
+
+
+@router.post("/google/link-ticket/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def link_cancel(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    await service.cancel_link(db, request.cookies.get(service.LINK_COOKIE))
+    _clear(response, service.LINK_COOKIE)

@@ -16,7 +16,7 @@ import { PAGES, PROTECTED_ROUTES } from "./routes/pages";
 // the layouts are in the main bundle. Each layout shows a page skeleton while a
 // page's code downloads; a failed download is retried and can be tried again.
 const LAZY = { ...Object.fromEntries(Object.entries(PAGES).map(([name, load]) => [name, lazyPage(load)])), Dashboard };
-const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, GoogleComplete, GoogleSignup, Landing, LegalDocument, NotFound, Register, ResetPassword } =
+const { AcceptAdminInvite, Departments, DoctorDetail, ForgotPassword, GoogleComplete, GoogleLink, GoogleSignup, Landing, LegalDocument, NotFound, Register, ResetPassword } =
   LAZY;
 
 function App() {
@@ -39,12 +39,14 @@ function App() {
           <Route element={<AuthLayout variant="login" />}>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
-            {/* Public: opened from the emailed reset link (D126); the token is in the #fragment. */}
+            {/* Old emailed reset links (D126) lead to Forgot password, which now uses a code (D127). */}
             <Route path="/reset-password" element={<ResetPassword />} />
             {/* Public: reached from an emailed invitation link (D87). */}
             <Route path="/accept-admin-invite" element={<AcceptAdminInvite />} />
             {/* Back from Google (D123): the backend redirects here. */}
             <Route path="/auth/google/complete" element={<GoogleComplete />} />
+            {/* Google matched an existing account: prove it is yours, then it is linked (D128). */}
+            <Route path="/login/link-google" element={<GoogleLink />} />
           </Route>
           <Route element={<AuthLayout variant="register" />}>
             <Route path="/register" element={<Register />} />

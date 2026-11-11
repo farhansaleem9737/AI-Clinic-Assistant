@@ -14,6 +14,13 @@ export const completeGoogleSignIn = () => api.post("/auth/google/complete");
 export const getGoogleSignup = () => api.get("/auth/google/signup");
 export const googleSignup = (data) => api.post("/auth/google/signup", data);
 
+// Google matched an existing account (D128): the owner proves it is theirs, then
+// Google is linked and the normal session starts. The step is an HttpOnly cookie.
+export const getGoogleLinkTicket = () => api.get("/auth/google/link-ticket");
+export const sendGoogleLinkCode = () => api.post("/auth/google/link-ticket/code");
+export const verifyGoogleLink = (proof) => api.post("/auth/google/link-ticket/verify", proof);
+export const cancelGoogleLink = () => api.post("/auth/google/link-ticket/cancel");
+
 // Account › Connected accounts. They read this browser's session cookie, hence CSRF.
 export const getGoogleIdentity = () => api.get("/auth/google/identity");
 export const linkGoogle = (currentPassword) =>
@@ -29,6 +36,7 @@ export const GOOGLE_MESSAGES = {
   unavailable: { kind: "warn", text: "Google sign-in isn't available right now. Please use your email and password." },
   unverified: { kind: "error", text: "Your Google account's email address isn't verified with Google, so it can't be used here." },
   inactive: { kind: "error", text: "This account can't sign in. Please contact the clinic." },
+  // Older servers only; since D128 an existing account is offered a link at /login/link-google.
   link_required: {
     kind: "info",
     text: "An account with this email address already exists. Sign in with your password, then link Google from Account › Connected accounts.",

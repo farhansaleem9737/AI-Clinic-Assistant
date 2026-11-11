@@ -117,6 +117,7 @@ def test_missing_smtp_settings_mean_no_email_outside_development(monkeypatch):
     monkeypatch.setattr(settings, "email_backend", None)
     monkeypatch.setattr(settings, "environment", Environment.production)
     monkeypatch.setattr(settings, "smtp_host", None)
+    monkeypatch.setattr(settings, "brevo_api_key", None)  # a local .env may set one
     assert settings.effective_email_backend is EmailBackend.none
 
 

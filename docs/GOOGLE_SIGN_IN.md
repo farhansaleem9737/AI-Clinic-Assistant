@@ -26,6 +26,34 @@ the frontend.
 **Authorized JavaScript origins are not needed:** no Google script runs in the
 browser.
 
+### Google with the address of an existing account (D128)
+
+Who a Google sign-in is, in order:
+
+1. **Google's `sub` is already linked** to an account: that account, with its own
+   roles. A changed Gmail address doesn't matter, because `sub` never changes.
+2. **Not linked, but an account has the same email:** nothing is linked
+   automatically, because a matching email proves nothing about who controls the
+   account. The browser goes to **Link your Google account** (`/login/link-google`),
+   and the owner proves the account is theirs:
+   - **Patients and doctor applicants** use the account's password, or a 6-digit
+     code emailed to the account's own address.
+   - **Doctors, receptionists and admins** must use the password.
+   - Limits: the step is bound to that account and that Google `sub`, lasts 15
+     minutes and allows 5 wrong tries. A code lasts 10 minutes, and a new one can
+     be sent after 60 seconds.
+
+   When the proof is right, one transaction links Google (`oauth_identities`,
+   unique per Google `sub`) to the same user id, writes an audit entry and starts
+   the normal session. Then a notice email goes to the account. Nothing else
+   changes: the user id, roles, profile, appointments, records, preferences and
+   password all stay. "Don't link" ends the step and changes nothing.
+3. **Neither:** the Google registration form, as before. It offers patient or
+   doctor applicant only, and a doctor applicant still waits for review.
+
+Refused at any step: deactivated accounts, a Google account already linked to
+another user, and a login that already has a different Google account.
+
 ## 1. Google Cloud Console (you)
 
 1. **Open the console.** Go to https://console.cloud.google.com/ and sign in with
@@ -112,6 +140,12 @@ frontend code.
 
 ## 5. Database (you)
 
+Linking at sign-in (D128) needs migration `d4a7e2c19b58`. It is additive: three
+new columns on `oauth_flows`, and the step kind `link` allowed. Apply it with the
+other migrations (`alembic upgrade head`).
+
+The first Google migration:
+
 The migration is `f1c6a2d8e573`:
 - it adds the tables `oauth_identities` and `oauth_flows`;
 - it makes `users.password_hash` nullable, for Google-only accounts.
@@ -134,7 +168,8 @@ It is additive: no existing row changes.
 | 2 | Complete it as a Patient | Lands on the patient dashboard, signed in |
 | 3 | Sign out, then **Continue with Google** again | Signed straight in |
 | 4 | **Sign up with Google** as a Doctor | Doctor-applicant view, application waiting for review (not an approved doctor) |
-| 5 | Google sign-in with the address of an existing password account | Message: sign in with your password, then link Google |
+| 5 | Google sign-in with the address of an existing password account | "Link your Google account": enter the password (or, for a patient, an emailed code), then you're signed in to the same account and "Google sign-in was connected" arrives by email |
+| 5b | Sign out, then Google sign-in again with that account | Signed straight in, to the same dashboard and data as the password sign-in |
 | 6 | Sign in with the password, then Account › Connected accounts › **Link Google account** (enter the password if asked) | "Your Google account is now linked"; Google sign-in now works for it |
 | 7 | Cancel on Google's page | Back on Sign in with "Google sign-in was cancelled" |
 | 8 | Press Back to the callback URL, or reload it | "expired or was already used"; nobody is signed in |

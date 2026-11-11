@@ -1321,6 +1321,17 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 .upload-results .failed { color: var(--danger); }
 .register-done { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; text-align: center; }
 .register-done-icon { color: var(--ok); }
+/* Linking Google at sign-in (D128): password or email code. */
+.link-methods { display: flex; gap: 0.5rem; }
+.link-methods button { flex: 1; }
+/* Six boxes for a one-time code (D127, components/OtpInput.jsx). */
+.otp-input { display: flex; gap: 0.5rem; justify-content: space-between; }
+.otp-input input {
+  width: 100%; max-width: 3.1rem; min-width: 0; aspect-ratio: 1 / 1.15; padding: 0;
+  text-align: center; font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.otp-input.invalid input { border-color: var(--danger); }
+@media (max-width: 380px) { .otp-input { gap: 0.35rem; } .otp-input input { font-size: 1.2rem; } }
 .register-code-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .register-code-actions button { flex: 1; }
 .register-done .alert { text-align: left; }
@@ -2397,6 +2408,12 @@ button.time-slot:disabled { opacity: 1; background: #eef1f5; border-color: #eef1
 
 /* ---- Legal pages ------------------------------------------------------------ */
 .legal-list { display: grid; gap: 0.6rem; padding-left: 1.1rem; margin: 0 0 1rem; }
+.legal-document { line-height: 1.6; overflow-wrap: anywhere; }
+.legal-document > p { margin: 0 0 0.85rem; }
+.legal-document h3 { font-size: 1.1rem; margin: 1.6rem 0 0.6rem; color: var(--heading); }
+.legal-document h4 { font-size: 1rem; margin: 1.2rem 0 0.5rem; color: var(--heading); }
+.legal-document .legal-list { gap: 0.35rem; }
+.legal-placeholder { background: #fff4d6; color: #7a4b00; padding: 0 0.2em; border-radius: 3px; }
 
 /* ---- Patient Medical Information (D110) ------------------------------------------- */
 .med-page { display: grid; gap: 1rem; min-width: 0; }

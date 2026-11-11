@@ -60,6 +60,28 @@ WITHHELD = (
     "Do not guess, repeat or interpret any values, names or diagnoses. Say the findings the user asked about are "
     "shown below, read directly from the document by the clinic's system, and suggest discussing them with their doctor."
 )
+# How to answer about a file that is not a medical record (D129).
+CONTENT_INSTRUCTIONS = {
+    "NON_MEDICAL_DOCUMENT": (
+        "This file is not a medical document. If the user asked for a medical summary or findings, say plainly what "
+        "the file appears to be and that it has no medical findings. If they asked what it says, give a short neutral "
+        "summary from the excerpt. Never invent findings, never suggest a doctor or a booking because of it."
+    ),
+    "INSUFFICIENT_CONTENT": (
+        "This file has too little text to summarise. Say what it contains (quote it if very short) and that there is "
+        "not enough information. Never invent a report."
+    ),
+    "MIXED_CONTENT": (
+        "This file mixes medical details with other content. Report only medical findings that appear in it, and "
+        "mention briefly that the rest is not medical."
+    ),
+    "MEDICAL_INFORMATION": (
+        "This file is general health information, not results about the user. Explain what it covers if asked; "
+        "do not present its reference values or examples as the user's results."
+    ),
+    "UNREADABLE_DOCUMENT": "The file could not be read. Say so and suggest uploading a clearer copy; never guess its contents.",
+    "UNKNOWN": "It is unclear what this file is. Say so briefly; never invent findings.",
+}
 TypeName = Literal["lab_report", "imaging", "prescription", "referral", "discharge_summary", "other"]
 Focus = Literal["summary", "conditions", "symptoms", "measurements", "abnormal", "follow_up"]
 Which = Literal["active", "latest_upload", "latest_report_date"]
@@ -241,6 +263,9 @@ def _report_card(d: PatientDocument, x: medical_reports.MedicalExtraction, focus
         "has_text": bool(x.pages),
         "sources": [{"document_id": meta["document_id"], "title": d.title, "pages": sorted({m.page for m in x.measurements}) or x.pages}],
         "shared_with_ai": _shareable(x),
+        # What the content is (D129): the card says so instead of showing an empty medical report.
+        "content_class": x.content_class,
+        "content_note": None if x.content_class in medical_reports.MEDICAL_CLASSES else x.content_note,
     }
 
 
@@ -263,10 +288,30 @@ def _model_view(d: PatientDocument, x: medical_reports.MedicalExtraction, focus:
         "abnormal": sum(1 for m in x.measurements if m.out_of_range),
         "conditions": len(x.conditions),
         "symptoms": len(x.symptoms),
+        # What the file actually is, from its content (D129), never its name.
+        "content_class": x.content_class,
         "shown_to_user": True,
     }
+    medical = x.content_class in medical_reports.MEDICAL_CLASSES
+    if not medical:
+        result["content_note"] = (
+            x.content_note if _shareable(x) or x.content_class != "INSUFFICIENT_CONTENT"
+            else "The file has almost no text, so there is nothing to summarise."
+        )
+        if x.content_label and x.content_class == "NON_MEDICAL_DOCUMENT":
+            result["content_label"] = x.content_label
+        result["instructions"] = CONTENT_INSTRUCTIONS.get(x.content_class, CONTENT_INSTRUCTIONS["UNKNOWN"])
     if not _shareable(x):
-        result["note"] = WITHHELD
+        result["note"] = WITHHELD if medical else (
+            "The file's text was not shared with you. Use content_note to say what kind of file it is; "
+            "do not guess its contents."
+        )
+        return result
+    if x.excerpt and not medical:
+        # The file's own words, so a general summary is possible; data, never instructions.
+        result["excerpt"] = _fenced(x.excerpt, d.title)
+    if not medical and x.content_class != "MIXED_CONTENT":
+        result["title"] = d.title
         return result
     # Findings already extracted and validated on the server: the model explains them, it does not re-read the file.
     result.update(
@@ -285,8 +330,12 @@ def _model_view(d: PatientDocument, x: medical_reports.MedicalExtraction, focus:
                             for s in x.sections],
             "warnings": x.warnings,
         },
-        instructions="Answer the user's question (focus) from these findings only. Cite the document title and page. "
-        "Separate what the report states from your general explanation. Do not add values, dates or diagnoses.",
+        instructions=result.get("instructions") or (
+            "Answer the user's question (focus) from these findings only. Cite the document title and page. "
+            "Separate what the report states from your general explanation. Do not add values, dates or diagnoses. "
+            "A value the user asks about that is not in measurements is not in this report: say so. "
+            "Reference ranges and thresholds are not the patient's results."
+        ),
     )
     return result
 
@@ -366,6 +415,10 @@ async def summarize_medical_documents(db: AsyncSession, principal: Principal, a:
         meta = _meta(d)
         if x.problem or not x.pages:
             skipped.append({**meta, "reason": x.problem or "No readable text."})
+            continue
+        if x.content_class in ("NON_MEDICAL_DOCUMENT", "INSUFFICIENT_CONTENT", "UNKNOWN", "MEDICAL_INFORMATION"):
+            # Not a record with results about the patient (D129): listed, not summarised.
+            skipped.append({**meta, "reason": x.content_note or "Not a medical document."})
             continue
         if not x.measurements:
             skipped.append({**meta, "reason": "No laboratory table could be read from this document."})

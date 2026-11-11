@@ -76,12 +76,6 @@ describe("public landing page", () => {
     expect(tabs.getByRole("tab", { name: "Patient" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("explains an architecture module when it is chosen", async () => {
-    renderLanding();
-    await userEvent.click(screen.getByRole("button", { name: "Cloudflare R2" }));
-    expect(screen.getByRole("heading", { name: "Cloudflare R2" })).toBeInTheDocument();
-  });
-
   it("offers signed-in users their dashboard instead of sign-in", () => {
     renderLanding(authAs("John Doe", ["patient"], PERMISSIONS.patient));
     expect(screen.getAllByRole("link", { name: /Open dashboard/ })[0]).toHaveAttribute("href", "/dashboard");

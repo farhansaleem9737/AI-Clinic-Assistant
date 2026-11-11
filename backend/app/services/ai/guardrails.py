@@ -36,7 +36,8 @@ def redact(text: str) -> str:
 
 _URGENT = re.compile(
     r"\b("
-    r"chest pain|crushing chest|heart attack|can'?t breathe|cannot breathe|can not breathe|difficulty breathing|"
+    r"chest pain|chest (?:discomfort|tightness|pressure)|tight(?:ness)? in (?:my |the )?chest|crushing chest|heart attack|"
+    r"too many (?:pills|tablets)|can'?t breathe|cannot breathe|can not breathe|difficulty breathing|"
     r"struggling to breathe|stopped breathing|choking|stroke|face (?:is )?drooping|slurred speech|"
     r"unconscious|passed out|not responding|unresponsive|seizure|fitting|severe bleeding|bleeding heavily|"
     r"won'?t stop bleeding|overdose|poisoned|swallowed poison|suicid\w*|kill myself|end my life|"

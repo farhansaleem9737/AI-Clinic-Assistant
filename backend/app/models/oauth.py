@@ -11,6 +11,8 @@ progress. Only hashes of the random values the browser holds are stored.
 - ``authorize``: started, waiting for Google's callback (state, PKCE verifier, nonce);
 - ``handoff``: Google confirmed a known user; the app page completes the session;
 - ``signup``: Google confirmed a new person; they finish the registration form.
+- ``link`` (D128): Google confirmed an address that already has an account; the
+  owner proves they control it (password or emailed code), then Google is linked.
 
 Each row is bound to the browser that started it (``binder_hash``: a cookie),
 expires quickly and is consumed atomically, so it cannot be replayed or used in
@@ -20,7 +22,7 @@ another browser (login CSRF).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CHAR, Boolean, CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import CHAR, Boolean, CheckConstraint, DateTime, ForeignKey, SmallInteger, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
@@ -48,7 +50,7 @@ class OAuthIdentity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class OAuthFlow(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "oauth_flows"
     __table_args__ = (
-        CheckConstraint("kind IN ('authorize', 'handoff', 'signup')", name="kind_known"),
+        CheckConstraint("kind IN ('authorize', 'handoff', 'signup', 'link')", name="kind_known"),
         CheckConstraint("purpose IN ('login', 'register', 'link')", name="purpose_known"),
     )
 
@@ -61,14 +63,18 @@ class OAuthFlow(UUIDPrimaryKeyMixin, Base):
     binder_hash: Mapped[str] = mapped_column(CHAR(64))
     code_verifier: Mapped[str | None] = mapped_column(String(128))
     nonce: Mapped[str | None] = mapped_column(String(64))
-    # link: the signed-in user; handoff: the user to sign in.
+    # purpose link: the signed-in user; handoff: the user to sign in; kind link: the existing account.
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"))
     remember_me: Mapped[bool] = mapped_column(Boolean, default=False)
-    # signup: the verified Google identity waiting for the registration form.
+    # signup / link: the verified Google identity waiting for the form or the proof.
     subject: Mapped[str | None] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(255))
     given_name: Mapped[str | None] = mapped_column(String(100))
     family_name: Mapped[str | None] = mapped_column(String(100))
+    # kind link (D128): wrong passwords or codes so far, and the emailed code's HMAC.
+    attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))
+    code_hash: Mapped[str | None] = mapped_column(CHAR(64))
+    code_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

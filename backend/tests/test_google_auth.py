@@ -90,7 +90,8 @@ async def test_start_sends_the_browser_to_google_with_state_pkce_and_nonce(clien
     assert "access_type" not in query
 
 
-async def test_google_is_off_until_configured(client):
+async def test_google_is_off_until_configured(client, monkeypatch):
+    monkeypatch.setattr(settings, "google_oauth_enabled", False)  # a local .env may switch it on
     assert (await client.get(f"{API}/providers")).json() == {"google": False}
     response = await client.get(f"{API}/google/start")
     assert response.status_code == 303 and response.headers["location"].endswith("/login?google=unavailable")
@@ -186,7 +187,7 @@ async def test_an_email_match_is_never_linked_automatically(client, google, make
     google("code-hijack", "sub-unknown", "owner@example.com")
     query, binder = await start(client)
     _, path = await callback(client, query["state"][0], binder, code="code-hijack")
-    assert path == "/login?google=link_required"
+    assert path == "/login/link-google"  # proof of ownership first (D128, tests/test_google_link.py)
     assert await db_session.scalar(select(OAuthIdentity).where(OAuthIdentity.user_id == user.id)) is None
 
 

@@ -7,8 +7,9 @@ export const sendVerificationCode = (email) => api.post("/auth/register/verifica
 export const getPasswordStatus = () => api.get("/auth/password", { headers: csrfHeaders() });
 export const changePassword = (data) => api.post("/auth/password", data, { headers: csrfHeaders() });
 
-// Forgot password (D126). Public; the answer to a request is the same whether or not the account exists.
+// Forgot password (D126, D127). Public; the answer to a request is the same whether or not the account exists.
 export const requestPasswordReset = (email) => api.post("/auth/forgot-password", { email });
-// POST, so the emailed token never appears in a URL the server or a proxy logs.
-export const checkResetToken = (token) => api.post("/auth/reset-password/check", { token });
+// The emailed 6-digit code → { reset_token, expires_in }: a token that can only set a new password.
+export const verifyResetCode = (email, code) => api.post("/auth/verify-reset-otp", { email, code });
+// Both in the request body, never in a URL the server or a proxy logs.
 export const resetPassword = (token, newPassword) => api.post("/auth/reset-password", { token, new_password: newPassword });

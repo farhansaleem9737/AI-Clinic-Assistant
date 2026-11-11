@@ -302,6 +302,8 @@ function ReportCard({ card }) {
         <p className="ai-report-problem">Read with an earlier version of the document reader. Ask again for an up-to-date reading.</p>
       )}
       {card.problem && <p className="ai-report-problem">{card.problem}</p>}
+      {/* Not a medical record (D129): say what the file is instead of showing empty findings. */}
+      {!card.problem && card.content_note && <p className="ai-report-problem">{card.content_note}</p>}
       {!card.problem &&
         order
           .filter((k) => open.includes(k) || available(k))

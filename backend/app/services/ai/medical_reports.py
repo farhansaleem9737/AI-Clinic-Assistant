@@ -38,7 +38,7 @@ from pypdf.errors import PdfReadError
 logger = logging.getLogger(__name__)
 
 # Bump when the extraction changes: cached results of older versions are never reused.
-EXTRACTION_VERSION = "2"
+EXTRACTION_VERSION = "3"  # 3: content classification (D129)
 MAX_PAGES = 50
 MAX_TEXT_CHARS = 60_000
 MAX_OCR_PAGES = 5
@@ -218,6 +218,14 @@ class MedicalExtraction:
     warnings: list[str] = field(default_factory=list)
     problem: str | None = None
     pages: list[int] = field(default_factory=list)
+    # What the content is (D129), from the text alone: see classify_text.
+    content_class: str = "UNKNOWN"
+    content_label: str | None = None
+    content_note: str | None = None
+    word_count: int = 0
+    # The start of the text, for non-medical, mixed or nearly empty files (so the
+    # model can say what the file is without inventing findings).
+    excerpt: str | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -594,7 +602,13 @@ def analyse(reading: Reading) -> MedicalExtraction:
         printed_date=report_date(reading), laboratory=laboratory(reading), synthetic=bool(_SYNTHETIC.search(text)),
         warnings=list(reading.notes), problem=reading.problem, pages=[p.number for p in reading.pages],
     )
-    if reading.problem or not reading.pages:
+    if reading.problem:
+        extraction.content_class = "UNREADABLE_DOCUMENT"
+        extraction.content_note = "The file could not be read, so its contents are unknown."
+        return extraction
+    if not reading.pages:
+        extraction.content_class = "INSUFFICIENT_CONTENT"
+        extraction.content_note = "The file has no text, so there is nothing to summarise."
         return extraction
     warnings: list[str] = []
     rows, had_table = _table_measurements(reading.pages, warnings)
@@ -608,11 +622,147 @@ def analyse(reading: Reading) -> MedicalExtraction:
     extraction.sections = _sections(reading.pages, table_lines)
     extraction.conditions = _conditions(extraction.sections)
     extraction.symptoms = _symptoms(extraction.sections, reading.pages)
+    plain = "\n".join(p.text for p in reading.pages)
+    found = classify_text(plain, table_rows=sum(1 for m in rows if m.confidence == "high"))
+    extraction.content_class, extraction.content_label = found.content_class, found.label
+    extraction.content_note, extraction.word_count = found.note, found.word_count
+    if found.content_class in ("NON_MEDICAL_DOCUMENT", "INSUFFICIENT_CONTENT", "UNKNOWN"):
+        # Not a medical record: invoice lines or stray numbers are not test results (D129).
+        extraction.measurements, extraction.conditions, extraction.symptoms = [], [], []
+        extraction.warnings = []
+        extraction.document_kind = {
+            "NON_MEDICAL_DOCUMENT": f"Not a medical document ({found.label})" if found.label else "Not a medical document",
+            "INSUFFICIENT_CONTENT": "Too little text to summarise",
+        }.get(found.content_class, "Unclear document")
+    elif found.content_class == "MEDICAL_INFORMATION":
+        extraction.document_kind = "General health information (no patient results)"
+        extraction.measurements = []  # reference values in a leaflet are not the patient's results
+    if found.content_class in ("NON_MEDICAL_DOCUMENT", "INSUFFICIENT_CONTENT", "UNKNOWN", "MIXED_CONTENT", "MEDICAL_INFORMATION"):
+        extraction.excerpt = re.sub(r"[ \t]+", " ", plain).strip()[:1500]
+    rows = extraction.measurements
     if rows:
         extraction.status = "ok" if all(m.confidence == "high" for m in rows) and not reading.unreadable_pages else "partial"
     else:
         extraction.status = "no_measurements"
     return extraction
+
+
+# ---- what kind of document is this? (D129) ---------------------------------------------------------
+# Decided from the extracted text only, never from the file name. Deterministic and local: no model call.
+
+MEDICAL_CLASSES = ("MEDICAL_REPORT", "MEDICAL_PRESCRIPTION", "MEDICAL_NOTE", "MEDICAL_HISTORY")
+CONTENT_CLASSES = (
+    *MEDICAL_CLASSES,
+    "MEDICAL_INFORMATION",  # health text with no results about a person (a leaflet, reference values)
+    "NON_MEDICAL_DOCUMENT", "MIXED_CONTENT", "INSUFFICIENT_CONTENT", "UNREADABLE_DOCUMENT", "UNKNOWN",
+)
+
+_MEDICAL_TERMS = re.compile(
+    r"(?i)\b(?:patient|diagnos\w*|ha?emoglobin|glucose|cholesterol|hba1c|creatinine|platelets?|wbc|rbc|leu[ck]ocytes?|"
+    r"lymphocytes?|neutrophils?|serum|plasma|urine|specimen|mg/dl|mmol/l|g/dl|iu/l|reference (?:range|interval)|"
+    r"laborator\w*|lab|pathology|radiolog\w*|ultrasound|x-ray|mri|ct scan|ecg|ekg|biopsy|physician|hospital|"
+    r"prescri\w*|tab\.|tablets?|capsules?|syrup|dosage|once daily|twice daily|after meals|blood pressure|pulse|bmi|"
+    r"oxygen saturation|discharge|admission|medications?|medicines?|thyroid|tsh|vitamin|ferritin|hepatitis|diabet\w*|"
+    r"hypertension|ana?emia|infection|fever|cough|headache|allerg\w*|symptoms?|chief complaint|mbbs|fcps|"
+    r"antibiotics?|insulin|metformin|liver|kidneys?|cardiac|pneumonia|neurological|echogenicity|impression)\b"
+)
+# Prescription shorthand as written in local clinics: "Tab Panadol 500mg 1+1+1", "Syp ... 2 tsp TDS".
+_RX_SHORTHAND = re.compile(
+    r"(?im)^\s*rx\b|\b(?:tab|tabs|cap|caps|syp|syr|inj|drops?)\.?\s+[A-Z][a-z]+|\b\d+(?:\.\d+)?\s?(?:mg|mcg|ml|iu)\b|"
+    r"\b(?:TDS|BD|BID|TID|QID|OD|HS|PRN|STAT)\b|\b\d\s?\+\s?\d\s?\+\s?\d\b"
+)
+_BP_READING = re.compile(r"(?i)\b(?:bp|blood pressure)\b[\s\S]{0,200}?\b\d{2,3}/\d{2,3}\b|\b\d{2,3}/\d{2,3}\s*mm ?hg")
+_NON_MEDICAL = {
+    "an invoice or bill": r"invoice|bill to|subtotal|amount due|total amount|payment terms|unit price|purchase order|quotation|receipt no",
+    "a project or business document": r"proposal|project|milestones?|deliverables?|stakeholders?|budget|sprint|scope|roadmap|requirements",
+    "a CV or résumé": r"curriculum vitae|résumé|resume|skills|references available|work experience|software engineer",
+    "course or study material": r"lecture|assignment|chapter|textbook|syllabus|homework|exam|course",
+    "a recipe": r"recipe|ingredients|serve hot|tablespoons?|teaspoons?|naan",
+    "a contract or agreement": r"agreement|landlord|tenant|lease|rent|hereby|parties|clause",
+    "meeting notes": r"meeting|agenda|minutes|action items|decisions",
+    "software or technical text": r"software|source code|api|database|deployment|servers?|javascript|python|docker|web application",
+    "household or personal notes": r"electricity bill|internet bill|grocery|school fees|car service",
+}
+_NON_MEDICAL_RE = {label: re.compile(rf"(?i)\b(?:{pattern})\b") for label, pattern in _NON_MEDICAL.items()}
+# Words that carry no content of their own: "test", placeholders, a bare title.
+_FILLER = frozenset(
+    "test tests testing sample demo dummy lorem ipsum dolor sit amet consectetur adipiscing elit asdf qwerty hello hi "
+    "abc xyz untitled document file page report medical new draft blank".split()
+)
+# A result about a person: a labelled patient line, clinical observations, or a value with a unit that is
+# not a reference statement ("Desirable below 200 mg/dL" is a threshold, not the patient's value).
+_PATIENT_LINE = re.compile(r"(?im)^\s*(?:patient(?: name)?|name|age(?:/sex)?|mrn|dob|date of birth)\s*[:/]")
+_CLINICAL = re.compile(r"(?i)chief complaint|consultation note|progress note|on examination|examination|assessment\s*:|plan\s*:")
+_VALUE_WITH_UNIT = re.compile(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:g/dl|mg/dl|mmol/l|iu/l|x10\^?\d|%)")
+_REFERENCE_WORDS = re.compile(r"(?i)\b(?:below|above|desirable|optimal|normal|recommended|reference|target|or higher|or lower|less than|more than)\b|[<>≤≥]")
+_NOTE = re.compile(r"(?i)discharge summary|consultation note|progress note|clinical note|chief complaint|history of presenting|assessment\s*:|plan\s*:")
+_RX = re.compile(r"(?im)^\s*rx\b|\b(?:tab\.|tablets?|capsules?|syrup|once daily|twice daily|thrice daily|after meals|before meals)\b")
+_LAB_CONTENT = re.compile(r"(?i)\bresults?\s*[:|]|\breference range\b|impression\s*:|findings\s*:|laborator|\blab\b|radiolog|ultrasound|x-ray|\bmri\b|ct scan|complete blood count")
+_HISTORY = re.compile(r"(?i)past medical history|medical history|surgical history|allergies\s*:")
+
+
+@dataclass(frozen=True)
+class ContentClass:
+    content_class: str
+    label: str | None  # what it looks like, in words ("an invoice or bill")
+    word_count: int
+    note: str  # one plain sentence for the user and the model
+
+
+def _patient_specific(text: str, table_rows: int) -> bool:
+    if table_rows or _PATIENT_LINE.search(text) or _CLINICAL.search(text) or _BP_READING.search(text):
+        return True
+    return any(_VALUE_WITH_UNIT.search(line) and not _REFERENCE_WORDS.search(line) for line in text.splitlines())
+
+
+def classify_text(text: str, *, table_rows: int = 0) -> ContentClass:
+    """The kind of content in `text`. `table_rows`: results read from a recognised results table."""
+    text = (text or "").strip()
+    words = re.findall(r"[^\W\d_]{2,}", text)
+    meaningful = [w for w in words if w.lower() not in _FILLER]
+    if not text or (len(meaningful) < 3 and not table_rows):
+        shown = re.sub(r"\s+", " ", text)[:80]
+        note = (f'The file contains only "{shown}", which is not enough to summarise.' if shown
+                else "The file has no text, so there is nothing to summarise.")
+        return ContentClass("INSUFFICIENT_CONTENT", None, len(words), note)
+
+    medical = (len({m.group(0).lower() for m in _MEDICAL_TERMS.finditer(text)})
+               + len({m.group(0).lower() for m in _RX_SHORTHAND.finditer(text)}) + 2 * table_rows)
+    scores = {label: len({m.group(0).lower() for m in rx.finditer(text)}) for label, rx in _NON_MEDICAL_RE.items()}
+    non_medical = sum(scores.values())
+    label = max(scores, key=scores.get) if non_medical else None
+
+    if medical >= 3:
+        if non_medical >= 3 and non_medical >= medical * 0.6:
+            return ContentClass("MIXED_CONTENT", label, len(words),
+                                "The file mixes medical details with other content; only the medical part has findings.")
+        if not _patient_specific(text, table_rows):
+            return ContentClass("MEDICAL_INFORMATION", None, len(words),
+                                "The file is general health information: it has no test results or findings about a patient.")
+        if table_rows:
+            kind = "MEDICAL_REPORT"
+        elif _NOTE.search(text):
+            kind = "MEDICAL_NOTE"
+        elif _RX.search(text) or _RX_SHORTHAND.search(text) and not _HISTORY.search(text):
+            kind = "MEDICAL_PRESCRIPTION"
+        elif _LAB_CONTENT.search(text):
+            kind = "MEDICAL_REPORT"
+        elif _HISTORY.search(text):
+            kind = "MEDICAL_HISTORY"
+        else:
+            kind = "MEDICAL_NOTE"
+        return ContentClass(kind, None, len(words), "The file is a medical document.")
+    if non_medical >= 2:
+        return ContentClass("NON_MEDICAL_DOCUMENT", label, len(words),
+                            f"The file does not look like a medical document (it looks like {label}), so it has no medical findings.")
+    if medical >= 1:
+        return ContentClass("UNKNOWN", None, len(words),
+                            "The file has a few health-related words but too little to tell what it is.")
+    if len(words) < 15:
+        return ContentClass("INSUFFICIENT_CONTENT", None, len(words),
+                            "The file has only a few words and no medical information, which is not enough to summarise.")
+    return ContentClass("NON_MEDICAL_DOCUMENT", "a non-medical document", len(words),
+                        "The file does not look like a medical document, so it has no medical findings.")
 
 
 # ---- comparing and explaining ---------------------------------------------------------------------

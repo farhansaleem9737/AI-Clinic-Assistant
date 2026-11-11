@@ -76,10 +76,26 @@ class PasswordResetRequest(BaseModel):
     email: LoginEmail
 
 
+class PasswordResetCode(BaseModel):
+    """Forgot password (D127): the account's email and the 6-digit code emailed to it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: LoginEmail
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class PasswordResetGrant(BaseModel):
+    """Allows one password reset (POST /auth/reset-password), nothing else: not a sign-in."""
+
+    reset_token: str
+    expires_in: int  # seconds
+
+
 class PasswordResetToken(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # secrets.token_urlsafe(32) is 43 characters; anything else cannot be a link we sent.
+    # secrets.token_urlsafe(32) is 43 characters; anything else cannot be a token we issued.
     token: str = Field(min_length=20, max_length=128)
 
 

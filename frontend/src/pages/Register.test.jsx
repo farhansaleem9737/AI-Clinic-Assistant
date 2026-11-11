@@ -417,6 +417,22 @@ describe("navigation", () => {
     expect(screen.getByRole("heading", { name: "Terms of Service" })).toBeInTheDocument();
     expect(within(document.body).getByText("This document has not been published yet.")).toBeInTheDocument();
   });
+
+  it("shows the Privacy Policy, with unfinished placeholders highlighted", () => {
+    render(
+      <MemoryRouter initialEntries={["/privacy"]}>
+        <Routes>
+          <Route path="/privacy" element={<LegalDocument document="privacy" />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(screen.getByRole("heading", { name: "Privacy Policy" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "18. Contact and Privacy Complaints" })).toBeInTheDocument();
+    expect(screen.getByText("We do not require your Google account password.")).toBeInTheDocument();
+    expect(screen.getAllByText(/assistantaiclinic@gmail.com/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^\[Insert verified provider list/)[0].tagName).toBe("MARK");
+    expect(screen.queryByText("This document has not been published yet.")).not.toBeInTheDocument();
+  });
 });
 
 describe("registering as a doctor", () => {

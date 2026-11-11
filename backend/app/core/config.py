@@ -208,10 +208,14 @@ class Settings(BaseSettings):
     google_oauth_flow_minutes: int = 10  # Google sign-in must finish within this
     google_oauth_signup_minutes: int = 30  # a new user's time to complete the registration form
     google_oauth_attempts_per_minute: int = 20  # per client IP, at the start endpoints
-    # Forgot password (D126): an emailed one-time link. Per client IP per minute at
-    # both public endpoints; per account at most PER_HOUR links, at least
-    # RESEND_SECONDS apart (counted in the database, so every API process agrees).
-    password_reset_token_minutes: int = 15
+    # Forgot password (D126, D127): an emailed 6-digit code, valid CODE_MINUTES and
+    # for CODE_MAX_ATTEMPTS wrong guesses; the right code gives the browser a reset
+    # token valid TOKEN_MINUTES. Per client IP per minute at the public endpoints;
+    # per account at most PER_HOUR codes, at least RESEND_SECONDS apart (counted in
+    # the database, so every API process agrees).
+    password_reset_code_minutes: int = 10
+    password_reset_code_max_attempts: int = 5
+    password_reset_token_minutes: int = 10
     password_reset_requests_per_minute: int = 5
     password_reset_attempts_per_minute: int = 10
     password_reset_resend_seconds: int = 60

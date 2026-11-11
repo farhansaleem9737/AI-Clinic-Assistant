@@ -5,15 +5,12 @@ import {
   Building2,
   CalendarCheck,
   ClipboardList,
-  Database,
   FileText,
   HardDrive,
   KeyRound,
   LayoutDashboard,
   Lock,
-  MonitorSmartphone,
   ScrollText,
-  Server,
   ShieldCheck,
   Sparkles,
   Stethoscope,
@@ -93,38 +90,6 @@ export const ROLES = [
   { role: "Doctor", icon: Stethoscope, items: ["Maintain a professional profile", "Set weekly availability and leave", "Review own appointments", "See patients they have visits with"] },
   { role: "Receptionist", icon: ClipboardList, items: ["Register and find patients", "Book for patients", "Coordinate doctor schedules", "Check patients in"] },
   { role: "Admin", icon: UserCog, items: ["Manage users and roles", "Manage departments and doctors", "Approve doctor applications", "Monitor clinic activity"] },
-];
-
-// The architecture diagram. `links` name the modules a module talks to.
-export const ARCH_LAYERS = [
-  {
-    id: "client",
-    title: "Client applications",
-    modules: [
-      { id: "react", icon: MonitorSmartphone, name: "React web app", detail: "One single-page app (React + Vite) serves every role. Pages load on demand, so visitors never download the staff workspaces.", links: ["fastapi"] },
-      { id: "workspaces", icon: Users, name: "Role workspaces", detail: "Patient, doctor, receptionist and admin workspaces share one shell. What a user sees is filtered by their permissions — and the API enforces the same permissions again.", links: ["fastapi", "auth"] },
-    ],
-  },
-  {
-    id: "api",
-    title: "API and application services",
-    modules: [
-      { id: "fastapi", icon: Server, name: "FastAPI", detail: "A versioned REST API (/api/v1) with async SQLAlchemy. Every route validates input and returns role-appropriate response shapes.", links: ["react", "auth", "booking", "docs", "ai", "postgres"] },
-      { id: "auth", icon: KeyRound, name: "Auth and RBAC", detail: "Passwords hashed with bcrypt, 15-minute access tokens, rotating refresh tokens with reuse detection, and permission checks plus per-record relationship checks.", links: ["fastapi", "postgres"] },
-      { id: "booking", icon: CalendarCheck, name: "Appointments and schedules", detail: "Availability is computed from weekly templates and exceptions. A database constraint makes double-booking a doctor impossible.", links: ["fastapi", "postgres"] },
-      { id: "docs", icon: FileText, name: "Document services", detail: "Checks who may see a file, stores it privately and extracts text and lab tables on the server.", links: ["fastapi", "r2", "postgres"] },
-      { id: "ai", icon: Sparkles, name: "AI orchestration", detail: "Runs the assistant as the signed-in user: it can only call tools that user is allowed to use, and it proposes changes rather than making them.", links: ["fastapi", "gemini", "postgres"] },
-    ],
-  },
-  {
-    id: "data",
-    title: "Data and integrations",
-    modules: [
-      { id: "postgres", icon: Database, name: "PostgreSQL (Neon)", detail: "The system of record: users, roles, doctors, schedules, appointments, conversations and the audit log.", links: ["fastapi", "auth", "booking", "docs", "ai"] },
-      { id: "r2", icon: HardDrive, name: "Cloudflare R2", detail: "Private object storage for profile photos and medical documents. Files are opened through short-lived links issued by the API after an access check.", links: ["docs"] },
-      { id: "gemini", icon: Sparkles, name: "Google Gemini", detail: "The language model behind the assistant, called only from the server. The API key never reaches the browser; patient data is withheld unless the clinic enables it under a suitable agreement.", links: ["ai"] },
-    ],
-  },
 ];
 
 export const LIFECYCLES = [

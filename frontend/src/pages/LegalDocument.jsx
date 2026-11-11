@@ -1,5 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
+import LegalMarkdown from "./legal/LegalMarkdown";
+import privacyPolicy from "./legal/privacy-policy.md?raw";
 
 const TITLES = { terms: "Terms of Service", privacy: "Privacy Policy", ai: "AI Disclaimer" };
 
@@ -69,6 +71,8 @@ export default function LegalDocument({ document }) {
     <>
       {document === "ai" ? (
         <AiDisclaimer />
+      ) : document === "privacy" ? (
+        <LegalMarkdown source={privacyPolicy} />
       ) : (
         <>
           <h2 className="auth-title">{title}</h2>

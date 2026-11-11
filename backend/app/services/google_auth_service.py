@@ -8,9 +8,13 @@ the same session, refresh-cookie, CSRF and role rules as a password sign-in.
 Identity resolution, in order:
 
 1. Google ``sub`` already linked → that user (if active). Roles are untouched.
-2. Not linked, but an account exists with the same email → no automatic link
-   (an email match proves nothing about who controls our account): the user is
-   told to sign in the usual way and link Google from Account settings.
+2. Not linked, but an account exists with the same email (D128) → never an
+   automatic link (an email match proves nothing about who controls our
+   account). A short ``link`` step, bound to that user and this Google ``sub``,
+   asks the owner to prove control of the account: its password, or a code
+   emailed to it (patients and applicants only; staff and admins need the
+   password). Then Google is linked and the normal session starts. Linking from
+   Account settings after a normal sign-in still works too.
 3. Neither → a registration ticket: the person completes the normal patient or
    doctor-applicant form (no password, no email code: Google verified the
    address). Doctor applicants still wait for review; staff and admin roles are
@@ -20,10 +24,13 @@ The browser carries three short-lived HttpOnly cookies (path /api/v1/auth/google
 ``g_oauth`` binds Google's callback to the browser that started it; ``g_handoff``
 lets the app page finish the session (so the Strict session cookies are set on a
 same-site request and no token is ever put in a URL); ``g_signup`` holds the
-registration ticket. The database keeps only hashes; every step is single-use.
+registration ticket; ``g_link`` the linking step. The database keeps only hashes; every step is single-use.
 """
 
+import hashlib
+import hmac
 import logging
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -34,12 +41,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.core.config import settings
-from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
-from app.core.permissions import Principal
+from app.core.exceptions import (
+    BusinessRuleError,
+    EmailUnavailableError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitedError,
+)
+from app.core.permissions import Principal, RoleCode
 from app.core.security import hash_token, verify_password
 from app.models.oauth import GOOGLE, OAuthFlow, OAuthIdentity
 from app.models.user import User
-from app.services import audit_service, auth_service, doctor_application_service, patient_service
+from app.services import (
+    audit_service,
+    auth_service,
+    doctor_application_service,
+    email_service,
+    email_templates,
+    patient_service,
+    rbac_service,
+)
 from app.services.audit_service import AuditAction
 from app.services.google_oidc import GoogleIdentity, GoogleSignInError
 
@@ -48,7 +69,16 @@ logger = logging.getLogger(__name__)
 BINDER_COOKIE = "g_oauth"
 HANDOFF_COOKIE = "g_handoff"
 SIGNUP_COOKIE = "g_signup"
+LINK_COOKIE = "g_link"
 HANDOFF_SECONDS = 120
+# Linking at sign-in (D128).
+LINK_MINUTES = 15
+LINK_MAX_ATTEMPTS = 5
+LINK_CODE_MINUTES = 10
+LINK_RESEND_SECONDS = 60
+# Accounts whose link needs the password: an emailed code proves only the mailbox,
+# which is too little for anyone who can see other people's records.
+PASSWORD_ONLY_ROLES = frozenset({RoleCode.admin, RoleCode.doctor, RoleCode.receptionist})
 
 
 def _oidc():
@@ -202,10 +232,26 @@ async def _sign_in_or_register(db: AsyncSession, flow: OAuthFlow, identity: Goog
         await db.commit()
         return Outcome("/auth/google/complete", cookie=(HANDOFF_COOKIE, handoff, HANDOFF_SECONDS))
 
-    if await db.scalar(select(User.id).where(User.email == identity.email)) is not None:
-        # Same address, but this Google account was never linked to that login.
-        # Linking needs the owner to sign in first (Account › Connected accounts).
-        return Outcome(_error_path(flow.purpose, "link_required"))
+    existing = await db.scalar(select(User).where(User.email == identity.email.strip().lower()))
+    if existing is not None:
+        # Same address, but this Google account was never linked to that login (D128):
+        # the owner must prove control of the account before anything is linked.
+        if not existing.is_active:
+            raise PermissionDeniedError("Account is inactive", code="ACCOUNT_INACTIVE")
+        other = await db.scalar(
+            select(OAuthIdentity.id).where(OAuthIdentity.user_id == existing.id, OAuthIdentity.provider == GOOGLE)
+        )
+        if other is not None:  # a different Google account is already this login's
+            raise GoogleSignInError("Another Google account is already linked.", code="GOOGLE_ALREADY_LINKED")
+        ticket = _oidc().random_token()
+        await _new_step(
+            db, kind="link", purpose=flow.purpose, token_hash=hash_token(ticket), binder_hash=hash_token(ticket),
+            user_id=existing.id, remember_me=flow.remember_me, subject=identity.subject, email=identity.email,
+            expires_at=clock.utcnow() + timedelta(minutes=LINK_MINUTES),
+        )
+        await db.commit()
+        logger.info("google_link_offered", extra={"user_id": str(existing.id)})
+        return Outcome("/login/link-google", cookie=(LINK_COOKIE, ticket, LINK_MINUTES * 60))
 
     ticket = _oidc().random_token()
     await _new_step(
@@ -359,3 +405,176 @@ async def unlink(
     )
     await db.commit()
     logger.info("google_unlinked", extra={"user_id": str(principal.user_id)})
+
+
+# ---- linking at sign-in: prove you own the existing account (D128) -----------------------
+
+
+@dataclass
+class LinkResult:
+    tokens: auth_service.SessionTokens
+    notice: email_service.Email  # to send after the response
+
+
+def _link_code_hash(flow_id: uuid.UUID, code: str) -> str:
+    return hmac.new(settings.secret_key.encode(), f"google-link:{flow_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def _link_expired() -> GoogleSignInError:
+    return GoogleSignInError(
+        "This Google sign-in has expired. Please continue with Google again.", code="GOOGLE_STATE_INVALID"
+    )
+
+
+async def _link_step(db: AsyncSession, raw: str | None, *, lock: bool = False) -> OAuthFlow:
+    """The live linking step of this browser (its cookie), optionally row-locked."""
+    ensure_enabled()
+    if not raw:
+        raise _link_expired()
+    query = select(OAuthFlow).where(
+        OAuthFlow.token_hash == hash_token(raw), OAuthFlow.kind == "link", OAuthFlow.consumed_at.is_(None),
+        OAuthFlow.expires_at > clock.utcnow(), OAuthFlow.attempts < LINK_MAX_ATTEMPTS,
+    )
+    flow = await db.scalar(query.with_for_update() if lock else query)
+    if flow is None:
+        raise _link_expired()
+    return flow
+
+
+async def _active_user(db: AsyncSession, user_id: uuid.UUID) -> User:
+    user = await db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise PermissionDeniedError("This account can't sign in. Please contact the clinic.", code="ACCOUNT_INACTIVE")
+    return user
+
+
+async def link_methods(db: AsyncSession, user: User) -> list[str]:
+    """How the owner may prove control: their password, and (except staff and admins) an emailed code."""
+    methods = ["password"] if user.password_hash else []
+    principal = await rbac_service.load_principal_by_id(db, user.id)
+    privileged = principal is None or bool(set(principal.roles) & PASSWORD_ONLY_ROLES)
+    if not privileged:
+        methods.append("email_code")
+    return methods
+
+
+async def link_ticket(db: AsyncSession, raw: str | None) -> dict:
+    """What the linking page needs: the account's address and the ways to prove ownership."""
+    flow = await _link_step(db, raw)
+    user = await _active_user(db, flow.user_id)
+    retry = 0
+    if flow.code_sent_at is not None:
+        retry = max(int((flow.code_sent_at + timedelta(seconds=LINK_RESEND_SECONDS) - clock.utcnow()).total_seconds()), 0)
+    return {
+        "email": user.email,
+        "methods": await link_methods(db, user),
+        "code_sent": flow.code_sent_at is not None,
+        "resend_in": retry,
+        "attempts_left": LINK_MAX_ATTEMPTS - flow.attempts,
+    }
+
+
+async def send_link_code(db: AsyncSession, raw: str | None) -> None:
+    """Email a 6-digit code to the existing account's own address (not one Google gave)."""
+    flow = await _link_step(db, raw, lock=True)
+    user = await _active_user(db, flow.user_id)
+    if "email_code" not in await link_methods(db, user):
+        await db.rollback()
+        raise BusinessRuleError("Confirm with your password to link Google to this account.", code="LINK_METHOD_UNAVAILABLE")
+    now = clock.utcnow()
+    if flow.code_sent_at is not None and now - flow.code_sent_at < timedelta(seconds=LINK_RESEND_SECONDS):
+        wait = LINK_RESEND_SECONDS - int((now - flow.code_sent_at).total_seconds())
+        await db.rollback()
+        raise RateLimitedError(
+            "A code was sent moments ago. Please wait before asking for another.",
+            code="CODE_RECENTLY_SENT", details={"retry_after_seconds": wait},
+        )
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    flow.code_hash, flow.code_sent_at = _link_code_hash(flow.id, code), now
+    address, user_id = user.email, user.id
+    await db.commit()
+    rendered = email_templates.google_link_code(code, LINK_CODE_MINUTES)
+    delivery = await email_service.send(email_service.Email(to=address, subject=rendered.subject, text=rendered.text, html=rendered.html))
+    if delivery not in (email_service.Delivery.sent, email_service.Delivery.outbox):
+        raise EmailUnavailableError("The code could not be sent. Please try again later.")
+    logger.info("google_link_code_sent", extra={"user_id": str(user_id)})
+
+
+async def link_and_sign_in(
+    db: AsyncSession, raw: str | None, client: auth_service.ClientInfo, *, password: str | None = None, code: str | None = None
+) -> LinkResult:
+    """Check the proof, link the Google identity to the existing user and start the
+    normal session, in one transaction. A wrong proof counts an attempt and changes nothing else."""
+    flow = await _link_step(db, raw, lock=True)
+    user = await _active_user(db, flow.user_id)
+    methods = await link_methods(db, user)
+    now = clock.utcnow()
+    if password is not None:
+        if "password" not in methods:
+            await db.rollback()
+            raise BusinessRuleError("This account has no password. Use the emailed code.", code="LINK_METHOD_UNAVAILABLE")
+        proven, wrong = verify_password(password, user.password_hash), "The password is incorrect."
+        method = "password"
+    else:
+        if "email_code" not in methods:
+            await db.rollback()
+            raise BusinessRuleError("Confirm with your password to link Google to this account.", code="LINK_METHOD_UNAVAILABLE")
+        fresh = flow.code_sent_at is not None and now - flow.code_sent_at < timedelta(minutes=LINK_CODE_MINUTES)
+        proven = bool(fresh and flow.code_hash and hmac.compare_digest(_link_code_hash(flow.id, code or ""), flow.code_hash))
+        wrong = "That code is incorrect or has expired. Check the email, or send a new code."
+        method = "email_code"
+    if not proven:
+        flow.attempts += 1
+        left = LINK_MAX_ATTEMPTS - flow.attempts
+        await db.commit()
+        logger.info("google_link_proof_rejected", extra={"user_id": str(flow.user_id), "method": method})
+        if left <= 0:
+            raise _link_expired()
+        raise BusinessRuleError(wrong, code="LINK_PROOF_INVALID", details={"attempts_left": left})
+
+    flow.consumed_at = now  # single use, in the same transaction as the link
+    owner = await db.scalar(
+        select(OAuthIdentity).where(OAuthIdentity.provider == GOOGLE, OAuthIdentity.subject == flow.subject)
+    )
+    if owner is not None and owner.user_id != user.id:
+        await db.rollback()
+        raise GoogleSignInError("This Google account is linked to another account.", code="GOOGLE_IDENTITY_IN_USE")
+    if owner is None:
+        mine = await db.scalar(select(OAuthIdentity.id).where(OAuthIdentity.user_id == user.id, OAuthIdentity.provider == GOOGLE))
+        if mine is not None:
+            await db.rollback()
+            raise GoogleSignInError("Another Google account is already linked.", code="GOOGLE_ALREADY_LINKED")
+        db.add(OAuthIdentity(user_id=user.id, provider=GOOGLE, subject=flow.subject, email=flow.email, last_login_at=now))
+    audit_service.record(
+        db, AuditAction.user_google_linked, actor_id=user.id, target_type="user", target_id=user.id,
+        ip_address=client.ip_address, details={"at_sign_in": True, "verified_with": method},
+    )
+    try:
+        await db.flush()
+    except IntegrityError as exc:  # the same Google account linked at the same moment elsewhere
+        await db.rollback()
+        raise GoogleSignInError("This Google account is linked to another account.", code="GOOGLE_IDENTITY_IN_USE") from exc
+    address, user_id = user.email, user.id
+    tokens = await auth_service.start_session(db, user, client, remember_me=flow.remember_me)  # commits
+    logger.info("google_linked", extra={"user_id": str(user_id), "at_sign_in": True, "method": method})
+    logger.info("login_succeeded", extra={"user_id": str(user_id), "method": "google"})
+    rendered = email_templates.google_linked_notice()
+    return LinkResult(tokens, email_service.Email(to=address, subject=rendered.subject, text=rendered.text, html=rendered.html))
+
+
+async def cancel_link(db: AsyncSession, raw: str | None) -> None:
+    """The person chose not to link: the step is used up; nothing else changes."""
+    if raw:
+        await db.execute(
+            update(OAuthFlow)
+            .where(OAuthFlow.token_hash == hash_token(raw), OAuthFlow.kind == "link", OAuthFlow.consumed_at.is_(None))
+            .values(consumed_at=clock.utcnow())
+        )
+        await db.commit()
+
+
+async def send_notice(email: email_service.Email) -> None:
+    """Best effort, after the response: the link stands whether or not this arrives."""
+    delivery = await email_service.send(email)
+    if delivery not in (email_service.Delivery.sent, email_service.Delivery.outbox):
+        logger.warning("google_linked_notice_not_sent", extra={"delivery": delivery.value})

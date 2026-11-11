@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_principal
 from app.api.error_handlers import error_response
+from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.permissions import Principal
@@ -21,8 +22,9 @@ from app.schemas.user import (
     PasswordChange,
     PasswordChangeStatus,
     PasswordReset,
+    PasswordResetCode,
+    PasswordResetGrant,
     PasswordResetRequest,
-    PasswordResetToken,
     UserLogin,
     UserResponse,
 )
@@ -213,9 +215,9 @@ async def change_password(
     return _access_response(tokens.access_token)
 
 
-# Forgot password (D126). Public; no session, so no CSRF cookie to check.
-RESET_REQUESTED = "If an account exists for this email, you'll receive a password reset link shortly."
-PASSWORD_RESET_DONE = "Your password has been reset. Sign in with your new password."
+# Forgot password (D126, D127). Public; no session, so no CSRF cookie to check.
+RESET_REQUESTED = "If an account exists for this email, you'll receive a 6-digit code shortly."
+PASSWORD_RESET_DONE = "Your password has been changed successfully. You can now sign in using your new password."
 _reset_requests = Depends(rate_limit("password_reset_request", lambda: settings.password_reset_requests_per_minute))
 _reset_attempts = Depends(rate_limit("password_reset", lambda: settings.password_reset_attempts_per_minute))
 
@@ -224,26 +226,30 @@ _reset_attempts = Depends(rate_limit("password_reset", lambda: settings.password
 async def forgot_password(
     body: PasswordResetRequest, request: Request, background: BackgroundTasks, db: AsyncSession = Depends(get_db)
 ):
-    """Email a one-time reset link (valid PASSWORD_RESET_TOKEN_MINUTES) to an active
-    account. The answer, and its timing, are the same whether or not the address
-    has an account: the email goes out after the response."""
+    """Email a 6-digit code (valid PASSWORD_RESET_CODE_MINUTES) to an active account.
+    The answer, and its timing, are the same whether or not the address has an
+    account: the email goes out after the response. Asking again replaces the code."""
     pending = await password_reset_service.request_reset(db, body.email, ip_address=_client_info(request).ip_address)
     if pending is not None:
         background.add_task(password_reset_service.send, pending)
     return MessageResponse(message=RESET_REQUESTED)
 
 
-@router.post("/reset-password/check", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_reset_attempts])
-async def check_reset_link(body: PasswordResetToken, db: AsyncSession = Depends(get_db)):
-    """204 if the link can still be used; otherwise 400 RESET_TOKEN_INVALID, _EXPIRED or _USED.
-    POST so the token never appears in a URL."""
-    await password_reset_service.check(db, body.token)
+@router.post("/verify-reset-otp", response_model=PasswordResetGrant, dependencies=[_reset_attempts])
+async def verify_reset_code(body: PasswordResetCode, db: AsyncSession = Depends(get_db)):
+    """Exchange the emailed code for a reset token that can only set a new password
+    (within PASSWORD_RESET_TOKEN_MINUTES, once). 400 RESET_CODE_INVALID for a wrong,
+    used-up or expired code, or an address without an account: the same answer."""
+    grant = await password_reset_service.verify_code(db, body.email, body.code)
+    expires_in = max(int((grant.expires_at - clock.utcnow()).total_seconds()), 0)
+    return PasswordResetGrant(reset_token=grant.token, expires_in=expires_in)
 
 
 @router.post("/reset-password", response_model=MessageResponse, dependencies=[_reset_attempts])
 async def reset_password(body: PasswordReset, request: Request, db: AsyncSession = Depends(get_db)):
-    """Set a new password with an emailed link. The link is used up; every session
-    of the account ends; nobody is signed in (the user signs in with the new password)."""
+    """Set a new password with the reset token from /verify-reset-otp. The token is
+    used up; every session of the account ends; nobody is signed in (the user signs
+    in with the new password). 200 only after the change is committed."""
     await password_reset_service.reset_password(
         db, body.token, body.new_password, ip_address=_client_info(request).ip_address
     )
