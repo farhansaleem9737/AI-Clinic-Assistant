@@ -545,11 +545,30 @@ class Resolution:
         return len(primary_departments) > 1
 
 
+def _word_char(c: str) -> bool:
+    """A character that continues a word: ASCII lowercase letters and digits,
+    and any non-ASCII character in the Basic Multilingual Plane."""
+    return "a" <= c <= "z" or "0" <= c <= "9" or "\u0080" <= c <= "￿"
+
+
 def _find(text: str, phrase: str) -> tuple[int, int] | None:
+    """The first whole-word occurrence of the phrase (or its plural) in text.
+
+    Plain string search on purpose (D132). This runs for every catalog phrase
+    on every doctor search, on the event loop. It used to build a regular
+    expression per phrase, and with more phrases than re's cache holds, every
+    search recompiled all of them. On a 0.1-CPU instance that took minutes
+    and froze the server until the platform restarted it. Same matches as the
+    old pattern: (?<![a-z0-9\\u0080-\\uffff])phrase(?![a-z0-9\\u0080-\\uffff]).
+    """
     for candidate in (phrase, phrase + "s", phrase + "es"):
-        match = re.search(rf"(?<![a-z0-9\u0080-￿]){re.escape(candidate)}(?![a-z0-9\u0080-￿])", text)
-        if match:
-            return match.span()
+        size = len(candidate)
+        start = text.find(candidate)
+        while start != -1:
+            end = start + size
+            if (start == 0 or not _word_char(text[start - 1])) and (end == len(text) or not _word_char(text[end])):
+                return start, end
+            start = text.find(candidate, start + 1)
     return None
 
 
