@@ -31,9 +31,9 @@ def _sse(*parts, finish="STOP"):
     return f"data: {json.dumps(body)}\r\n\r\n"
 
 
-def call_part(name, **args):
+def call_part(tool, /, **args):
     # Gemini 3 returns a thought signature with each function call; it must come back unchanged.
-    return {"functionCall": {"name": name, "args": args}, "thoughtSignature": "c2lnbmF0dXJl"}
+    return {"functionCall": {"name": tool, "args": args}, "thoughtSignature": "c2lnbmF0dXJl"}
 
 
 def text_part(text):
@@ -270,3 +270,19 @@ async def test_a_gemini_timeout_mid_booking_is_a_timeout_not_unavailable(client,
     app.dependency_overrides[get_provider] = (lambda p: (lambda: p))(fake.provider())
     events = await stream(client, alice, "Book me with a cardiologist")
     assert events[-1][0] == "error" and events[-1][1]["code"] == "AI_TIMEOUT"
+
+
+async def test_second_message_picks_from_the_list_then_a_time(client, db_session, clinic, cardiologist, gemini):
+    """The production failure was the second message of a booking conversation (2026-11-13 09:00:53 UTC)."""
+    alice = await clinic.headers_for(clinic.patient_a.user_id)
+    gemini(
+        [_sse(call_part("search_doctors", specialization="cardiology"))], [_sse(text_part("Which one?"))],
+        [_sse(call_part("pick_from_previous", entity="doctor", selector="first"))], [_sse(text_part("Next free times below."))],
+        [_sse(call_part("pick_from_previous", entity="doctor", selector="earliest_available"))], [_sse(text_part("ok"))],
+        [_sse(call_part("pick_from_previous", entity="slot", selector="by_name", name="10 am"))], [_sse(text_part("Press Confirm."))],
+    )
+    first = await stream(client, alice, "Book me with a cardiologist")
+    conversation_id = first[-1][1]["conversation"]["id"]
+    for text in ("the first one", "whoever is free earliest", "10 am"):
+        events = await stream(client, alice, text, conversation_id)
+        assert events[-1][0] == "done", (text, events[-1])

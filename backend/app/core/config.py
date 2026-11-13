@@ -326,6 +326,8 @@ class Settings(BaseSettings):
     ai_extraction_queue_limit: int = Field(default=4, ge=1)
     # Log a warning when the event loop is late by more than this (0 = off).
     event_loop_lag_warning_ms: int = Field(default=500, ge=0)
+    # A thread logs where the event loop is stuck when it has not run for this long (0 = off).
+    event_loop_stall_seconds: int = Field(default=5, ge=0)
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

@@ -338,3 +338,25 @@ async def test_a_busy_server_answers_the_stream_with_an_error_event_and_the_slot
     provider.replies = [text_reply("Hello!")]
     events = parse_sse((await client.post(f"{BASE}/messages/stream", json={"text": "hi"}, headers=headers)).text)
     assert events[-1][0] == "done" and capacity.active() == 0
+
+
+def a_function_that_freezes_the_loop():
+    time.sleep(2.6)  # stands in for CPU-bound work that never yields
+
+
+async def test_a_frozen_event_loop_is_logged_with_where_it_is_stuck(monkeypatch, caplog):
+    """D132: the lag task cannot report a loop that never comes back; the watchdog thread can."""
+    from app.core import loop_monitor
+
+    monkeypatch.setattr(settings, "event_loop_lag_warning_ms", 500)
+    monkeypatch.setattr(settings, "event_loop_stall_seconds", 1)
+    loop_monitor.start()
+    try:
+        await asyncio.sleep(0.6)
+        a_function_that_freezes_the_loop()
+        await asyncio.sleep(0.1)
+    finally:
+        await loop_monitor.stop()
+    [stall, *_] = [r for r in caplog.records if r.getMessage() == "event_loop_stalled"]
+    assert stall.stalled_s >= 1 and any("a_function_that_freezes_the_loop" in line for line in stall.stack), stall.stack
+    assert all(":" in line for line in stall.stack)  # file:line function only, no values
