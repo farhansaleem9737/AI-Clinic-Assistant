@@ -296,6 +296,15 @@ describe("Assistant panel: screenshot design", () => {
     expect(within(panel).getByText("Here is")).toBeInTheDocument();
     expect(within(panel).getByText("Response interrupted")).toBeInTheDocument();
 
+    // D132: an unexpected server error says nothing was booked, with a reference that matches the server's logs.
+    await user.type(within(panel).getByLabelText("Message"), "Book me with a cardiologist{Enter}");
+    await act(async () =>
+      fail({ response: { status: 503, data: { error: { code: "AI_FAILED", message: "x", request_id: "77991382e359487fa400bbd4089f1ff3" } } } })
+    );
+    await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("Nothing was booked or changed."));
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Reference: 77991382");
+    expect(within(panel).getByText("Not sent")).toBeInTheDocument();
+
     // A new question replaces the failed one; Stop before any text: the word goes at once.
     await user.type(within(panel).getByLabelText("Message"), "again{Enter}");
     expect(await within(panel).findByRole("status", { name: "Assistant is preparing a response" })).toBeInTheDocument();

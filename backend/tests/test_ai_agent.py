@@ -455,6 +455,7 @@ async def test_stream_errors_arrive_as_an_event_and_save_nothing(client, auth_he
     provider.replies = [AiUnavailableError("The AI service did not answer. Please try again.")] * 2
     headers = await auth_headers(RoleCode.patient)
     events = parse_sse((await client.post(f"{BASE}/messages/stream", json={"text": "hi"}, headers=headers)).text)
+    assert len(events[0][1].pop("request_id")) == 32  # matches the server log lines (D132)
     assert events == [("error", {"code": "AI_UNAVAILABLE", "message": "The AI service did not answer. Please try again."})]
     assert (await client.get(f"{BASE}/conversations", headers=headers)).json() == []
     body = {"text": "x", "conversation_id": str(uuid4())}

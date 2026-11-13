@@ -179,6 +179,7 @@ function FailureCard({ failure, sending, onRetry, onDismiss }) {
       <div>
         <strong>{failure.title}</strong>
         <p>{failure.message}</p>
+        {failure.reference && <p className="ai-msg-note">Reference: {failure.reference}</p>}
         <div className="ai-failure-actions">
           {failure.retry && (
             <button type="button" className="small-button" disabled={sending} onClick={onRetry}>

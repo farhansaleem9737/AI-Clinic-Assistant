@@ -331,6 +331,7 @@ async def test_a_busy_server_answers_the_stream_with_an_error_event_and_the_slot
     headers = await auth_headers(RoleCode.patient)
     with capacity.slot():  # someone else's answer is in progress
         events = parse_sse((await client.post(f"{BASE}/messages/stream", json={"text": "hi"}, headers=headers)).text)
+        assert events[0][1].pop("request_id")
         assert events == [("error", {"code": "AI_BUSY", "message": capacity.BUSY})]
         busy = await client.post(f"{BASE}/messages", json={"text": "hi"}, headers=headers)
         assert busy.status_code == 503 and busy.json()["error"]["code"] == "AI_BUSY"

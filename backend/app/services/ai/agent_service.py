@@ -26,6 +26,7 @@ import secrets
 import time
 import uuid
 from collections import OrderedDict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -54,6 +55,9 @@ from app.services.ai import (
 from app.services.ai.provider import AiUnavailableError, Attachment, OnText, Provider, Turn
 
 logger = logging.getLogger(__name__)
+
+# How far the current request got (D132): stage, model steps, tools called. Names only, never content.
+progress: ContextVar[dict | None] = ContextVar("ai_progress", default=None)
 
 PARAGRAPH = chr(10) * 2  # between the texts of two agent steps
 MAX_CARDS = 3  # result cards kept on one answer
@@ -504,6 +508,8 @@ async def send_message(
     """`on_text` receives the answer as it is generated (streaming); the
     stored answer is exactly the text that was streamed."""
     started = time.perf_counter()
+    stage = {"stage": "prepare", "model_steps": 0, "tools": []}
+    progress.set(stage)  # read by the endpoint if this request fails (ai_request_failed)
     documents = await _own_documents(db, principal, document_ids)
     if documents and not settings.ai_documents_enabled:
         raise BusinessRuleError(
@@ -653,6 +659,7 @@ async def send_message(
             streamed["this_step"] = False
             used["requests"] += 1
             step = time.perf_counter()
+            stage.update(stage=f"model step {used['requests']}", model_steps=used['requests'])
             reply = await complete()
             timing["model_ms"].append(_ms_since(step))
             timing["first_chunk_ms"].append(reply.first_chunk_ms)
@@ -668,6 +675,8 @@ async def send_message(
             for call in reply.tool_calls:
                 used["tools"] += 1
                 step = time.perf_counter()
+                stage.update(stage=f"tool {call.name}")
+                stage["tools"].append(call.name)
                 outcome = await agent_tools.run_tool(db, principal, tools, call.name, call.arguments, context)
                 timing["tools_ms"] += _ms_since(step)
                 if outcome.action is not None:
@@ -717,6 +726,7 @@ async def send_message(
         db, user_id, status="ok", input_tokens=used["input"], output_tokens=used["output"],
         model_requests=used["requests"], tool_calls=used["tools"],
     )
+    stage.update(stage="save")
     step = time.perf_counter()
     await db.commit()
     logger.info(

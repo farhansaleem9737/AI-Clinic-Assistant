@@ -5,6 +5,7 @@ touches that user's own conversations and documents."""
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.auth import get_current_principal
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, DomainError, PermissionDeniedError
+from app.core.logging import request_id_var
 from app.core.permissions import Principal
 from app.core.storage import Storage, get_optional_storage, get_storage
 from app.db.session import get_db
@@ -131,10 +133,15 @@ async def send_message(
     """Sends the message (with any uploaded documents) and returns the
     assistant's answer. 503 AI_NOT_CONFIGURED when no provider is set up,
     503 AI_BUSY when this server is already answering its limit (D130)."""
-    with capacity.slot():
-        result = await agent_service.send_message(
-            db, principal, provider, storage, conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids
-        )
+    started = time.perf_counter()
+    try:
+        with capacity.slot():
+            result = await agent_service.send_message(
+                db, principal, provider, storage, conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids
+            )
+    except Exception as exc:
+        _log_failure(getattr(exc, "code", "AI_FAILED"), exc, started, body.conversation_id)
+        raise
     return _result(result)
 
 
@@ -143,6 +150,20 @@ def _result(result: agent_service.SendResult) -> SendResultRead:
         conversation=_conversation(result.conversation),
         user_message=_message(result.user_message),
         assistant_message=_message(result.assistant_message),
+    )
+
+
+def _log_failure(code: str, exc: BaseException, started: float, conversation_id) -> None:
+    """One line per failed assistant request (D132): where it stopped and why, by code. Never content."""
+    stage = agent_service.progress.get() or {}
+    logger.warning(
+        "ai_request_failed",
+        extra={
+            "code": code, "error": type(exc).__name__, "stage": stage.get("stage", "before start"),
+            "model_steps": stage.get("model_steps", 0), "tools": stage.get("tools", []),
+            "conversation_id": str(conversation_id) if conversation_id else None,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        },
     )
 
 
@@ -166,6 +187,17 @@ async def stream_message(
     async def on_text(chunk: str) -> None:
         await queue.put(("delta", {"text": chunk}))
 
+    started = time.perf_counter()
+
+    async def fail(code: str, message: str, exc: BaseException) -> None:
+        # Tell the browser first: a broken database connection must not also lose the error event.
+        await queue.put(("error", {"code": code, "message": message, "request_id": request_id_var.get()}))
+        _log_failure(code, exc, started, body.conversation_id)
+        try:
+            await db.rollback()
+        except Exception:
+            logger.warning("ai_stream_rollback_failed")
+
     async def run() -> None:
         try:
             # Taken here, in the task doing the work, so Stop or a dropped connection always returns it.
@@ -176,12 +208,10 @@ async def stream_message(
                 )
             await queue.put(("done", _result(result).model_dump(mode="json")))
         except DomainError as exc:
-            await db.rollback()
-            await queue.put(("error", {"code": exc.code, "message": exc.message}))
-        except Exception:
+            await fail(exc.code, exc.message, exc)
+        except Exception as exc:
             logger.exception("ai_stream_failed")
-            await db.rollback()
-            await queue.put(("error", {"code": "AI_FAILED", "message": "The assistant could not answer. Please try again."}))
+            await fail("AI_FAILED", "The assistant could not answer. Please try again.", exc)
         finally:
             await queue.put(None)
 
