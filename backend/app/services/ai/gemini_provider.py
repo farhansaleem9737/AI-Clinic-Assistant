@@ -12,6 +12,7 @@ shown (it can echo the request) and the API key is never logged.
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -122,12 +123,30 @@ class GeminiProvider:
         usage = None
         finish = None
         blocked = False
+        started = time.perf_counter()
+        first_chunk_ms = None
+        stream = None
         try:
+            # Three limits (D130): the first chunk, any pause mid-answer, and the whole step.
             async with asyncio.timeout(settings.ai_timeout_seconds):
-                stream = await self._client.aio.models.generate_content_stream(
-                    model=self.model, contents=to_contents(turns), config=_config(system, tools)
+                opened = await asyncio.wait_for(
+                    self._client.aio.models.generate_content_stream(
+                        model=self.model, contents=to_contents(turns), config=_config(system, tools)
+                    ),
+                    settings.ai_first_token_timeout_seconds,
                 )
-                async for chunk in stream:
+                stream = aiter(opened)
+                while True:
+                    if first_chunk_ms is None:
+                        wait = settings.ai_first_token_timeout_seconds - (time.perf_counter() - started)
+                    else:
+                        wait = settings.ai_stream_idle_timeout_seconds
+                    try:
+                        chunk = await asyncio.wait_for(anext(stream), max(wait, 0.05))
+                    except StopAsyncIteration:
+                        break
+                    if first_chunk_ms is None:
+                        first_chunk_ms = round((time.perf_counter() - started) * 1000, 1)
                     if chunk.usage_metadata is not None:
                         usage = chunk.usage_metadata
                     if chunk.prompt_feedback is not None and chunk.prompt_feedback.block_reason:
@@ -144,6 +163,14 @@ class GeminiProvider:
             raise gemini_failure(exc) from exc
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
             raise gemini_failure(exc) from exc
+        finally:
+            # Stopped, timed out or failed mid-answer: close the HTTP stream now.
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:  # already closed / connection gone
+                    pass
 
         calls = [
             ToolCall(id=p.function_call.id or f"call_{i}", name=p.function_call.name or "", arguments=dict(p.function_call.args or {}))
@@ -167,7 +194,10 @@ class GeminiProvider:
             input_tokens=(usage.prompt_token_count or 0) if usage else 0,
             output_tokens=((usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)) if usage else 0,
         )
-        return Reply(text=text, tool_calls=calls, raw=types.Content(role="model", parts=parts or [types.Part(text="")]), usage=tokens)
+        return Reply(
+            text=text, tool_calls=calls, raw=types.Content(role="model", parts=parts or [types.Part(text="")]), usage=tokens,
+            first_chunk_ms=first_chunk_ms,
+        )
 
 
 async def check_model(model: str, api_key: str, client: Any = None) -> dict:

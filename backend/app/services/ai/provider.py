@@ -84,6 +84,8 @@ class Reply:
     tool_calls: list[ToolCall]
     raw: Any = None
     usage: Usage | None = None
+    # Milliseconds from the request to its first streamed chunk (D130); None when not streamed.
+    first_chunk_ms: float | None = None
 
 
 # Receives answer text as it is generated (streaming); providers that do not

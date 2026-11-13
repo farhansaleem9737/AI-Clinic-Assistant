@@ -592,6 +592,26 @@ def measurements(reading: Reading) -> list[Measurement]:
     return analyse(reading).measurements
 
 
+def extract_document(data: bytes, content_type: str) -> MedicalExtraction:
+    """read() then analyse(): the whole CPU-bound reading, as one call for the
+    extraction worker (extraction_worker.run). Never raises for bad files."""
+    return analyse(read(data, content_type))
+
+
+_PARTS = {"measurements": Measurement, "conditions": Condition, "symptoms": Symptom, "sections": Section}
+
+
+def extraction_from_dict(data: dict) -> MedicalExtraction:
+    """The inverse of MedicalExtraction.as_dict(), for a stored extraction (D130).
+    Unknown keys are ignored; the stored version decides whether it is used at all."""
+    known = {f for f in MedicalExtraction.__dataclass_fields__}
+    values = {k: v for k, v in data.items() if k in known}
+    for key, kind in _PARTS.items():
+        fields = kind.__dataclass_fields__
+        values[key] = [kind(**{k: v for k, v in item.items() if k in fields}) for item in values.get(key) or []]
+    return MedicalExtraction(**values)
+
+
 def analyse(reading: Reading) -> MedicalExtraction:
     text = reading.text
     heading = next((re.sub(r"\s+", " ", l).strip() for p in reading.pages for l in p.text.splitlines() if l.strip()), None)

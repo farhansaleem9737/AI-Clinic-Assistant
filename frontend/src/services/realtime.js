@@ -32,9 +32,20 @@ const RECONNECT = 4000;
  * so the socket goes straight to the API host (wss://<api-host>/api/v1/ws).
  * Otherwise ws(s)://<host>/api/v1/ws from the API base URL (development: the
  * Vite proxy forwards it).
+ *
+ * null when it cannot work (D130): a production build with a relative API base
+ * and no VITE_REALTIME_URL would send the handshake through the Vercel rewrite,
+ * which drops the Upgrade header, so the API answers 404 and the tab retried
+ * for ever. The app then simply stays on its polling fallback.
  */
-export function socketUrl(base = apiUrl(""), location = window.location, configured = import.meta.env.VITE_REALTIME_URL) {
+export function socketUrl(
+  base = apiUrl(""),
+  location = window.location,
+  configured = import.meta.env.VITE_REALTIME_URL,
+  production = import.meta.env.PROD,
+) {
   if (configured) return configured;
+  if (production && !/^https?:\/\//i.test(base)) return null;
   const absolute = new URL(base, location.href);
   absolute.protocol = absolute.protocol === "https:" ? "wss:" : "ws:";
   absolute.pathname = `${absolute.pathname.replace(/\/$/, "")}/ws`;
@@ -129,6 +140,11 @@ export function createRealtimeClient({
 
   async function connect() {
     if (!started || socket) return;
+    const target = url();
+    if (!target) {
+      setStatus(STATUS.idle); // live updates are not configured for this deployment: never retry
+      return;
+    }
     const mine = generation;
     setStatus(STATUS.connecting);
     let ticket;
@@ -147,7 +163,7 @@ export function createRealtimeClient({
     }
     if (mine !== generation || !started) return;
 
-    const ws = new WebSocketImpl(url());
+    const ws = new WebSocketImpl(target);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ type: "auth", ticket }));
     ws.onmessage = (message) => {

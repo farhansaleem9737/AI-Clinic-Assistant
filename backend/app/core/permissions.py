@@ -21,6 +21,11 @@ class RoleCode(StrEnum):
     # Self-registered as a doctor, credentials not yet verified. Holds no
     # clinical permission: only their own application (D77).
     doctor_applicant = "doctor_applicant"
+    # Works for specific doctors only, invited by each of them (D131). Unlike the
+    # clinic-wide `receptionist` (front desk), holds no patient or appointment
+    # permission of its own: every such right comes from an active assignment
+    # to the doctor named in the request (see Delegation).
+    doctor_receptionist = "doctor_receptionist"
 
 
 class Perm(StrEnum):
@@ -47,6 +52,8 @@ class Perm(StrEnum):
     doctor_update = "doctor:update"
     doctor_deactivate = "doctor:deactivate"
     doctor_update_own = "doctor:update_own"
+    # A doctor invites, scopes and removes their own receptionists (D131).
+    receptionist_manage_own = "receptionist:manage_own"
 
     # Doctor applications: self-registration, then credential review
     doctor_application_manage_own = "doctor_application:manage_own"
@@ -101,6 +108,63 @@ class Perm(StrEnum):
     health_record_write_assigned = "health_record:write_assigned"
 
 
+class AssignmentPermission(StrEnum):
+    """What one doctor lets one of their receptionists do (D131). Stored on the
+    assignment, so the same person can hold different rights per doctor.
+    Nothing here reaches clinical content: documents, diagnoses, medications,
+    allergies and consultations are never delegated."""
+
+    appointments_view = "appointments_view"
+    appointments_create = "appointments_create"
+    appointments_update = "appointments_update"
+    appointments_cancel = "appointments_cancel"
+    patients_view = "patients_view"
+    patients_create = "patients_create"
+    patients_update = "patients_update"
+
+
+def normalize_assignment_permissions(values) -> frozenset[AssignmentPermission]:
+    """Unknown names raise ValueError. Acting on something implies seeing it:
+    any appointment right adds appointments_view; any patient right, and
+    booking (which needs a patient), add patients_view."""
+    perms = {AssignmentPermission(v) for v in values}
+    A = AssignmentPermission
+    if perms & {A.appointments_create, A.appointments_update, A.appointments_cancel}:
+        perms.add(A.appointments_view)
+    if perms & {A.patients_create, A.patients_update, A.appointments_create}:
+        perms.add(A.patients_view)
+    return frozenset(perms)
+
+
+# The existing permission each assignment right stands for while the receptionist
+# acts for that doctor. These are safe to lend only because every use of them is
+# row-scoped through services/access.py, which limits a delegated caller to the
+# one doctor's appointments and patients (and services that take a doctor id
+# from the request check it against the delegation).
+DELEGATED_PERMS: dict[AssignmentPermission, tuple[str, ...]] = {
+    AssignmentPermission.appointments_view: ("appointment:read_assigned",),
+    AssignmentPermission.appointments_create: ("appointment:create",),
+    AssignmentPermission.appointments_update: ("appointment:manage",),
+    AssignmentPermission.appointments_cancel: ("appointment:cancel_any",),
+    AssignmentPermission.patients_view: ("patient:read_assigned",),
+    AssignmentPermission.patients_create: ("patient:create",),
+    AssignmentPermission.patients_update: ("patient:update",),
+}
+
+
+@dataclass(frozen=True)
+class Delegation:
+    """This request acts for one doctor through an ACTIVE assignment, verified
+    against the database on every request (D131)."""
+
+    doctor_id: uuid.UUID
+    assignment_id: uuid.UUID
+    permissions: frozenset[AssignmentPermission]
+
+    def allows(self, permission: AssignmentPermission) -> bool:
+        return permission in self.permissions
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who is calling, and what they may do. Passed into services."""
@@ -110,6 +174,9 @@ class Principal:
     permissions: frozenset[str]
     doctor_id: uuid.UUID | None = None
     patient_id: uuid.UUID | None = None
+    # Set only for a doctor_receptionist acting for an assigned doctor (D131).
+    # Deliberately separate from doctor_id: a receptionist is never "the doctor".
+    delegation: Delegation | None = None
 
     @property
     def user_id(self) -> uuid.UUID:

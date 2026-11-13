@@ -7,9 +7,12 @@ and administrators nothing). A guessed id is "not found". Authorization is
 re-checked on every call, including follow-ups about the active document.
 
 Extraction: documents are read on this server (medical_reports) only when
-a tool is called, and each file is extracted once per content hash and
-extraction version (an in-process cache). A new extraction version never
-reuses older results; nothing is persisted.
+a tool is called, and each file is extracted once per content and
+extraction version (D130): the result is kept in document_extractions (and a
+small in-process cache in front of it), so later questions and restarts do
+not parse the file again. Reading runs in the extraction worker, never on the
+event loop. A new extraction version never reuses older results. The kept
+row is reached only through a document the caller was just authorized for.
 
 Questions: `focus` says what the user asked (summary, conditions,
 symptoms, measurements, abnormal, follow-up); the card leads with that part
@@ -24,23 +27,28 @@ the server's own extraction is what the user sees.
 """
 
 import logging
+import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
-from fastapi.concurrency import run_in_threadpool
 from pydantic import Field
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import DomainError, NotFoundError
 from app.core.permissions import Perm, Principal
 from app.core.storage import Storage, StorageError
+from app.core import clock
+from app.db import schema_check
+from app.models.document_extraction import DocumentExtraction
 from app.models.patient_document import PatientDocument
 from app.services import appointment_service, document_service, patient_service
-from app.services.ai import medical_reports
+from app.services.ai import extraction_worker, medical_reports
 
 logger = logging.getLogger(__name__)
 
@@ -197,11 +205,61 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
-async def _extract(storage: Storage | None, d: PatientDocument) -> medical_reports.MedicalExtraction:
+def _remember(key: tuple[str, str], extraction: medical_reports.MedicalExtraction) -> None:
+    _CACHE[key] = extraction
+    while len(_CACHE) > CACHE_SIZE:
+        _CACHE.popitem(last=False)
+
+
+async def _stored(db: AsyncSession, d: PatientDocument) -> medical_reports.MedicalExtraction | None:
+    """The kept extraction of this exact file content and extractor version, if any (D130)."""
+    row = await db.scalar(
+        select(DocumentExtraction.payload).where(
+            DocumentExtraction.file_id == d.file.id,
+            DocumentExtraction.version == medical_reports.EXTRACTION_VERSION,
+            DocumentExtraction.sha256 == d.file.sha256,
+        )
+    )
+    if row is None:
+        return None
+    try:
+        return medical_reports.extraction_from_dict(row)
+    except (TypeError, ValueError):
+        logger.warning("ai_document_extraction_unreadable", extra={"document_id": str(d.id)})
+        return None
+
+
+async def _keep(db: AsyncSession, d: PatientDocument, x: medical_reports.MedicalExtraction, ms: float) -> None:
+    """Saved with the request's own transaction; a concurrent first read of the same file is a no-op."""
+    await db.execute(
+        pg_insert(DocumentExtraction)
+        .values(file_id=d.file.id, sha256=d.file.sha256, version=x.version, status=x.status, payload=x.as_dict(),
+                duration_ms=int(ms), created_at=clock.utcnow())
+        .on_conflict_do_nothing(index_elements=["file_id", "version"])
+    )
+
+
+def _not_read(problem: str) -> medical_reports.MedicalExtraction:
+    return medical_reports.analyse(medical_reports.Reading(problem=problem))
+
+
+async def _extract(db: AsyncSession, storage: Storage | None, d: PatientDocument) -> medical_reports.MedicalExtraction:
+    """Once per file content and extractor version: memory, then the kept row,
+    then reading the file in the extraction worker (never on the event loop)."""
+    started = time.perf_counter()
     key = (d.file.sha256, medical_reports.EXTRACTION_VERSION)
     if d.file.sha256 and key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
+    # Until `alembic upgrade head` has added the table, only the memory cache is used.
+    persist = bool(d.file.sha256) and schema_check.state.get("status") != "behind"
+    if persist:
+        kept = await _stored(db, d)
+        if kept is not None:
+            _remember(key, kept)
+            logger.info("ai_document_extracted", extra={"document_id": str(d.id), "status": kept.status, "source": "stored",
+                                                        "ms": round((time.perf_counter() - started) * 1000, 1)})
+            return kept
     problem = None
     if storage is None:
         problem = "File storage is not available on this server right now."
@@ -219,15 +277,26 @@ async def _extract(storage: Storage | None, d: PatientDocument) -> medical_repor
     if problem:
         # Not cached: storage problems are usually temporary.
         return medical_reports.analyse(medical_reports.Reading(problem=problem))
-    reading = await run_in_threadpool(medical_reports.read, data, d.file.content_type)
-    del data  # the file itself is never kept
-    extraction = await run_in_threadpool(medical_reports.analyse, reading)
+    download_ms = (time.perf_counter() - started) * 1000
+    try:
+        extraction = await extraction_worker.run(medical_reports.extract_document, data, d.file.content_type)
+    except extraction_worker.ExtractionBusy:
+        # Not kept: asking again shortly works.
+        return _not_read("The server is busy reading other documents. Please ask again in a minute.")
+    except extraction_worker.ExtractionTimeout:
+        return _not_read("This document took too long to read on this server (it may be very large). Please try again later.")
+    except extraction_worker.ExtractionFailed:
+        return _not_read("This document could not be read on this server right now (it may be too large).")
+    finally:
+        del data  # the file itself is never kept
+    ms = (time.perf_counter() - started) * 1000
     if d.file.sha256:
-        _CACHE[key] = extraction
-        while len(_CACHE) > CACHE_SIZE:
-            _CACHE.popitem(last=False)
-    logger.info("ai_document_extracted", extra={"document_id": str(d.id), "status": extraction.status,
-                                                "measurements": len(extraction.measurements), "version": extraction.version})
+        _remember(key, extraction)
+    if persist:
+        await _keep(db, d, extraction, ms - download_ms)
+    logger.info("ai_document_extracted", extra={"document_id": str(d.id), "status": extraction.status, "source": "read",
+                                                "measurements": len(extraction.measurements), "version": extraction.version,
+                                                "download_ms": round(download_ms, 1), "ms": round(ms, 1)})
     return extraction
 
 
@@ -386,7 +455,7 @@ async def explain_medical_document(db: AsyncSession, principal: Principal, a: Ex
             document = (_by_report_date(rows) if a.which == "latest_report_date" else rows)[0]
     except DomainError as exc:
         return _outcome({"error": exc.message})
-    x = await _extract(ctx.storage, document)
+    x = await _extract(db, ctx.storage, document)
     ctx.active_document_id = document.id
     logger.info("ai_document_read", extra={"document_id": str(document.id), "by": str(principal.user_id),
                                           "focus": a.focus, "measurements": len(x.measurements)})
@@ -410,7 +479,7 @@ async def summarize_medical_documents(db: AsyncSession, principal: Principal, a:
 
     processed, skipped, by_test, shareable = [], [], {}, True
     for d in sorted(documents, key=lambda d: (_day(d), d.created_at)):  # oldest first
-        x = await _extract(ctx.storage, d)
+        x = await _extract(db, ctx.storage, d)
         shareable = shareable and _shareable(x)
         meta = _meta(d)
         if x.problem or not x.pages:

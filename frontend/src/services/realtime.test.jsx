@@ -93,6 +93,21 @@ describe("connecting", () => {
     // Production: the socket bypasses Vercel's rewrite and goes to the API host.
     expect(socketUrl("/api/v1", { href: "https://app.vercel.app/" }, "wss://api.onrender.com/api/v1/ws")).toBe("wss://api.onrender.com/api/v1/ws");
   });
+
+  it("a production build behind the rewrite without VITE_REALTIME_URL never opens a socket (no 404 loop)", async () => {
+    expect(socketUrl("/api/v1", { href: "https://app.vercel.app/" }, "", true)).toBeNull();
+    expect(socketUrl("https://api.example.com/api/v1", { href: "https://app.example.com/" }, "", true)).toBe("wss://api.example.com/api/v1/ws");
+    const requestTicket = vi.fn();
+    const offline = createRealtimeClient({ requestTicket, WebSocketImpl: FakeSocket, url: () => null, random: () => 0, win, doc });
+    const before = FakeSocket.all.length;
+    offline.start();
+    await flush();
+    vi.advanceTimersByTime(120_000);
+    expect(requestTicket).not.toHaveBeenCalled();
+    expect(FakeSocket.all).toHaveLength(before);
+    expect(offline.status).toBe(STATUS.idle);
+    offline.stop();
+  });
 });
 
 describe("events", () => {

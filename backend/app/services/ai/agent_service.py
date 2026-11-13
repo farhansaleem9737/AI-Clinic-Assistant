@@ -25,10 +25,10 @@ import re
 import secrets
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,9 @@ from app.models.ai import AiConversation, AiDocument, AiMessage
 from app.models.appointment import AppointmentStatus, CancellationReason
 from app.schemas.appointment import AppointmentCreate, Reschedule, StatusChange
 from app.services import appointment_service
-from app.services.ai import document_processor, guardrails, medical_reports, medical_tools, tools as agent_tools, usage_service
+from app.services.ai import (
+    document_processor, extraction_worker, guardrails, medical_reports, medical_tools, tools as agent_tools, usage_service,
+)
 from app.services.ai.provider import AiUnavailableError, Attachment, OnText, Provider, Turn
 
 logger = logging.getLogger(__name__)
@@ -178,9 +180,14 @@ async def upload_documents(
                 f"{filename} is larger than {settings.ai_max_file_bytes // (1024 * 1024)} MB", code="FILE_TOO_LARGE"
             )
         try:
-            extracted = await run_in_threadpool(document_processor.extract, data, filename)
-        except UnsupportedFileError as exc:
-            raise UnsupportedFileError(f"{filename}: {exc.message}", code=exc.code) from exc
+            extracted = await extraction_worker.run(document_processor.extract_or_refusal, data, filename)
+        except extraction_worker.ExtractionBusy:
+            raise AiUnavailableError("The server is busy reading other documents. Please try again in a minute.", code="AI_BUSY") from None
+        except (extraction_worker.ExtractionTimeout, extraction_worker.ExtractionFailed):
+            raise UnsupportedFileError(f"{filename}: the file took too long to read on this server", code="FILE_TOO_COMPLEX") from None
+        if isinstance(extracted, tuple):
+            message, code = extracted
+            raise UnsupportedFileError(f"{filename}: {message}", code=code)
         prepared.append((filename, data, extracted))
 
     documents = []
@@ -256,6 +263,24 @@ def _fence(document: AiDocument, text: str | None, note: str | None = None, cont
 
 # ---- the agent loop -----------------------------------------------------------------------
 
+# What each attached document is (D129), worked out once per document and
+# extractor version (D130): the classifier runs dozens of regular expressions
+# over up to 120k characters, on the event loop, for every message in the history.
+_CLASSIFIED: "OrderedDict[tuple[uuid.UUID, str], medical_reports.ContentClass]" = OrderedDict()
+CLASSIFIED_SIZE = 256
+
+
+def _classified(document: AiDocument) -> medical_reports.ContentClass:
+    key = (document.id, medical_reports.EXTRACTION_VERSION)
+    found = _CLASSIFIED.get(key)
+    if found is None:
+        found = _CLASSIFIED[key] = medical_reports.classify_text(document.extracted_text or "")
+        while len(_CLASSIFIED) > CLASSIFIED_SIZE:
+            _CLASSIFIED.popitem(last=False)
+    else:
+        _CLASSIFIED.move_to_end(key)
+    return found
+
 
 async def _user_turn(
     message: AiMessage, documents: dict[uuid.UUID, AiDocument], provider: Provider, storage: Storage | None, *, latest: bool, budget: list[int]
@@ -272,7 +297,7 @@ async def _user_turn(
             budget[0] -= allowance
             body = (document.extracted_text or "")[:allowance]
             note = "" if allowance == len(document.extracted_text or "") else "\n[Truncated: the document is longer than the assistant can read at once.]"
-            found = medical_reports.classify_text(document.extracted_text or "")
+            found = _classified(document)
             content = found.content_class + (f": {found.label}" if found.label else "")
             text += "\n\n" + _fence(document, body + note, content=content)
             continue
@@ -588,7 +613,7 @@ async def send_message(
     streamed = {"any": False, "this_step": False}
     used = {"input": 0, "output": 0, "requests": 0, "tools": 0}
     # Where the time goes (logged as ai_timing; durations only, never content).
-    timing = {"prepare_ms": _ms_since(started), "model_ms": [], "tools_ms": 0.0}
+    timing = {"prepare_ms": _ms_since(started), "model_ms": [], "first_chunk_ms": [], "tools_ms": 0.0}
     user_id = principal.user_id  # read now: a rollback below expires the user row
 
     async def show(block: str) -> None:
@@ -630,6 +655,7 @@ async def send_message(
             step = time.perf_counter()
             reply = await complete()
             timing["model_ms"].append(_ms_since(step))
+            timing["first_chunk_ms"].append(reply.first_chunk_ms)
             if reply.usage is not None:
                 used["input"] += reply.usage.input_tokens
                 used["output"] += reply.usage.output_tokens

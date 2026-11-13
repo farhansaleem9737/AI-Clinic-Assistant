@@ -1,209 +1,107 @@
-# Performance and deployment notes
+# Responsiveness on a small instance (D130)
 
-Measured 2026-11-03 from the development machine against Neon (AWS ap-southeast-1, Singapore), pooled endpoint, asyncpg.
+The API runs as one uvicorn process on Render's free plan: 0.1 CPU and 512 MB.
+Render restarts the service when `GET /health` stops answering within about 5 s.
+This page covers what can block that process, what keeps it responsive, and how
+to check that the fixes worked in production.
 
-## Where request time goes
+## What blocked it
 
-| Measurement | Result |
+1. **PDF reading shared the interpreter lock with the web server.** pypdf's
+   layout extraction is pure Python and CPU-bound. In a worker *thread* it still
+   competes with the event loop for the GIL. Locally a 50-page report costs
+   0.56 s of CPU, and while it runs the loop gets only half its turns. At 0.1 CPU
+   the same work takes several seconds of wall time, and every other request
+   waits behind it.
+2. **Every question re-read the document after a restart.** Extractions lived
+   only in an in-process cache. A restart emptied it, so the next question
+   downloaded and parsed every file again. A summary can parse up to 10 files.
+   That made the next restart more likely.
+3. **`/health` was a sync `def`.** Starlette runs a sync route in its thread
+   pool, so a health check needed a free thread and had to win the GIL back.
+4. **The chat-attachment classifier ran on the event loop.** It ran on every
+   message in the history: about 135 ms locally for 60,000 characters, and
+   10× slower on Render.
+
+Gemini was already streamed with the async client
+(`client.aio.models.generate_content_stream`, `async for`). The network wait
+never blocked the loop.
+
+## What keeps it responsive now
+
+| Part | Behaviour |
 |---|---|
-| TCP connect to Neon (= network round trip) | ~100–120 ms |
-| New connection (TCP + TLS + auth) | ~640 ms pooled endpoint, ~730 ms direct |
-| `SELECT 1` on an open connection | ~98 ms pooled, ~119 ms direct |
-| Server-side execution (`EXPLAIN ANALYZE`) | under 1 ms |
-| `pool_pre_ping` per checkout (asyncpg: BEGIN, `;`, ROLLBACK) | ~360 ms |
+| `extraction_worker` | Document reading runs in **one worker process** at OS priority +10, so the web process gets the CPU first. One read runs at a time. `AI_EXTRACTION_QUEUE_LIMIT` (4) caps how many may wait or run; more are refused as busy. Each read is capped at `AI_EXTRACTION_TIMEOUT_SECONDS` (60): past that the worker is killed and replaced. A worker that dies (for example out of memory) is replaced. Workers recycle after 25 documents. Development and tests use one dedicated thread instead (`AI_EXTRACTION_ISOLATION`). |
+| `document_extractions` | Each file's extraction is **kept**, one row per file and extractor version, checked against the file's sha256. Later questions and restarts reuse it. A new `EXTRACTION_VERSION` writes a new row and never reads old ones. A row is deleted with its file (cascade, and when the stored object is deleted). It is read only after `document_service` has authorized the caller for the owning document. Storage errors, busy and timeouts are never kept. |
+| `/health`, `/` | `async def`, GET and HEAD. They touch nothing: no database, storage or AI. |
+| `capacity` | At most `AI_MAX_CONCURRENT_REQUESTS` (3) assistant requests at once. One more gets 503 `AI_BUSY`, or an `error` event on the stream, right away. The slot is returned however the request ends, including Stop. Nothing else is limited. |
+| Gemini step | Three limits: first chunk `AI_FIRST_TOKEN_TIMEOUT_SECONDS` (25), a pause mid-answer `AI_STREAM_IDLE_TIMEOUT_SECONDS` (20), and the whole step `AI_TIMEOUT_SECONDS` (30). Each fails with `AI_TIMEOUT`, which the stream reports as an `error` event, so the thinking indicator stops. The HTTP stream is closed on timeout, error or Stop. Appointment actions are never retried. |
+| `loop_monitor` | Logs `event_loop_lag` when the loop is late by more than `EVENT_LOOP_LAG_WARNING_MS` (500). The log line includes what was running: `ai_active`, `extractions` and `rss_mb`. |
+| Logs | `ai_timing` now includes `first_chunk_ms` for each model step. `ai_document_extracted` includes `source` (`read` or `stored`), `download_ms` and `ms`. Durations and counts only, never content. |
 
-Neon is not slow; the distance is. Each SQL statement costs one round trip, and every
-request also pays BEGIN and (after the response is sent) ROLLBACK/COMMIT. Fewer
-statements per request is what makes endpoints faster.
+## Measured locally
 
-The pooled endpoint (`-pooler` in the host) connects faster and handles many
-connections; keep using it.
+Measured on the real app, with 3 reads of a 50-page PDF built from the
+synthetic fixtures. Windows, 12 cores, so the absolute numbers are far better
+than Render's. Compare the rows with each other, not with production.
 
-## Connection pool (`app/db/database.py`)
-
-- No `pool_pre_ping`. A connection idle for more than `DB_PING_AFTER_IDLE_SECONDS`
-  (default 30) is checked with a single `;` (one round trip, PgBouncer-safe). A
-  dead one is discarded and replaced, so the request still succeeds
-  (`tests/test_db_pool.py`).
-- `DB_POOL_RECYCLE_SECONDS` (240) retires connections before Neon's 5-minute
-  auto-suspend can close them.
-- `DB_POOL_SIZE` (5) + `DB_MAX_OVERFLOW` (10) per process. Neon's pooler accepts
-  far more client connections than this.
-
-## Local PostgreSQL for development (optional)
-
-Local Postgres removes the ~100 ms per statement, so development and the test suite
-run much faster. Neon stays for staging and production. `DATABASE_URL` alone
-decides which one is used; no code change is needed.
-
-```bash
-createdb clinic_ai                      # PostgreSQL 16+
-# backend/.env:
-# DATABASE_URL=postgresql+asyncpg://postgres:YOUR_PASSWORD@localhost:5432/clinic_ai
-cd backend
-alembic upgrade head                    # schema from the existing migrations
-python -m scripts.seed_demo             # optional: fictional demo data only
-```
-
-Do not copy the Neon database to a laptop: it may hold patient data. Tests create
-their own database (`TEST_DATABASE_URL`, default `<name>_test`).
-
-## AI requests
-
-Each AI message logs `ai_timing` with:
-- `prepare_ms`: auth, conversation, limits and history queries;
-- `model_ms`: one entry per Gemini call, including the tool-choice step;
-- `tools_ms`: tool execution, including their database queries;
-- `save_ms`: final commit;
-- `total_ms`.
-
-It logs durations only, never content. Gemini time is outside our control. The
-database part is a handful of round trips, so it shrinks to almost nothing when the
-backend runs next to the database.
-
-## Deployment (not done)
-
-- **Region:** run the backend in AWS ap-southeast-1 (Singapore), the same region
-  as Neon, or the nearest region of another host (e.g. Render, Fly.io or Railway
-  Singapore). A round trip then drops from ~100 ms to ~1–2 ms, so a dashboard
-  request goes from ~0.5–1 s to a few tens of milliseconds plus the user's own
-  distance to the server.
-- **Serving:** serve the built frontend from a CDN or the same host. Keep `/api`
-  same-origin (as the Vite proxy does in development) so the SameSite=Strict
-  refresh cookie keeps working.
-- **Environment variables:**
-  - **Secrets** (in the host's secret store, never in the image or the repo):
-    `DATABASE_URL` (pooled endpoint, `?ssl=require`), `SECRET_KEY`, `GEMINI_API_KEY`
-    and the storage credentials.
-  - **Other settings:** `ENVIRONMENT=production` (enables Secure cookies),
-    `CORS_ORIGINS` (the real site only), `CLINIC_TIMEZONE`, `LOG_LEVEL=INFO`,
-    `SQL_ECHO=false`, and `DB_*` only if tuning is needed.
-- **AI and patient data:** keep `AI_PHI_ALLOWED=false` and
-  `AI_ALLOW_SYNTHETIC_DOCUMENTS=false` until a Gemini paid tier with a data
-  processing agreement is in place.
-- **Server process:** run uvicorn with a few workers, and remember each has its own
-  pool (workers × (pool_size + overflow) connections). Put HTTPS termination in
-  front.
-- **Migrations:** run `alembic upgrade head` as a deliberate release step, never
-  automatically on start.
-
-## Navigation, cached data and drafts (frontend, D107)
-
-Measured 2026-11-03 with headless Chrome against the real backend (on the developer
-machine, Neon in Singapore). "Mobile" emulates 150 ms latency, 4 Mbit/s and a 4×
-slower CPU.
-
-### Routing
-
-- One route branch renders the app shell for every signed-in page, the doctor
-  directory and departments included, so the sidebar, top bar and assistant
-  (its open conversation) are never remounted by navigation.
-- The dashboard is in the main bundle (most roles land on it); other pages load on
-  demand through `routes/lazyPage.jsx`. Pointing at, focusing or touching an in-app
-  link starts that page's download.
-- A failed page download is retried twice (0.5 s, 1.5 s). If it still fails, the
-  page says so, with **Try again** (downloads again, no reload) and **Reload app**.
-  Nothing reloads the document automatically.
-- The idle-time prefetch scheduler (D106) is removed.
-
-### Cached server data
-
-`useFetch(fetcher, deps, { query: "category/name" })` keeps results in one app-level
-TanStack Query client (`services/queryClient.js`), in memory only:
-
-- **Keys start with the signed-in user**, and the cache is emptied whenever the
-  user changes (sign-out, expired session, another account).
-- **Revisiting a page** shows its data at once. Data older than its category's
-  freshness is refreshed in the background, without a skeleton.
-- **Unused data** is dropped after 5 minutes.
-- **Identical requests** (several components, React's development double-mount)
-  are sent once.
-- **Failed reads** are repeated once, after 0.8 s, for a server or network failure
-  (5xx or no answer), never for 4xx. A failed background refresh keeps the data on
-  screen.
-- **Unnamed calls are not cached**, for example the last availability check before
-  booking and a patient's documents.
-
-| Category | Fresh for | Examples |
+| Scenario | Loop lag p50 / p99 / max | `/health` p50 / max |
 |---|---|---|
-| departments, specializations, settings | 5 min | directory filters, department lists |
-| doctors | 2 min | directory, doctor profiles, staff options |
-| profile | 1 min | the signed-in user's own patient or doctor profile |
-| dashboard, appointments, patients, users, schedule | 30 s | dashboards, lists, weekly hours |
-| availability | 0 (always re-checked) | free times; shown while re-checking |
+| Idle | 6.4 / 14.2 / 14.2 ms | 1.8 / 4.2 ms |
+| Before: shared thread pool | 21.3 / 53.8 / 53.8 ms | 1.7 / 32.6 ms |
+| After: worker process | 6.5 / 8.5 / 8.5 ms | 1.8 / 3.1 ms |
+| After: two conversations reading at once | 4.7 / 8.8 / 8.8 ms | 2.2 / 3.0 ms |
 
-**After a successful change**, an axios hook marks the affected categories stale. It
-uses the first path segment of the request: `appointments` → appointments,
-dashboard, availability, schedule, patients; `doctors` (incl. weekly hours) →
-doctors, schedule, availability, dashboard, departments, specializations, profile;
-and so on. The page on screen refreshes at once; other pages refresh when next
-opened.
-- Assistant messages change nothing. A confirmed assistant action may change
-  anything, so everything is refreshed.
-- Nothing is shown as done before the server confirms it; the booking keeps its
-  idempotency key.
+Rebuilding a kept extraction takes 1 ms from a 107 KB JSON payload, plus one
+database round trip. Before, a cold cache meant an R2 download and a full parse.
 
-### Drafts
+## Configuration
 
-`useDraft(key, initial)` (`hooks/useDraft.js`, `services/drafts.js`) is
-useState that survives leaving the page. It is kept in memory for the signed-in
-user and emptied on sign-out or another account. It holds:
-- **Booking:** step, doctor, chosen time, the date being looked at, the doctor
-  search and filters, and the typed reason.
-- **List pages:** search, filters and page on Departments, Admin
-  Doctors/Departments/Users, Patients and the doctor's appointments.
-- **Weekly hours:** unsaved edits, restored only onto the same saved week.
+Render (`render.yaml` defaults are fine):
 
-**Surviving a reload:** a patient's own booking keeps the doctor id, the step and
-the time (never the reason) in `sessionStorage`, for 30 minutes.
-- The stored value is versioned and scoped to the user, and is validated before
-  use.
-- A malformed or expired value is discarded.
-- Sign-out removes it.
-- On restore the doctor is validated again, and the confirm step re-checks the
-  time. A kept time is never a reservation.
+- Run `python -m alembic upgrade head` once to add `document_extractions`.
+  Until then the server keeps working with the memory cache only: `/health`
+  shows `"schema": "behind"`.
+- Leave `WEB_CONCURRENCY` / worker count at 1. The extraction worker is the
+  second process, about 50–70 MB while in use.
 
-### Measurements
+Vercel:
 
-- **Before:** every return showed a skeleton and repeated its requests.
+- Set `VITE_REALTIME_URL=wss://<render-host>/api/v1/ws` and redeploy. Without
+  it, a production build now skips the live-updates socket and polls instead.
+  Before, it retried through the `/api` rewrite, which drops the WebSocket
+  `Upgrade` header, so Render answered `GET /api/v1/ws 404` again and again.
+- `CORS_ORIGINS` on Render must contain the Vercel origin. The socket checks it.
 
-  | Return to a page already visited | Before | After |
-  |---|---|---|
-  | Content on screen, desktop | 0.8–2.9 s | 9–28 ms |
-  | Content on screen, mobile | 0.8–1.9 s | 72–176 ms |
-  | API requests | 2–6 | 0 (while fresh) |
+## Checking it in production
 
-- **First visits are unchanged:** they still wait for Neon.
-- **Development server (React StrictMode):** every request used to be sent twice,
-  including `/auth/me`. Now each is sent once, apart from a few hand-written
-  effects.
-- **Failed page download:**
-  - Before: one attempt, then a message whose Try again never recovered.
-  - After: 3 attempts in about 2 s, then the message; Try again recovers without
-    a reload.
+1. **Logs:** look for `event_loop_lag`. None, or only single lines under about
+   1 s, is healthy. A burst with `extractions: 1` points at document reading.
+   A burst with `extractions: 0` points at something else; note `ai_active`.
+2. **Logs:** the first question about a document shows
+   `ai_document_extracted … "source": "read"`. Later questions, even after a
+   restart, show `"source": "stored"` with a small `ms`.
+3. **Logs:** `ai_timing` → `first_chunk_ms` is the model's own latency.
+   `prepare_ms` and `tools_ms` are ours.
+4. **Metrics:** Render → Events should show no "health check failed" restarts
+   while people use the assistant. Watch Metrics → Memory: the worker process
+   adds about 50–70 MB. If memory approaches 512 MB, lower
+   `AI_EXTRACTION_QUEUE_LIMIT` or move to a paid instance.
+5. **By hand:** while an answer is streaming, run
+   `curl -s -o /dev/null -w "%{time_total}\n" https://<render-host>/health`.
+   It should answer in well under a second.
 
-### Backend: dropped database connections
+## Remaining limits
 
-A connection that drops mid-request (seen as `/auth/me` 500s from Neon) now
-answers 503 `DATABASE_UNAVAILABLE` with `Retry-After: 1`, instead of a generic 500.
-- The transaction is rolled back, and the pool discards the connection.
-- The frontend repeats a failed read once, and session restore retries `/auth/me`
-  once.
-- Changes are never repeated automatically.
-
-### Redis: not added
-
-Measured earlier (D105): queries execute in under 1 ms on the server. Request time
-is network round trips to Neon (~100 ms each from the developer machine, ~1–2 ms
-from a backend in Singapore).
-- **Department and directory reads** are already one or two statements.
-- **Dashboard aggregates** are one statement per section, are per-user or
-  per-clinic-day, and change with every booking.
-- **A Redis cache** next to the backend would save about 1–2 ms per cached read.
-  It would also add a service, invalidation rules for every write, and another
-  failure mode.
-- **The browser cache above** already removes repeat reads for each user.
-
-Reconsider Redis only if a measured endpoint stays slow after the backend runs
-next to the database. If added, it would be cache-aside, optional at runtime, and
-limited to public reference data (departments, directory) with short TTLs.
+- **CPU:** 0.1 CPU is shared by everything. The worker yields to the web
+  process but still takes the CPU when that process is idle. A large first
+  read can take tens of seconds, bounded by the 60 s limit, after which the
+  user is asked to try later. A paid instance (Starter, 0.5 CPU) removes most of
+  this.
+- **Database connections:** an assistant request holds one connection while
+  it waits for the model, because its transaction stays open. The concurrency
+  limit keeps this at 3.
+- **Memory cache:** the in-process cache (up to 64 extractions) still exists in
+  front of the database row.
+- **Chat uploads:** these are off in production and are still read when
+  uploaded, now in the worker.

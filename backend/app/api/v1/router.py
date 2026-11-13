@@ -18,6 +18,7 @@ from app.api.v1.endpoints import (
     patients,
     queue,
     realtime,
+    receptionists,
     schedules,
     users,
     workspace,
@@ -32,6 +33,10 @@ api_router.include_router(users.router)
 api_router.include_router(users.roles_router)
 api_router.include_router(departments.public_router)
 api_router.include_router(departments.router)
+# Before the doctors routers, so /doctors/me/... is not read as /doctors/{doctor_id} (D131).
+api_router.include_router(receptionists.doctor_router)
+api_router.include_router(receptionists.public_router)
+api_router.include_router(receptionists.router)
 api_router.include_router(doctors.public_router)
 api_router.include_router(doctors.router)
 api_router.include_router(catalog.public_router)

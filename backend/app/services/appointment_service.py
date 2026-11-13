@@ -812,6 +812,7 @@ async def book(
 ) -> tuple[AppointmentView, bool]:
     """Returns (appointment, replayed). A repeated Idempotency-Key returns the
     original appointment instead of booking again."""
+    access.ensure_delegated_doctor(principal, data.doctor_id)
     if idempotency_key:
         existing = await db.scalar(
             select(Appointment).where(
@@ -1077,6 +1078,7 @@ async def reschedule(
     appointment_state.authorize_reschedule(ctx)
 
     doctor_id = data.doctor_id or old.doctor_id
+    access.ensure_delegated_doctor(principal, doctor_id)
     await _serialize_bookings(db, doctor_id, old.patient_id)
     # The old appointment's own time does not count as busy: moving it by
     # fifteen minutes within its current slot is allowed.

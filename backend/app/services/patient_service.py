@@ -182,7 +182,11 @@ async def list_patients(
     return await paginate(db, query, params)
 
 
-async def _get_for_update(db: AsyncSession, patient_id: uuid.UUID) -> Patient:
+async def _get_for_update(db: AsyncSession, patient_id: uuid.UUID, principal: Principal | None = None) -> Patient:
+    # Front desk and admins may change any patient (they see all). A doctor's
+    # receptionist (D131) only one they can see while working for that doctor.
+    if principal is not None and principal.delegation is not None:
+        return await access.get_readable_patient(db, principal, patient_id)
     patient = await db.get(Patient, patient_id)
     if patient is None:
         raise NotFoundError("Patient not found")
@@ -190,7 +194,7 @@ async def _get_for_update(db: AsyncSession, patient_id: uuid.UUID) -> Patient:
 
 
 async def update_patient(db: AsyncSession, principal: Principal, patient_id: uuid.UUID, data: PatientUpdate) -> Patient:
-    patient = await _get_for_update(db, patient_id)
+    patient = await _get_for_update(db, patient_id, principal)
     changes = data.model_dump(exclude_unset=True)
     for required in ("first_name", "last_name", "date_of_birth", "sex_at_birth"):
         if required in changes and changes[required] is None:
@@ -257,7 +261,7 @@ async def update_own_profile(db: AsyncSession, principal: Principal, data: Patie
 
 
 async def set_active(db: AsyncSession, principal: Principal, patient_id: uuid.UUID, active: bool) -> Patient:
-    patient = await _get_for_update(db, patient_id)
+    patient = await _get_for_update(db, patient_id, principal)
     if not active and (upcoming := await appointment_service.count_upcoming(db, patient_id=patient.id)):
         raise ConflictError(
             "This patient has upcoming appointments; cancel them first",
@@ -307,7 +311,7 @@ async def _ensure_unlinked(db: AsyncSession, patient: Patient) -> None:
 
 
 async def link_account(db: AsyncSession, principal: Principal, patient_id: uuid.UUID, user_id: uuid.UUID) -> Patient:
-    patient = await _get_for_update(db, patient_id)
+    patient = await _get_for_update(db, patient_id, principal)
     await _ensure_unlinked(db, patient)
     user = await db.get(User, user_id)
     if user is None:
@@ -328,7 +332,7 @@ async def create_account(
     db: AsyncSession, principal: Principal, patient_id: uuid.UUID, *, email: str, password: str
 ) -> Patient:
     """Give an existing (walk-in) patient a portal login."""
-    patient = await _get_for_update(db, patient_id)
+    patient = await _get_for_update(db, patient_id, principal)
     await _ensure_unlinked(db, patient)
     user = await auth_service.create_user(db, name=patient.full_name, email=email, password=password)
     await rbac_service.grant_roles(db, user.id, [RoleCode.patient], granted_by=principal.user_id)
@@ -354,10 +358,10 @@ async def _remove_photo(db: AsyncSession, storage: Storage, principal:Principal,
 async def set_patient_photo(
         db: AsyncSession, storage: Storage, principal: Principal, patient_id: uuid.UUID, checked: CheckedFile
 ) -> Patient:
-    return await _set_photo(db, storage, principal, await _get_for_update(db, patient_id), checked)
+    return await _set_photo(db, storage, principal, await _get_for_update(db, patient_id, principal), checked)
 
 async def remove_patient_photo(db:AsyncSession, storage: Storage, principal:Principal, patient_id: uuid.UUID) -> Patient:
-    return await _remove_photo(db, storage, principal, await _get_for_update(db, patient_id))
+    return await _remove_photo(db, storage, principal, await _get_for_update(db, patient_id, principal))
 
 async def set_own_photo(db: AsyncSession, storage: Storage, principal: Principal, checked: CheckedFile) -> Patient:
     return await _set_photo(db, storage, principal, await get_own(db, principal), checked)

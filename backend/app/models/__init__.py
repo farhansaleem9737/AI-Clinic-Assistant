@@ -12,12 +12,14 @@ from app.models.catalog import (
 )
 from app.models.department import Department
 from app.models.doctor import Doctor, DoctorEducation, DoctorExperience
+from app.models.document_extraction import DocumentExtraction
 from app.models.email import EmailOutbox
 from app.models.email_verification import EmailVerificationCode
 from app.models.health_record import PatientAllergy, PatientDiagnosis, PatientMedication
 from app.models.doctor_application import DoctorApplication, DoctorApplicationDocument
 from app.models.notification import ClinicSettings, FollowUp, Notification, NotificationPreference
 from app.models.oauth import OAuthFlow, OAuthIdentity
+from app.models.doctor_receptionist import DoctorReceptionist, ReceptionistInvitation
 from app.models.password_reset import PasswordResetToken
 from app.models.patient import Patient
 from app.models.rbac import Permission, Role, RolePermission, UserRole
@@ -45,6 +47,7 @@ __all__ = [
     "DoctorEducation",
     "DoctorExperience",
     "DoctorSpecialization",
+    "DocumentExtraction",
     "MedicalTopic",
     "MedicalTopicSpecialization",
     "EmailOutbox",
@@ -60,6 +63,8 @@ __all__ = [
     "OAuthFlow",
     "OAuthIdentity",
     "PasswordResetToken",
+    "DoctorReceptionist",
+    "ReceptionistInvitation",
     "Role",
     "RolePermission",
     "ScheduleException",

@@ -135,3 +135,12 @@ def extract(data: bytes, filename: str) -> Extracted:
         return Extracted(TEXT, "txt", "ready" if text else "no_text", text or None, None)
     # Images: stored as they are; only a vision-capable model can read them.
     return Extracted(kind, EXTENSIONS[kind], "no_text", None, None, "An image: readable only by a vision-capable model.")
+
+
+def extract_or_refusal(data: bytes, filename: str) -> Extracted | tuple[str, str]:
+    """extract() for the extraction worker (D130): a refused file comes back as
+    (message, code) instead of an exception, so nothing has to be unpickled."""
+    try:
+        return extract(data, filename)
+    except UnsupportedFileError as exc:
+        return exc.message, exc.code

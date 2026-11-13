@@ -29,7 +29,7 @@ from app.schemas.ai import (
     SendMessage,
     SendResultRead,
 )
-from app.services.ai import agent_service, tools as agent_tools, usage_service
+from app.services.ai import agent_service, capacity, tools as agent_tools, usage_service
 from app.services.ai.document_processor import EXTENSIONS
 from app.services.ai.provider import Provider, get_provider
 
@@ -129,10 +129,12 @@ async def send_message(
     storage: Storage | None = Depends(get_optional_storage),
 ):
     """Sends the message (with any uploaded documents) and returns the
-    assistant's answer. 503 AI_NOT_CONFIGURED when no provider is set up."""
-    result = await agent_service.send_message(
-        db, principal, provider, storage, conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids
-    )
+    assistant's answer. 503 AI_NOT_CONFIGURED when no provider is set up,
+    503 AI_BUSY when this server is already answering its limit (D130)."""
+    with capacity.slot():
+        result = await agent_service.send_message(
+            db, principal, provider, storage, conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids
+        )
     return _result(result)
 
 
@@ -166,10 +168,12 @@ async def stream_message(
 
     async def run() -> None:
         try:
-            result = await agent_service.send_message(
-                db, principal, provider, storage,
-                conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids, on_text=on_text,
-            )
+            # Taken here, in the task doing the work, so Stop or a dropped connection always returns it.
+            with capacity.slot():
+                result = await agent_service.send_message(
+                    db, principal, provider, storage,
+                    conversation_id=body.conversation_id, text=body.text, document_ids=body.document_ids, on_text=on_text,
+                )
             await queue.put(("done", _result(result).model_dump(mode="json")))
         except DomainError as exc:
             await db.rollback()

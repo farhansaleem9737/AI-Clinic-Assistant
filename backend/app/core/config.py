@@ -1,7 +1,7 @@
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, field_validator, SecretStr, model_validator
@@ -221,6 +221,8 @@ class Settings(BaseSettings):
     password_reset_resend_seconds: int = 60
     password_reset_max_per_hour: int = 5
     admin_invite_expire_hours: int = 24
+    # A doctor's invitation to a receptionist (D131): its link works this long.
+    receptionist_invite_expire_hours: int = 72
     # Attempts per client IP per minute at the public invitation endpoints.
     invite_attempts_per_minute: int = 10
 
@@ -306,6 +308,24 @@ class Settings(BaseSettings):
     # Uploaded assistant documents older than this are deleted by
     # scripts.purge_ai_documents. 0 = keep until the user deletes them.
     ai_document_retention_days: int = 30
+    # Responsiveness on a small instance (D130, docs/PERFORMANCE.md).
+    # Gemini: no first chunk within this many seconds, or a pause longer than the
+    # idle limit mid-answer, fails the step (each step is also capped by AI_TIMEOUT_SECONDS).
+    ai_first_token_timeout_seconds: int = Field(default=25, ge=3)
+    ai_stream_idle_timeout_seconds: int = Field(default=20, ge=3)
+    # Assistant requests answered at once by this process; more get "busy" (503 AI_BUSY)
+    # instead of queueing behind each other. 0 = no limit.
+    ai_max_concurrent_requests: int = Field(default=3, ge=0)
+    # Document reading (PDF parsing) runs outside the web process's event loop:
+    # "process" = one low-priority worker process (no GIL shared with the web
+    # server; production default), "thread" = one dedicated thread (development
+    # and tests). Unset: process in production, thread elsewhere.
+    ai_extraction_isolation: Literal["process", "thread"] | None = None
+    ai_extraction_timeout_seconds: int = Field(default=60, ge=5)
+    # Documents waiting or being read at once; more are refused as busy.
+    ai_extraction_queue_limit: int = Field(default=4, ge=1)
+    # Log a warning when the event loop is late by more than this (0 = off).
+    event_loop_lag_warning_ms: int = Field(default=500, ge=0)
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
@@ -342,6 +362,12 @@ class Settings(BaseSettings):
     @property
     def ai_documents_enabled(self) -> bool:
         return self.ai_configured and self.ai_phi_allowed and self.ai_enable_medical_document_upload
+
+    @property
+    def extraction_in_process(self) -> bool:
+        if self.ai_extraction_isolation is not None:
+            return self.ai_extraction_isolation == "process"
+        return self.environment is Environment.production
 
     @field_validator("frontend_base_url")
     @classmethod

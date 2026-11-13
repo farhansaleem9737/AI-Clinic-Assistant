@@ -16,12 +16,14 @@ nothing.
 
 import logging
 import uuid
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import StorageUnavailableError
 from app.core.storage import Storage, StorageError
 from app.models.doctor import Doctor
+from app.models.document_extraction import DocumentExtraction
 from app.models.patient import Patient
 from app.models.stored_file import FileCategory, FileStatus, StoredFile
 from app.services.file_validation import CheckedFile
@@ -101,6 +103,8 @@ async def finish_deletion(db: AsyncSession, storage: Storage, file: StoredFile |
         return 
     if await _delete_quietly(storage, file):
         file.status = FileStatus.deleted
+        # The server's reading of the file goes with it (D130).
+        await db.execute(sa_delete(DocumentExtraction).where(DocumentExtraction.file_id == file.id))
         await db.commit()
 
 async def replace_photo(

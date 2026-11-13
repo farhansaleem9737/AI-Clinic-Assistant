@@ -1,12 +1,13 @@
+import dataclasses
 import uuid
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
-from app.core.permissions import Perm, Principal
+from app.core.permissions import DELEGATED_PERMS, Perm, Principal
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.services import rbac_service
@@ -17,7 +18,12 @@ from app.services import rbac_service
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+# A doctor_receptionist names the doctor they are working for on each request (D131).
+ACTING_DOCTOR_HEADER = "X-Acting-Doctor-Id"
+
+
 async def get_current_principal(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Principal:
@@ -41,7 +47,30 @@ async def get_current_principal(
     changed = principal.user.password_changed_at
     if changed is not None and int(claims.get("iat", 0)) < int(changed.timestamp()):
         raise invalid
+    acting_for = request.headers.get(ACTING_DOCTOR_HEADER)
+    if acting_for:
+        principal = await _with_delegation(db, principal, acting_for)
     return principal
+
+
+async def _with_delegation(db: AsyncSession, principal: Principal, acting_for: str) -> Principal:
+    """The caller's rights for this request while working for one doctor (D131):
+    their role's own permissions plus what that doctor's ACTIVE assignment lends,
+    read from the database now (never from the token or the client). One answer
+    for "no such doctor", "not assigned", "suspended" and "revoked"."""
+    from app.services import receptionist_service
+
+    try:
+        doctor_id = uuid.UUID(acting_for)
+    except ValueError:
+        doctor_id = None
+    delegation = (
+        await receptionist_service.active_delegation(db, principal, doctor_id) if doctor_id is not None else None
+    )
+    if delegation is None:
+        raise PermissionDeniedError("You are not working for this doctor", code="NOT_ASSIGNED_TO_DOCTOR")
+    lent = {perm for p in delegation.permissions for perm in DELEGATED_PERMS[p]}
+    return dataclasses.replace(principal, permissions=principal.permissions | lent, delegation=delegation)
 
 
 def require_permission(*perms: Perm):

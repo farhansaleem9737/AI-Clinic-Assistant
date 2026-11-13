@@ -35,6 +35,13 @@ class AuditAction(StrEnum):
     user_google_unlinked = "user.google_unlinked"
     user_google_registered = "user.google_registered"
     scheduling_policy_changed = "doctor.scheduling_policy_changed"
+    # A doctor's own receptionists (D131).
+    receptionist_invited = "receptionist.invitation_created"
+    receptionist_invitation_revoked = "receptionist.invitation_revoked"
+    receptionist_invitation_accepted = "receptionist.invitation_accepted"
+    receptionist_permissions_changed = "receptionist.permissions_changed"
+    receptionist_status_changed = "receptionist.status_changed"
+    receptionist_removed = "receptionist.removed"
     appointment_override_booked = "appointment.override_booked"
     queue_walk_in_registered = "queue.walk_in_registered"
     queue_checked_in = "queue.checked_in"
