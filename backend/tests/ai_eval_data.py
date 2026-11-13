@@ -486,3 +486,46 @@ DOCUMENTS += [
     ("doc-bp-diary", "diary.pdf", "My blood pressure diary\nMon 150/95, Tue 145/92, Wed 138/88\nMedicines: amlodipine 5 mg daily\nAllergies: none",
      "MEDICAL_HISTORY", "a patient's own readings"),
 ]
+
+
+# D133: what those answers showed, as the cards the app stores (the "[Shown to the user"
+# text is now removed from history; the model gets this as app state in the system prompt).
+def _doctor(n, name, years):
+    return {"doctor_id": f"{n}" * 8 + "-" + f"{n}" * 4 + "-" + f"{n}" * 4 + "-" + f"{n}" * 4 + "-" + f"{n}" * 12,
+            "name": name, "specialization": "Cardiology", "years_of_experience": years}
+
+
+SHOWN_CARDS = {
+    DOCTORS_SHOWN: [{"kind": "doctors", "total": 3, "items": [
+        _doctor(1, "Dr. Sarah Malik", 12), _doctor(2, "Dr. Omar Shah", 6), _doctor(3, "Dr. Hina Raza", 9)]}],
+    SLOTS_SHOWN: [{"kind": "slots", "doctor_id": _doctor(2, "Dr. Omar Shah", 6)["doctor_id"], "doctor_name": "Dr. Omar Shah",
+                   "items": [{"local_time": "10:00 AM", "starts_at": "2026-11-12T05:00:00+00:00"},
+                             {"local_time": "10:30 AM", "starts_at": "2026-11-12T05:30:00+00:00"}]}],
+}
+
+# D133: a regulation whose sampling table looks like a lab report (reported in production as
+# "DAIRY INDUSTRY REGULATION" summarised as a patient's laboratory findings).
+DAIRY_REGULATION = """DAIRY INDUSTRY REGULATION
+Schedule II - Laboratory analysis of raw milk samples
+Test                     Result      Reference range       Unit
+Fat                      3.2 L       3.5 - 6.0             %
+Solids-not-fat           8.1 L       8.5 - 9.5             %
+Protein                  3.1         3.0 - 4.0             %
+Somatic cell count       450000 H    < 400000              cells/ml
+Lead                     0.01        < 0.02                mg/kg
+Remarks: The sample does not meet the compositional standard. The licence holder shall be notified.
+Authorised Officer, Food Testing Laboratory
+"""
+DAIRY_STANDARDS = """DAIRY INDUSTRY REGULATION
+Food Authority - Standards for Milk and Milk Products
+Section 4. Compositional standards
+Parameter            Minimum      Maximum      Unit
+Milk fat             3.5          -            %
+Solids-not-fat       8.9          -            %
+Total plate count    -            200000       cfu/ml
+Section 5. Licensing. Every dairy processing unit shall obtain a licence from the Authority.
+"""
+DOCUMENTS += [
+    ("doc-dairy-lab-table", "medical_report.pdf", DAIRY_REGULATION, "NON_MEDICAL_DOCUMENT", "milk sample table under a regulation"),
+    ("doc-dairy-standards", "regulation.pdf", DAIRY_STANDARDS, "NON_MEDICAL_DOCUMENT", "compositional standards"),
+]

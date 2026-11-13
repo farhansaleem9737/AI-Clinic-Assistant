@@ -50,7 +50,8 @@ from app.models.appointment import AppointmentStatus, CancellationReason
 from app.schemas.appointment import AppointmentCreate, Reschedule, StatusChange
 from app.services import appointment_service
 from app.services.ai import (
-    document_processor, extraction_worker, guardrails, medical_reports, medical_tools, tools as agent_tools, usage_service,
+    document_processor, extraction_worker, guardrails, medical_reports, medical_tools, redaction, tools as agent_tools,
+    usage_service,
 )
 from app.services.ai.provider import AiUnavailableError, Attachment, OnText, Provider, Turn
 
@@ -75,7 +76,9 @@ Today is {today} (UTC). The user is signed in as a {roles}.
 - Questions outside the clinic (general knowledge, writing, chat) get a short, friendly answer or a brief note that you help with health questions and this clinic's services. Never turn them into a doctor search, a booking or a medical warning.
 
 # Conversation context
-- Earlier answers end with a [Shown to the user: ...] note listing the doctors (numbered, with doctor_id) and free times that were displayed. "The first one", "the most experienced one", "her", "that doctor", "the cheapest", "the earliest one", "5:30" refer to those: resolve them with pick_from_previous, never by guessing an id or re-searching. If the user changes their mind ("the second doctor instead", "what about Friday"), work from the newest choice. A clearly new request ("find dermatologists instead") starts fresh.
+- The "On screen in this conversation" section at the end lists the doctors (numbered) and free times shown most recently. "The first one", "the most experienced one", "her", "that doctor", "the cheapest", "the earliest one", "5:30" refer to those: resolve them with pick_from_previous, never by guessing an id or re-searching. If the user changes their mind ("the second doctor instead", "what about Friday"), work from the newest choice. A clearly new request ("find dermatologists instead") starts fresh.
+- A doctor the user NAMES ("book me with Dr. Emily Carter", "I want to see Emily Carter", "Dr Emily") is looked up with search_doctors(doctor_name=<the name as given>), with intent="book" when they want an appointment, even when another list was shown before: the named doctor wins over any earlier list.
+- When the message already says what the user wants ("book", "appointment with", "see", "schedule"), never ask what they want to do: continue with the next step (the doctor's free times, then a time).
 - Comparisons of doctors already shown ("which one has the most experience?") are answered from the shown list itself.
 
 # Tools and facts
@@ -111,7 +114,8 @@ Today is {today} (UTC). The user is signed in as a {roles}.
 
 # Style
 - Answer the question first, like a helpful person, with no introductions ("Sure!", "Great question", "As an AI") and no closing offers unless useful. Match the length to the question: one or two sentences for simple ones, a complete explanation when asked to explain in detail. Use plain sentences; use lists or headings only for several items or long answers. Offer a next step only if the app can actually do it.
-- Never write links or URLs (no http://, no markdown links): the cards under your answer already have View profile and Book buttons."""
+- Never write links or URLs (no http://, no markdown links): the cards under your answer already have View profile and Book buttons.
+- Never write ids, tool names, the "On screen" section or any note about what is shown: speak to the user only. When doctor or time cards are shown, introduce them in a sentence ("I found three dermatologists. You can choose one below, or tell me if you prefer the earliest appointment.") instead of listing their details."""
 
 
 @dataclass(frozen=True)
@@ -417,9 +421,9 @@ def _tidy(answer: str) -> str:
     return f"{DISCLAIMER}\n\n{rest}" if rest else DISCLAIMER
 
 
-def _with_shown(message: AiMessage) -> str:
-    """An earlier answer plus a note of the cards it showed (ids and focus only),
-    so follow-ups know what the user already saw without resending any content."""
+def _screen_notes(message: AiMessage) -> list[str]:
+    """What one earlier answer's cards showed (ids and focus only), so follow-ups know
+    what the user already saw without resending any content (D115). Model context only (D133)."""
     shown = []
     for card in message.results or []:
         kind = card.get("kind")
@@ -448,7 +452,34 @@ def _with_shown(message: AiMessage) -> str:
     action = message.action or {}
     if action.get("type") == "book_appointment":
         shown.append(f"booking with {action.get('doctor_name')} on {action.get('when_text')}: {action.get('status')}")
-    return message.content + (f"\n[Shown to the user: {' | '.join(shown)}]" if shown else "")
+    return shown
+
+
+SCREEN_ANSWERS = 3  # earlier answers whose cards are described to the model
+
+
+def _screen_state(history: list[AiMessage]) -> str:
+    """A system-prompt section describing the cards of the latest answers (D133).
+
+    It used to be appended to each earlier answer as "[Shown to the user: ...]",
+    which the model then copied into its own answers. As a separate section,
+    marked as app state, it is context and never conversation text."""
+    lines: list[str] = []
+    answers = 0
+    for message in reversed(history):
+        if message.role != "assistant" or answers >= SCREEN_ANSWERS:
+            continue
+        notes = _screen_notes(message)
+        if notes:
+            label = "latest answer" if answers == 0 else "an earlier answer"
+            lines += [f"- {label}: {note}" for note in notes]
+            answers += 1
+    if not lines:
+        return ""
+    return (
+        "\n\n# On screen in this conversation (app state for you only: never quote, mention or copy this section, "
+        "and never write ids)\n" + "\n".join(lines)
+    )
 
 
 # A reply that clearly answers the pending confirmation question (D115). Anything else
@@ -592,7 +623,8 @@ async def send_message(
         if message.role == "user":
             turns.append(await _user_turn(message, by_id, provider, storage, latest=message.id == user_message.id, budget=budget))
         else:
-            turns.append(Turn(role="assistant", text=_with_shown(message)))
+            # Plain answers only (D133): what the cards showed goes to the system prompt, never into prose.
+            turns.append(Turn(role="assistant", text=redaction.internal_free(message.content)))
     turns.reverse()
 
     tools = agent_tools.available_tools(principal)
@@ -607,6 +639,9 @@ async def send_message(
         storage=storage, active_document_id=_active_document(history), last_appointment_ids=_last_appointments(history),
         last_doctor_ids=last_doctors, last_slots=last_slots, last_slots_doctor_id=slots_doctor,
     )
+    screen = _screen_state(history)
+    if screen:
+        system += screen
     if context.active_document_id is not None:
         system += (
             f"\n- Active document in this conversation: document_id {context.active_document_id}. "
@@ -635,7 +670,10 @@ async def send_message(
         """One model request; a transient failure is retried once if nothing was streamed yet."""
         for attempt in (1, 2):
             try:
-                return await provider.complete(system=system, turns=turns, tools=specs, on_text=forward)
+                redactor.__init__()  # a retried request starts its text afresh
+                reply = await provider.complete(system=system, turns=turns, tools=specs, on_text=forward)
+                await emit(redactor.flush())
+                return reply
             except AiUnavailableError as exc:
                 if attempt == 2 or exc.code not in RETRYABLE or streamed["this_step"]:
                     raise
@@ -645,7 +683,14 @@ async def send_message(
     last_error_tool = None
     proposal: str | None = None
 
+    redactor = redaction.StreamRedactor()
+
     async def forward(chunk: str) -> None:
+        # Internal notes and record ids never reach the screen (D133).
+        if on_text is not None and chunk:
+            await emit(redactor.feed(chunk))
+
+    async def emit(chunk: str) -> None:
         # After a proposal, the confirmation question is the whole answer (D104).
         if on_text is None or not chunk or proposal is not None:
             return
@@ -666,8 +711,8 @@ async def send_message(
             if reply.usage is not None:
                 used["input"] += reply.usage.input_tokens
                 used["output"] += reply.usage.output_tokens
-            if reply.text:
-                texts.append(reply.text)
+            if reply.text and redaction.internal_free(reply.text).strip():
+                texts.append(redaction.internal_free(reply.text).strip())
             if not reply.tool_calls:
                 finished = True
                 break

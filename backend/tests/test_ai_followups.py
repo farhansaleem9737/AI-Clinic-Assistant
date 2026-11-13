@@ -85,10 +85,13 @@ async def test_most_experienced_resolves_from_the_previous_list(client, auth_hea
         text_reply("Dr. Layla Hassan has the most experience (18 years)."),
     ]
     second = await ask(client, headers, "book me with the most experienced one", conversation_id)
-    # The model was told what the user saw: numbered doctors with their real ids.
-    history = provider.calls[2]["turns"]
-    note = next(t.text for t in history if t.role == "assistant" and "[Shown to the user" in (t.text or ""))
-    assert all(str(d.id) in note for d in cardiologists)
+    # The model was told what the user saw (numbered doctors with their real ids) as app
+    # state in the system prompt, never inside an answer it could copy (D133).
+    shown_ids = [d["doctor_id"] for d in first["assistant_message"]["results"][0]["items"]]
+    screen = provider.calls[2]["system"].split("# On screen in this conversation", 1)[1]
+    assert shown_ids and all(i in screen for i in shown_ids)
+    assert not any("Shown to the user" in (t.text or "") or any(i in (t.text or "") for i in shown_ids)
+                   for t in provider.calls[2]["turns"] if t.role == "assistant")
     picked = tool_results(provider.calls[3])["pick_from_previous"]
     assert picked["selected_doctor"]["name"] == "Layla Hassan"
     assert picked["selected_doctor"]["doctor_id"] == str(cardiologists[2].id)

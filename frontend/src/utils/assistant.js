@@ -250,6 +250,18 @@ export function describeFailure(err) {
 // under an answer carry the app's own links (older answers may contain
 // http://localhost:5173/... from before the server removed them).
 export const withoutLinks = (text) =>
-  (text ?? "")
+  withoutInternalNotes(text)
     .replace(/\[([^\]]+)\]\([^()\s]+\)/g, "$1")
     .replace(/\s*\(?<?https?:\/\/[^\s)>]+>?\)?/g, "");
+
+// D133: the server removes internal notes and record ids from answers; answers saved
+// before that may still contain them ("Shown to the user: ...", "doctor_id 01a0..."). Never shown.
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+export const withoutInternalNotes = (text) =>
+  (text ?? "")
+    .replace(/\[\s*shown to the user\s*:[^\]]*\]?/gi, "")
+    .replace(/^[ \t>*•-]*\(?\s*shown to the user\s*:[^\n]*(?:\n|$)/gim, "")
+    .replace(new RegExp(`\\b(?:doctor|document|appointment|patient|conversation|message)[ _]?id\\b\\s*[:=#]?\\s*${UUID}(?:,\\s*)?`, "gi"), "")
+    .replace(new RegExp(`\\b${UUID}\\b(?:,\\s*)?`, "gi"), "")
+    .replace(/\s*\(\s*[,;]?\s*\)/g, "")
+    .replace(/\n{3,}/g, "\n\n");

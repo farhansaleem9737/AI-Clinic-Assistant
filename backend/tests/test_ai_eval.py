@@ -27,7 +27,7 @@ import pytest
 from app.core.permissions import Perm, Principal
 from app.services.ai import guardrails, medical_reports, medical_tools
 from app.services.ai import tools as agent_tools
-from tests.ai_eval_data import DOCUMENTS, SCENARIOS
+from tests.ai_eval_data import DOCUMENTS, SCENARIOS, SHOWN_CARDS
 
 MEDICAL = set(medical_reports.MEDICAL_CLASSES)
 
@@ -209,7 +209,7 @@ async def test_live(scenario, db_session, make_user, monkeypatch):
     db_session.add(conversation)
     await db_session.flush()
     for role, text in scenario["history"]:
-        db_session.add(AiMessage(conversation_id=conversation.id, role=role, content=text))
+        db_session.add(AiMessage(conversation_id=conversation.id, role=role, content=text, results=SHOWN_CARDS.get(text)))
         await db_session.flush()
     await db_session.commit()
 

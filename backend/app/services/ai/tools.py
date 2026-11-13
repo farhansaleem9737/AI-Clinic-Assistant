@@ -52,7 +52,15 @@ class _Args(BaseModel):
 
 
 class SearchDoctorsArgs(_Args):
-    query: str | None = Field(default=None, max_length=100, description="Name, specialization or department words")
+    doctor_name: str | None = Field(
+        default=None, max_length=100,
+        description="A doctor's name exactly as the user gave it ('Dr. Emily Carter', 'emily carter', 'Dr Emily'). "
+        "Always use this for a name, even if a doctor list was shown before.",
+    )
+    intent: Literal["find", "book", "profile"] | None = Field(
+        default=None, description="'book' when the user wants an appointment ('book me with ...', 'I want to see ...')"
+    )
+    query: str | None = Field(default=None, max_length=100, description="Other words to search (not a doctor's name)")
     department_id: uuid.UUID | None = None
     specialization: str | None = Field(default=None, max_length=150)
     condition: str | None = Field(
@@ -244,6 +252,10 @@ async def _search_doctors(db: AsyncSession, principal: Principal, a: SearchDocto
     then doctors of the matching departments. A literal search on names and
     the profile text adds anything else. Every doctor comes from the directory.
     """
+    if a.doctor_name:
+        # D133: a doctor the user names is looked up by that name first, and takes
+        # precedence over any list shown earlier in the conversation.
+        return await _by_name(db, principal, a, ctx)
     page = PageParams(page=1, page_size=10)
     sort = _SORTS.get(a.sort or "", DoctorSort.name_asc)
     base = {"department_id": a.department_id, "min_experience": a.min_years_experience, "sort": sort}
@@ -339,6 +351,77 @@ async def _search_doctors(db: AsyncSession, principal: Principal, a: SearchDocto
     return ToolOutcome(result, card=card)
 
 
+async def _by_name(db: AsyncSession, principal: Principal, a: SearchDoctorsArgs, ctx) -> ToolOutcome:
+    """A named doctor (D133): exactly one match continues (with free times when booking);
+    several are listed for the user to choose; similar names are only suggested; nobody
+    by that name is said plainly, with a specialty's doctors as labelled alternatives only
+    when the user also named one. Never a silent substitute."""
+    from app.services import doctor_resolution
+
+    found = await doctor_resolution.resolve(db, a.doctor_name)
+    said = " ".join(a.doctor_name.split())
+    ctx.last_slots, ctx.last_slots_doctor_id = [], None
+    if found.chosen is not None:
+        doctor = _doctor_item(found.chosen)
+        if a.intent == "book":
+            return await _selected(db, principal, ctx, doctor, "the doctor the user named")
+        ctx.last_doctor_ids = [found.chosen.doctor.id]
+        card = {"kind": "doctors", "total": 1, "items": [doctor]}
+        return ToolOutcome({"total_matches": 1, "matched_by": "name", "doctors": [{"n": 1, **doctor}], "shown_to_user": True}, card=card)
+    items = [_doctor_item(r) for r in found.doctors]
+    card = {"kind": "doctors", "total": len(items), "items": items} if items else None
+    if found.status == "ambiguous":
+        ctx.last_doctor_ids = [r.doctor.id for r in found.doctors]
+        return ToolOutcome({
+            "ambiguous": True, "candidates": [{"n": i + 1, **d} for i, d in enumerate(items)],
+            "note": f"Several listed doctors match '{said}'. Ask which one the user means, naming each with their specialty. Do not choose.",
+        }, card=card)
+    if found.status == "close":
+        ctx.last_doctor_ids = [r.doctor.id for r in found.doctors]
+        return ToolOutcome({
+            "requested_doctor_found": False, "similar_names": [{"n": i + 1, **d} for i, d in enumerate(items)],
+            "note": f"No listed doctor is named '{said}'. Say so, and ask whether they meant one of these similar names. "
+                    "Do not choose or book one for them.",
+        }, card=card)
+    ctx.last_doctor_ids = []
+    if a.specialization or a.condition or a.query:
+        alternatives = await _search_doctors(db, principal, a.model_copy(update={"doctor_name": None}), ctx)
+        alternatives.result.update(
+            requested_doctor_found=False,
+            note=f"No listed doctor is named '{said}'. Say that first. The doctors here are ALTERNATIVES for what else the user "
+                 "asked: present them as alternatives, and never book one unless the user picks it.",
+        )
+        return alternatives
+    return ToolOutcome({
+        "requested_doctor_found": False, "total_matches": 0,
+        "note": f"No doctor named '{said}' is listed at this clinic. Say so plainly and offer to search by specialty. "
+                "Do not suggest other doctors on your own.",
+    })
+
+
+async def _selected(db: AsyncSession, principal: Principal, ctx, doctor: dict, reason: str) -> ToolOutcome:
+    """One chosen doctor and their next free times: the step before choosing a time."""
+    doctor = {k: v for k, v in doctor.items() if k != "n"}
+    doctor_id = uuid.UUID(doctor["doctor_id"])
+    try:
+        tz, slots = await _fresh_slots(db, principal, doctor_id)
+    except DomainError:
+        tz, slots = None, []
+    ctx.last_doctor_ids = [doctor_id]
+    ctx.last_slots, ctx.last_slots_doctor_id = slots, doctor_id
+    result = {
+        "selected_doctor": doctor,
+        "why": reason,
+        "next_free_slots": [{"n": i + 1, **x} for i, x in enumerate(slots)],
+        "timezone": tz,
+        "note": "The doctor and these free times are shown to the user as cards. In one or two sentences, say who was chosen "
+        "and the next free time (or that there is none this week), and ask which day or time suits them. Do not list every "
+        "time, and do not propose a booking until the user picks a time.",
+    }
+    card = {"kind": "doctors", "total": 1, "items": [{**doctor, "selected": True}]}
+    return ToolOutcome(result, card=card, extra_cards=(_slots_card(doctor, tz, slots),) if slots else ())
+
+
 def _same(values: list, value) -> list:
     return [i for i, v in enumerate(values) if v == value]
 
@@ -390,8 +473,13 @@ async def _pick_doctor(db: AsyncSession, principal: Principal, a: "PickArgs", ct
         chosen = [known[i] for i in _same(values, target)]
         reason = f"{label} of the {len(shown)} doctors shown" + (f" ({target} years)" if key == "years_of_experience" else "")
     elif s == "by_name" and a.name:
-        words = [w for w in a.name.lower().replace("dr.", " ").split() if w and w != "dr"]
-        chosen = [d for d in shown if all(w in d["name"].lower() for w in words)]
+        from app.services.doctor_resolution import _fits, name_words
+
+        words = name_words(a.name)
+        chosen = [d for d in shown if words and _fits(words, name_words(d["name"]))]
+        if not chosen:
+            # D133: a name that is not in the list shown is a new request: look it up in the directory.
+            return await _by_name(db, principal, SearchDoctorsArgs(doctor_name=a.name, intent="book"), ctx)
         reason = "named by the user"
     else:
         return ToolOutcome({"error": "That selector does not apply to doctors.", "error_code": "INVALID_ARGUMENTS"})
@@ -401,24 +489,7 @@ async def _pick_doctor(db: AsyncSession, principal: Principal, a: "PickArgs", ct
     if len(chosen) > 1:
         return ToolOutcome({"ambiguous": True, "candidates": chosen,
                             "note": "Several doctors match equally: ask the user which one, naming them. Do not choose."})
-    doctor = {k: v for k, v in chosen[0].items() if k != "n"}
-    doctor_id = uuid.UUID(doctor["doctor_id"])
-    try:
-        tz, slots = await _fresh_slots(db, principal, doctor_id)
-    except DomainError:
-        tz, slots = None, []
-    ctx.last_doctor_ids = [doctor_id]
-    ctx.last_slots, ctx.last_slots_doctor_id = slots, doctor_id
-    result = {
-        "selected_doctor": doctor,
-        "why": reason,
-        "next_free_slots": [{"n": i + 1, **x} for i, x in enumerate(slots)],
-        "timezone": tz,
-        "note": "Say who was chosen and why, give the next free time from next_free_slots (or say there is none this week), "
-        "and ask whether to book it or another day/time. Do not propose a booking until the user picks a time.",
-    }
-    card = {"kind": "doctors", "total": 1, "items": [{**doctor, "selected": True}]}
-    return ToolOutcome(result, card=card, extra_cards=(_slots_card(doctor, tz, slots),) if slots else ())
+    return await _selected(db, principal, ctx, chosen[0], reason)
 
 
 # selector -> (field, which value wins, how to say it)

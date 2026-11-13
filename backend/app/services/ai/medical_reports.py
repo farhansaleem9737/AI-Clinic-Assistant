@@ -38,7 +38,7 @@ from pypdf.errors import PdfReadError
 logger = logging.getLogger(__name__)
 
 # Bump when the extraction changes: cached results of older versions are never reused.
-EXTRACTION_VERSION = "3"  # 3: content classification (D129)
+EXTRACTION_VERSION = "4"  # 3: content classification (D129); 4: regulations / product testing are not patient results (D133)
 MAX_PAGES = 50
 MAX_TEXT_CHARS = 60_000
 MAX_OCR_PAGES = 5
@@ -729,6 +729,24 @@ class ContentClass:
     note: str  # one plain sentence for the user and the model
 
 
+# D133: regulations and product / food / water testing ("DAIRY INDUSTRY REGULATION",
+# a milk-sample table with Fat 3.2 L) can look exactly like a lab report. A results
+# table is a patient's only when the text is about a person.
+_REGULATORY = re.compile(
+    r"(?i)\b(?:regulations?|regulatory|authority|licen[cs]e(?: holder)?|licensing|compliance|statutory|gazette|penalt(?:y|ies)"
+    r"|dairy|milk|livestock|cattle|poultry|food (?:safety|testing|standards?|authority)|compositional standards?"
+    r"|permissible limits?|water quality|drinking water|soil|feed|consignment|batch no|manufacturer|processing unit)\b"
+)
+_HUMAN = re.compile(
+    r"(?i)\b(?:patient|blood|serum|plasma|urine|stool|sputum|swab|specimen|age|sex|gender|male|female|dob|date of birth"
+    r"|mrn|referred by|referring|physician|consultant|doctor|dr|clinic|hospital|ward|mr|mrs|ms)\b"
+)
+
+
+def _not_about_a_person(text: str) -> bool:
+    return len({m.group(0).lower() for m in _REGULATORY.finditer(text)}) >= 2 and not _HUMAN.search(text)
+
+
 def _patient_specific(text: str, table_rows: int) -> bool:
     if table_rows or _PATIENT_LINE.search(text) or _CLINICAL.search(text) or _BP_READING.search(text):
         return True
@@ -752,6 +770,11 @@ def classify_text(text: str, *, table_rows: int = 0) -> ContentClass:
     non_medical = sum(scores.values())
     label = max(scores, key=scores.get) if non_medical else None
 
+    if _not_about_a_person(text):
+        # Product, food or water results under a regulation: never a patient's lab report (D133).
+        return ContentClass("NON_MEDICAL_DOCUMENT", "a regulation or product testing document", len(words),
+                            "The file looks like a regulation or a product / food testing document, not a patient's "
+                            "medical record: its values are not anyone's test results.")
     if medical >= 3:
         if non_medical >= 3 and non_medical >= medical * 0.6:
             return ContentClass("MIXED_CONTENT", label, len(words),
