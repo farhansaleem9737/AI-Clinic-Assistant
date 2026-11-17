@@ -90,6 +90,7 @@ async def start(
 @router.get("/google/callback", include_in_schema=False)
 async def callback(
     request: Request,
+    background: BackgroundTasks,
     state: str | None = Query(None, max_length=200),
     code: str | None = Query(None, max_length=2000),
     error: str | None = Query(None, max_length=100),
@@ -98,6 +99,8 @@ async def callback(
     outcome = await service.callback(
         db, state=state, code=code, error=error, binder=request.cookies.get(service.BINDER_COOKIE)
     )
+    if outcome.notice is not None:  # Google was just linked to an existing account (D134)
+        background.add_task(service.send_notice, outcome.notice)
     response = _to_app(outcome.path)
     _clear(response, *outcome.clear)
     if outcome.cookie:

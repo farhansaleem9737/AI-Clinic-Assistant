@@ -51,8 +51,10 @@ def google(monkeypatch):
     monkeypatch.setattr(google_oidc, "exchange_code", exchange)
     monkeypatch.setattr(google_oidc, "verify_id_token", verify)
 
-    def person(code, sub, email, given="Gina", family="Google"):
-        people[code] = GoogleIdentity(subject=sub, email=email, given_name=given, family_name=family, name=f"{given} {family}")
+    def person(code, sub, email, given="Gina", family="Google", hd=None):
+        people[code] = GoogleIdentity(
+            subject=sub, email=email, given_name=given, family_name=family, name=f"{given} {family}", hosted_domain=hd
+        )
 
     person.seen = seen
     return person
@@ -328,6 +330,22 @@ def signer(monkeypatch):
 async def test_a_valid_google_id_token_gives_the_identity(signer):
     identity = await google_oidc.verify_id_token(signer(), nonce="n-1")
     assert identity.subject == "1234567890" and identity.email == "pat@example.com"
+    # A verified address at an ordinary domain: Google verified it, but does not own that mailbox (D134).
+    assert identity.hosted_domain is None and not identity.email_is_authoritative
+
+
+@pytest.mark.parametrize(
+    "email, hd, authoritative",
+    [
+        ("Pat@Gmail.com", None, True),  # Google's own mailbox
+        ("pat@clinic.org", "clinic.org", True),  # managed by that Workspace domain
+        ("pat@clinic.org", "other.org", False),  # managed elsewhere: not this address's authority
+        ("pat@clinic.org", None, False),
+    ],
+)
+async def test_which_google_addresses_google_is_the_authority_for(signer, email, hd, authoritative):
+    identity = await google_oidc.verify_id_token(signer(email=email, **({"hd": hd} if hd else {})), nonce="n-1")
+    assert identity.email_is_authoritative is authoritative
 
 
 @pytest.mark.parametrize(

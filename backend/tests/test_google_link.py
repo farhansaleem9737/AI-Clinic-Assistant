@@ -277,3 +277,104 @@ async def test_two_proofs_at_once_link_once():
             await cleanup.execute(delete(User).where(User.id == user.id))
             await cleanup.commit()
         await engine.dispose()
+
+
+# ---- D134: no proof step when Google is the authority for the address -----------------------
+
+
+@pytest.fixture
+def verified_sign_ups(monkeypatch):
+    """New accounts must prove their mailbox (the production default; conftest turns it off)."""
+    monkeypatch.setattr(settings, "email_verification_required", True)
+
+
+def gmail_address() -> str:
+    return f"pat.{uuid.uuid4().hex[:8]}@gmail.com"
+
+
+async def test_a_gmail_patient_signs_straight_in_and_keeps_everything(
+    client, google, make_patient, db_session, isolated_side_channels, verified_sign_ups
+):
+    patient = await make_patient(with_account=True)
+    user = await db_session.get(User, patient.user_id)
+    user.email = gmail_address()
+    await db_session.commit()
+    user_id, password_hash, email = user.id, user.password_hash, user.email
+    users_before = await db_session.scalar(select(func.count()).select_from(User))
+
+    # First Google sign-in: no password, no code, no extra page. The same account.
+    token = await google_login(client, google, "sub-gmail", email)
+    who = await me(client, token)
+    assert who["id"] == str(user_id) and who["roles"] == ["patient"] and who["patient_id"] == str(patient.id)
+
+    db_session.expire_all()
+    user = await db_session.get(User, user_id)
+    assert user.password_hash == password_hash  # never reset or overwritten
+    assert await db_session.scalar(select(func.count()).select_from(User)) == users_before  # no duplicate
+    identity = await db_session.scalar(select(OAuthIdentity).where(OAuthIdentity.user_id == user_id))
+    assert identity.subject == "sub-gmail"
+    audit = await db_session.scalar(
+        select(AuditLog).where(AuditLog.target_id == str(user_id), AuditLog.action == "user.google_linked")
+    )
+    assert audit.details["verified_with"] == "google_authoritative_email"
+    assert any(to == email and "Google" in subject for to, subject, _ in emails(isolated_side_channels))  # owner is told
+
+    # Returning Google sign-in, and the password still works.
+    assert (await me(client, await google_login(client, google, "sub-gmail", email)))["id"] == str(user_id)
+    login = await client.post(f"{API}/login", json={"email": email, "password": TEST_PASSWORD})
+    assert login.status_code == 200
+
+
+async def test_a_workspace_address_managed_by_its_domain_also_signs_straight_in(
+    client, google, make_user, db_session, verified_sign_ups
+):
+    user = await make_user(RoleCode.patient, email=f"pat-{uuid.uuid4().hex[:6]}@clinic-example.org")
+    google("code-ws", "sub-ws", user.email, hd="clinic-example.org")
+    query, binder = await start(client)
+    _, path = await callback(client, query["state"][0], binder, code="code-ws")
+    assert path == "/auth/google/complete"
+
+
+@pytest.mark.parametrize("case", ["other_domain", "other_workspace", "staff", "unverified_sign_ups"])
+async def test_proof_is_still_asked_when_google_is_not_enough(
+    client, google, make_user, db_session, monkeypatch, verified_sign_ups, case
+):
+    email = {"other_domain": f"pat-{uuid.uuid4().hex[:6]}@example.com",
+             "other_workspace": f"pat-{uuid.uuid4().hex[:6]}@clinic-example.org"}.get(case, gmail_address())
+    role = RoleCode.doctor if case == "staff" else RoleCode.patient
+    if case == "unverified_sign_ups":
+        monkeypatch.setattr(settings, "email_verification_required", False)
+    user = await make_user(role, email=email)
+    google("code-p", "sub-p", user.email, hd="elsewhere.org" if case == "other_workspace" else None)
+    query, binder = await start(client)
+    _, path = await callback(client, query["state"][0], binder, code="code-p")
+    assert path == "/login/link-google"  # the D128 proof page, unchanged
+    assert await db_session.scalar(select(OAuthIdentity.id).where(OAuthIdentity.user_id == user.id)) is None
+
+
+@pytest.mark.parametrize("role", [RoleCode.admin, RoleCode.receptionist, RoleCode.doctor_receptionist, RoleCode.doctor])
+async def test_staff_with_a_gmail_address_keep_the_proof_step(client, google, make_user, verified_sign_ups, role):
+    user = await make_user(role, email=gmail_address())
+    path, _ = await google_sign_in(client, google, "code-s", "sub-s", user.email)
+    assert path == "/login/link-google"
+
+
+async def test_a_google_account_already_linked_to_someone_else_is_never_moved(
+    client, google, make_user, db_session, verified_sign_ups
+):
+    owner = await make_user(RoleCode.patient, email=gmail_address())
+    db_session.add(OAuthIdentity(user_id=owner.id, provider="google", subject="sub-owned", email=owner.email))
+    other = await make_user(RoleCode.patient, email=gmail_address())
+    await db_session.commit()
+    # Google says sub-owned with the other user's address: it signs in its owner, links nothing new.
+    token = await google_login(client, google, "sub-owned", other.email)
+    assert (await me(client, token))["id"] == str(owner.id)
+    assert await db_session.scalar(select(OAuthIdentity.id).where(OAuthIdentity.user_id == other.id)) is None
+
+
+async def test_a_login_with_a_different_google_account_is_not_relinked(client, google, make_user, db_session, verified_sign_ups):
+    user = await make_user(RoleCode.patient, email=gmail_address())
+    db_session.add(OAuthIdentity(user_id=user.id, provider="google", subject="sub-first", email=user.email))
+    await db_session.commit()
+    path, _ = await google_sign_in(client, google, "code-second", "sub-second", user.email)
+    assert path == "/login?google=already_linked"

@@ -51,6 +51,20 @@ class GoogleIdentity:
     given_name: str | None
     family_name: str | None
     name: str | None
+    # Google Workspace domain that manages this account ("hd" claim), if any.
+    hosted_domain: str | None = None
+
+    @property
+    def email_is_authoritative(self) -> bool:
+        """Whether Google itself controls this mailbox, not just verified it once:
+        a Gmail address (never reassigned), or a Workspace account whose managed
+        domain is the address's domain. A verified address at any other domain
+        may since have passed to someone else, so it is not proof enough to
+        open an existing account (D134)."""
+        domain = self.email.rsplit("@", 1)[-1].lower()
+        if domain in ("gmail.com", "googlemail.com"):
+            return True
+        return bool(self.hosted_domain) and self.hosted_domain.lower() == domain
 
 
 # ---- PKCE, state, nonce ------------------------------------------------------------
@@ -192,4 +206,5 @@ async def verify_id_token(token: str, *, nonce: str) -> GoogleIdentity:
         given_name=claims.get("given_name"),
         family_name=claims.get("family_name"),
         name=claims.get("name"),
+        hosted_domain=str(claims["hd"]).strip().lower() if claims.get("hd") else None,
     )

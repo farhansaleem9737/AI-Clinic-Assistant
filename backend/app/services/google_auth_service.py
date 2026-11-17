@@ -78,7 +78,7 @@ LINK_CODE_MINUTES = 10
 LINK_RESEND_SECONDS = 60
 # Accounts whose link needs the password: an emailed code proves only the mailbox,
 # which is too little for anyone who can see other people's records.
-PASSWORD_ONLY_ROLES = frozenset({RoleCode.admin, RoleCode.doctor, RoleCode.receptionist})
+PASSWORD_ONLY_ROLES = frozenset({RoleCode.admin, RoleCode.doctor, RoleCode.receptionist, RoleCode.doctor_receptionist})
 
 
 def _oidc():
@@ -95,6 +95,8 @@ class Outcome:
     path: str
     cookie: tuple[str, str, int] | None = None
     clear: list[str] = field(default_factory=lambda: [BINDER_COOKIE])
+    # Sent after the response (the "Google was linked" notice, D134).
+    notice: email_service.Email | None = None
 
 
 def ensure_enabled() -> None:
@@ -223,14 +225,7 @@ async def _sign_in_or_register(db: AsyncSession, flow: OAuthFlow, identity: Goog
         if user is None or not user.is_active:
             raise PermissionDeniedError("Account is inactive", code="ACCOUNT_INACTIVE")
         linked.email, linked.last_login_at = identity.email, clock.utcnow()
-        handoff = _oidc().random_token()
-        await _new_step(
-            db, kind="handoff", purpose=flow.purpose, token_hash=hash_token(handoff), binder_hash=hash_token(handoff),
-            user_id=user.id, remember_me=flow.remember_me,
-            expires_at=clock.utcnow() + timedelta(seconds=HANDOFF_SECONDS),
-        )
-        await db.commit()
-        return Outcome("/auth/google/complete", cookie=(HANDOFF_COOKIE, handoff, HANDOFF_SECONDS))
+        return await _hand_off(db, flow, user.id)
 
     existing = await db.scalar(select(User).where(User.email == identity.email.strip().lower()))
     if existing is not None:
@@ -243,6 +238,8 @@ async def _sign_in_or_register(db: AsyncSession, flow: OAuthFlow, identity: Goog
         )
         if other is not None:  # a different Google account is already this login's
             raise GoogleSignInError("Another Google account is already linked.", code="GOOGLE_ALREADY_LINKED")
+        if await _may_link_without_proof(db, existing, identity):
+            return await _link_now(db, flow, existing, identity)
         ticket = _oidc().random_token()
         await _new_step(
             db, kind="link", purpose=flow.purpose, token_hash=hash_token(ticket), binder_hash=hash_token(ticket),
@@ -262,6 +259,59 @@ async def _sign_in_or_register(db: AsyncSession, flow: OAuthFlow, identity: Goog
     )
     await db.commit()
     return Outcome("/register/google", cookie=(SIGNUP_COOKIE, ticket, settings.google_oauth_signup_minutes * 60))
+
+
+async def _hand_off(db: AsyncSession, flow: OAuthFlow, user_id: uuid.UUID, notice: email_service.Email | None = None) -> Outcome:
+    """A known user: a 2-minute single-use handoff that the app page exchanges for the normal session."""
+    handoff = _oidc().random_token()
+    await _new_step(
+        db, kind="handoff", purpose=flow.purpose, token_hash=hash_token(handoff), binder_hash=hash_token(handoff),
+        user_id=user_id, remember_me=flow.remember_me,
+        expires_at=clock.utcnow() + timedelta(seconds=HANDOFF_SECONDS),
+    )
+    await db.commit()
+    return Outcome("/auth/google/complete", cookie=(HANDOFF_COOKIE, handoff, HANDOFF_SECONDS), notice=notice)
+
+
+async def _may_link_without_proof(db: AsyncSession, user: User, identity: GoogleIdentity) -> bool:
+    """Linking at sign-in without asking for the password or a code (D134), only when:
+
+    * Google is the authority for the address (Gmail, or the Workspace domain that
+      manages it): whoever signed in to Google controls that mailbox now;
+    * new accounts must prove that same mailbox (EMAIL_VERIFICATION_REQUIRED), so
+      an account on it was not simply claimed by someone else beforehand;
+    * the account holds no staff or admin role: those see other people's records
+      and keep the explicit proof step (D128).
+
+    Anything else gets the D128 proof page, unchanged."""
+    if not identity.email_is_authoritative or not settings.email_verification_required:
+        return False
+    principal = await rbac_service.load_principal_by_id(db, user.id)
+    return principal is not None and not (set(principal.roles) & PASSWORD_ONLY_ROLES)
+
+
+async def _link_now(db: AsyncSession, flow: OAuthFlow, user: User, identity: GoogleIdentity) -> Outcome:
+    """Attach this Google identity to the existing account and sign in to it.
+    Only a new oauth_identities row is added: same user id, password, roles,
+    profiles and records. The unique (provider, subject) and (user, provider)
+    keys settle concurrent attempts: the loser links nothing."""
+    now = clock.utcnow()
+    db.add(OAuthIdentity(user_id=user.id, provider=GOOGLE, subject=identity.subject, email=identity.email, last_login_at=now))
+    audit_service.record(
+        db, AuditAction.user_google_linked, actor_id=user.id, target_type="user", target_id=user.id,
+        details={"at_sign_in": True, "verified_with": "google_authoritative_email"},
+    )
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise GoogleSignInError("This Google account is linked to another account.", code="GOOGLE_IDENTITY_IN_USE") from exc
+    address, user_id = user.email, user.id
+    rendered = email_templates.google_linked_notice()
+    notice = email_service.Email(to=address, subject=rendered.subject, text=rendered.text, html=rendered.html)
+    outcome = await _hand_off(db, flow, user_id, notice)
+    logger.info("google_linked", extra={"user_id": str(user_id), "at_sign_in": True, "method": "google_authoritative_email"})
+    return outcome
 
 
 # ---- 3a. a known user: the app page finishes the session --------------------------------------
